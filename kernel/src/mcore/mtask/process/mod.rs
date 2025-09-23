@@ -117,6 +117,8 @@ impl Process {
         parent: &Arc<Process>,
         path: impl AsRef<AbsolutePath>,
     ) -> Result<Arc<Self>, CreateProcessError> {
+        // TODO: validate that the executable exists and is a valid executable file
+
         let path = path.as_ref();
         let process = Self::create_new(parent, path.to_string(), Some(path));
 

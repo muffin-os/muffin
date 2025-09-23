@@ -43,11 +43,10 @@ unsafe extern "C" fn main() -> ! {
     }
 
     {
-        let proc = Process::create_from_executable(
-            Process::root(),
-            AbsolutePath::try_new("/bin/sandbox_nostd").unwrap(),
-        )
-        .unwrap();
+        info!("starting init process...");
+        let init_path = AbsolutePath::try_new("/bin/init").unwrap();
+        let _ = vfs().read().open(init_path).expect("should have /bin/init");
+        let proc = Process::create_from_executable(Process::root(), init_path).unwrap();
         info!("started process pid={}", proc.pid());
     }
 

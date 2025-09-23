@@ -1,5 +1,5 @@
 [toolchain]
-channel = "stage2"
+channel = "nightly"
 components = ["rustfmt", "clippy", "llvm-tools-preview", "rust-src", "miri"]
 profile = "default"
-targets = ["x86_64-unknown-none", "x86_64-unknown-muffin"]
+targets = ["x86_64-unknown-none"]

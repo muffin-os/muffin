@@ -1,14 +1,7 @@
 pub const STRUCTURE: Dir<'static> = Dir::new(
     "",
     &[
-        Dir::new(
-            "bin",
-            &[],
-            &[
-                File::new("sandbox", Kind::Executable),
-                File::new("sandbox_nostd", Kind::Executable),
-            ],
-        ),
+        Dir::new("bin", &[], &[File::new("init", Kind::Executable)]),
         Dir::new("dev", &[Dir::new("fd", &[], &[])], &[]),
         Dir::new("var", &[Dir::new("tmp", &[], &[])], &[]),
     ],

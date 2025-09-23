@@ -11,8 +11,7 @@ file_structure = { path = "userspace/file_structure" }
 
 kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
 
-sandbox = { path = "userspace/sandbox", artifact = "bin", target = "x86_64-unknown-muffin" }
-sandbox_nostd = { path = "userspace/sandbox_nostd", artifact = "bin", target = "x86_64-unknown-muffin" }
+init = { path = "userspace/init", artifact = "bin", target = "x86_64-unknown-none" }
 
 [workspace]
 members = [
@@ -28,9 +27,7 @@ members = [
     "kernel/crates/kernel_vfs",
     "kernel/crates/kernel_virtual_memory",
     "userspace/file_structure",
-    "userspace/libmuffin",
-    "userspace/sandbox",
-    "userspace/sandbox_nostd",
+    "userspace/init",
 ]
 default-members = [
     ".",
@@ -45,8 +42,7 @@ default-members = [
     "kernel/crates/kernel_vfs",
     "kernel/crates/kernel_virtual_memory",
     "userspace/file_structure",
-    "userspace/libmuffin",
-    "userspace/sandbox",
+    "userspace/init",
 ]
 
 [dependencies]
@@ -84,7 +80,3 @@ zerocopy = { version = "0.9.0-alpha.0", features = ["alloc", "derive"] }
 panic = "abort"
 [profile.release]
 panic = "abort"
-
-
-[patch.crates-io]
-libc = { path = "../rust-libc" }
