@@ -87,7 +87,7 @@ jobs:
           cargo miri setup
       - name: Miri
         run: |
-          cargo miri test -p ${{ matrix.project }}
+          cargo miri test -p ${{ matrix.package }}
   
   
 
