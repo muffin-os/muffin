@@ -67,11 +67,10 @@ jobs:
           toolchain: nightly
       - name: Miri Setup
         run: |
-          rustup target add x86_64-unknown-none
           cargo miri setup
       - name: Miri
         run: |
-          cargo miri test
+          ls kernel/crates | xargs -n 1 cargo miri test -p
   
   
 
