@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
-use kernel_device::block::{BlockBuf, BlockDevice};
 use kernel_device::DeviceId;
+use kernel_device::block::{BlockBuf, BlockDevice};
 use kernel_vfs::{ReadError, Stat, StatError, WriteError};
 
 use crate::DevFile;

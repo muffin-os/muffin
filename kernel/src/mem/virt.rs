@@ -8,13 +8,13 @@ use conquer_once::spin::OnceCell;
 use kernel_virtual_memory::{AlreadyReserved, Segment, VirtualMemoryManager};
 use limine::memory_map::EntryType;
 use spin::RwLock;
-use x86_64::structures::paging::{PageSize, Size4KiB};
 use x86_64::VirtAddr;
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
-use crate::limine::{HHDM_REQUEST, KERNEL_ADDRESS_REQUEST, MEMORY_MAP_REQUEST};
-use crate::mem::address_space::{sign_extend_vaddr, RECURSIVE_INDEX};
-use crate::mem::heap::Heap;
 use crate::UsizeExt;
+use crate::limine::{HHDM_REQUEST, KERNEL_ADDRESS_REQUEST, MEMORY_MAP_REQUEST};
+use crate::mem::address_space::{RECURSIVE_INDEX, sign_extend_vaddr};
+use crate::mem::heap::Heap;
 
 static VMM: OnceCell<RwLock<VirtualMemoryManager>> = OnceCell::uninit();
 

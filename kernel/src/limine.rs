@@ -1,9 +1,9 @@
+use limine::BaseRevision;
 use limine::request::{
     DateAtBootRequest, ExecutableAddressRequest, ExecutableFileRequest, HhdmRequest,
     MemoryMapRequest, ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker,
     RsdpRequest, StackSizeRequest,
 };
-use limine::BaseRevision;
 
 #[used]
 #[unsafe(link_section = ".requests_start_marker")]

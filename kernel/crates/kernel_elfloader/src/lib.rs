@@ -13,8 +13,8 @@ use itertools::Itertools;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use log::trace;
 use thiserror::Error;
-use x86_64::addr::VirtAddrNotValid;
 use x86_64::VirtAddr;
+use x86_64::addr::VirtAddrNotValid;
 
 pub struct ElfLoader<M>
 where

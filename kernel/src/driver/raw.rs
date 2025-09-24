@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 
-use kernel_device::raw::{RawDevice, RawDeviceRegistry};
 use kernel_device::RegisterDeviceError;
+use kernel_device::raw::{RawDevice, RawDeviceRegistry};
 use spin::RwLock;
 
 use crate::driver::KernelDeviceId;

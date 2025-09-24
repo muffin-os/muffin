@@ -4,9 +4,9 @@ use core::slice::from_raw_parts_mut;
 
 use kernel_virtual_memory::Segment;
 use thiserror::Error;
+use x86_64::VirtAddr;
 use x86_64::registers::rflags::RFlags;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
-use x86_64::VirtAddr;
 
 use crate::mem::address_space::AddressSpace;
 use crate::mem::phys::PhysicalMemory;

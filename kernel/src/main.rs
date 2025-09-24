@@ -8,8 +8,8 @@ use core::error::Error;
 use core::panic::PanicInfo;
 
 use ext2::Ext2Fs;
-use kernel::driver::block::BlockDevices;
 use kernel::driver::KernelDeviceId;
+use kernel::driver::block::BlockDevices;
 use kernel::file::ext2::VirtualExt2Fs;
 use kernel::file::vfs;
 use kernel::limine::BASE_REVISION;

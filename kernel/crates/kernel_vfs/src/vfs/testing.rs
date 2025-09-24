@@ -93,10 +93,10 @@ impl FileSystem for TestFs {
 
 #[cfg(test)]
 mod tests {
+    use crate::CloseError;
     use crate::fs::FileSystem;
     use crate::path::{AbsoluteOwnedPath, AbsolutePath};
     use crate::testing::TestFs;
-    use crate::CloseError;
 
     #[test]
     fn test_open_close() {

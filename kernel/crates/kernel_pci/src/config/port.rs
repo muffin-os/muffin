@@ -3,8 +3,8 @@ use alloc::sync::Arc;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 
-use crate::config::{ConfigKey, ReadConfig, WriteConfig};
 use crate::PciAddress;
+use crate::config::{ConfigKey, ReadConfig, WriteConfig};
 
 #[derive(Debug, Clone)]
 pub struct PortCam {

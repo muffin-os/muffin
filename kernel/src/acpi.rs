@@ -7,10 +7,10 @@ use spin::Mutex;
 use x86_64::structures::paging::{Page, PageSize, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
 
+use crate::U64Ext;
 use crate::limine::RSDP_REQUEST;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
-use crate::U64Ext;
 
 static ACPI_TABLES: OnceCell<Mutex<AcpiTables<AcpiHandlerImpl>>> = OnceCell::uninit();
 

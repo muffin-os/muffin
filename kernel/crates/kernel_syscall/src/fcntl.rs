@@ -2,7 +2,7 @@ use alloc::borrow::ToOwned;
 use core::ffi::c_int;
 use core::slice::from_raw_parts;
 
-use kernel_abi::{Errno, EINVAL, ENAMETOOLONG, ENOENT, PATH_MAX};
+use kernel_abi::{EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX};
 use kernel_vfs::path::{AbsolutePath, Path};
 use log::debug;
 
@@ -52,10 +52,10 @@ mod tests {
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
 
+    use crate::UserspacePtr;
     use crate::access::testing::{MemoryFile, MemoryFileAccess};
     use crate::access::{CwdAccess, FileAccess};
     use crate::fcntl::sys_open;
-    use crate::UserspacePtr;
 
     struct TestOpenCx<F> {
         cwd: RwLock<AbsoluteOwnedPath>,

@@ -7,8 +7,8 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use kernel_memapi::{Allocation, Guarded, Location, MemoryApi, UserAccessible, WritableAllocation};
 use kernel_virtual_memory::Segment;
-use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 use x86_64::VirtAddr;
+use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::mcore::mtask::process::Process;
 use crate::mem::phys::PhysicalMemory;

@@ -1,11 +1,11 @@
 use alloc::boxed::Box;
 use core::ptr::NonNull;
 
-use kernel_pci::config::ConfigurationAccess;
 use kernel_pci::PciAddress;
+use kernel_pci::config::ConfigurationAccess;
 use kernel_virtual_memory::Segment;
-use virtio_drivers::transport::pci::bus::{DeviceFunction, PciRoot};
 use virtio_drivers::transport::pci::PciTransport;
+use virtio_drivers::transport::pci::bus::{DeviceFunction, PciRoot};
 use virtio_drivers::{BufferDirection, Hal};
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::{PageSize, PageTableFlags, PhysFrame, Size4KiB};

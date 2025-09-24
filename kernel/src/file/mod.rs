@@ -1,9 +1,9 @@
 use core::ops::Deref;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use kernel_vfs::Vfs;
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
-use kernel_vfs::Vfs;
 use spin::RwLock;
 
 use crate::file::devfs::devfs;
