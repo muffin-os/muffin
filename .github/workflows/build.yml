@@ -1,11 +1,11 @@
 name: Rust
 
 on:
-  #  push:
+  push:
   #  pull_request:
   workflow_dispatch:
-  #  schedule:
-  #    - cron: 0 5,17 * * *
+  schedule:
+    - cron: 0 5,17 * * *
 
 env:
   CARGO_TERM_COLOR: always
