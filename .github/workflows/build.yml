@@ -65,8 +65,6 @@ jobs:
       - uses: actions/checkout@v4
       - id: set-matrix
         run: |
-          pwd
-          ls -l
           export PACKAGES=$(ls kernel/crates | jq -Rsc 'split("\n")')
           echo "::set-output name=matrix::{\"package\":${PACKAGES}}"
     
