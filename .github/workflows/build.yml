@@ -56,9 +56,23 @@ jobs:
         run: |
           cargo test $(if [[ "${{ matrix.strategy }}" == "release" ]]; then echo "--release"; fi)
 
+  prepare-miri:
+    name: "Prepare Miri"
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    - id: set-matrix
+      run: |
+        export PACKAGES=$(ls kernel/crates | jq -Rsc 'split("\n")')
+        echo "::set-output name=matrix::{\"package\":${PACKAGES}}"
+    
   miri:
     name: "Miri"
     runs-on: ubuntu-latest
+    needs: prepare-miri
+    strategy:
+      matrix: ${{fromJson(needs.prepare-miri.outputs.matrix)}}
     steps:
       - uses: actions/checkout@v4
       - name: Install latest nightly
@@ -70,7 +84,7 @@ jobs:
           cargo miri setup
       - name: Miri
         run: |
-          ls kernel/crates | xargs -n 1 cargo miri test -p
+          cargo miri test -p ${{ matrix.project }}
   
   
 
