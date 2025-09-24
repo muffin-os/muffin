@@ -29,6 +29,12 @@ impl ArcLockedDevFs {
     }
 }
 
+impl Default for ArcLockedDevFs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Deref for ArcLockedDevFs {
     type Target = RwLock<DevFs>;
 

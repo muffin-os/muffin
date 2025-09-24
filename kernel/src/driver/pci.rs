@@ -3,10 +3,10 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use core::error::Error;
 
-use kernel_pci::config::{ConfigKey, ConfigurationAccess, PortCam, ReadConfig, WriteConfig};
 use kernel_pci::PciAddress;
+use kernel_pci::config::{ConfigKey, ConfigurationAccess, PortCam, ReadConfig, WriteConfig};
 use linkme::distributed_slice;
-use log::{debug, error, log_enabled, trace, Level};
+use log::{Level, debug, error, log_enabled, trace};
 use virtio_drivers::transport::pci::bus::DeviceFunction;
 
 #[distributed_slice]
@@ -18,6 +18,7 @@ pub enum PciDriverType {
     Specific,
 }
 
+#[allow(clippy::type_complexity)] // refactoring the `init` fn type doesn't provide benefits here
 pub struct PciDriverDescriptor {
     pub name: &'static str,
     pub typ: PciDriverType,

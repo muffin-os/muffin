@@ -107,7 +107,7 @@ impl PhysicalMemoryManager {
 
         let addr = index as u64 * Size4KiB::SIZE;
         // address must be aligned to [`S`]'s page size
-        if addr % S::SIZE == 0 {
+        if addr.is_multiple_of(S::SIZE) {
             Some(PhysFrame::containing_address(PhysAddr::new(addr)))
         } else {
             None

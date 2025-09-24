@@ -27,12 +27,13 @@ impl log::Log for SerialLogger {
                 Level::Trace => "\x1b[1;90m",
             };
 
-            if let Some(cpu) = ExecutionContext::try_load().map(ExecutionContext::cpu_id) {
+            if let Some(ctx) = ExecutionContext::try_load() {
                 serial_println!(
-                    "{}{:5}\x1b[0m cpu{} [{}] {}",
+                    "{}{:5}\x1b[0m cpu{} pid{:3} [{}] {}",
                     color,
                     record.level(),
-                    cpu,
+                    ctx.cpu_id(),
+                    ctx.pid(),
                     record.target(),
                     record.args()
                 );

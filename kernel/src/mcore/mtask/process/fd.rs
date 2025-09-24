@@ -11,6 +11,12 @@ use crate::file::OpenFileDescription;
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FdNum(i32);
 
+impl FdNum {
+    pub const STDIN: Self = Self(0);
+    pub const STDOUT: Self = Self(1);
+    pub const STDERR: Self = Self(2);
+}
+
 impl From<c_int> for FdNum {
     fn from(value: c_int) -> Self {
         Self(value)

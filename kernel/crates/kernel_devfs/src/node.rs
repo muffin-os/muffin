@@ -71,6 +71,12 @@ pub struct DevDirectoryNode {
     children: Vec<DevNode>,
 }
 
+impl From<Vec<DevNode>> for DevDirectoryNode {
+    fn from(value: Vec<DevNode>) -> Self {
+        Self { children: value }
+    }
+}
+
 impl DevDirectoryNode {
     pub fn new() -> Self {
         Self {
@@ -105,7 +111,7 @@ impl DevFileNode {
         }
     }
 
-    pub fn open_fn(&self) -> &Box<dyn Fn() -> Result<Box<dyn DevFile>, OpenError> + Send + Sync> {
+    pub fn open_fn(&self) -> &(dyn Fn() -> Result<Box<dyn DevFile>, OpenError> + Send + Sync) {
         &self.open_fn
     }
 }

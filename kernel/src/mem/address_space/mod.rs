@@ -288,6 +288,8 @@ impl Debug for AddressSpace {
     }
 }
 
+impl !Default for AddressSpace {}
+
 impl AddressSpace {
     /// # Panics
     /// Panics if the kernel address space is not initialized yet.

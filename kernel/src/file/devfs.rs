@@ -1,7 +1,7 @@
 use core::fmt::Write;
 
 use conquer_once::spin::OnceCell;
-use kernel_devfs::{ArcLockedDevFs, Serial};
+use kernel_devfs::{ArcLockedDevFs, Null, Serial};
 use kernel_vfs::path::AbsolutePath;
 
 use crate::serial_print;
@@ -22,6 +22,21 @@ pub fn init() {
                 Ok(Serial::<SerialWrite>::default())
             })
             .expect("should be able to register serial file");
+
+        // TODO: implement proper STDIO
+        guard
+            .register_file(AbsolutePath::try_new("/stdin").unwrap(), || Ok(Null))
+            .expect("should be able to register stdin");
+        guard
+            .register_file(AbsolutePath::try_new("/stdout").unwrap(), || {
+                Ok(Serial::<SerialWrite>::default())
+            })
+            .expect("should be able to register stdout");
+        guard
+            .register_file(AbsolutePath::try_new("/stderr").unwrap(), || {
+                Ok(Serial::<SerialWrite>::default())
+            })
+            .expect("should be able to register stderr");
     }
     DEVFS.init_once(|| devfs);
 }

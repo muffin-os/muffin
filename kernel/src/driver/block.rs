@@ -5,14 +5,15 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_devfs::BlockDeviceFile;
-use kernel_device::block::BlockDevice;
 use kernel_device::RegisterDeviceError;
+use kernel_device::block::BlockDevice;
 use kernel_vfs::path::AbsoluteOwnedPath;
 use spin::RwLock;
 
 use crate::driver::KernelDeviceId;
 use crate::file::devfs::devfs;
 
+#[allow(clippy::type_complexity)] // refactoring into types doesn't provide benefits here
 static BLOCK_DEVICES: RwLock<
     BTreeMap<u64, Arc<RwLock<dyn BlockDevice<KernelDeviceId, 512> + Send + Sync>>>,
 > = RwLock::new(BTreeMap::new());

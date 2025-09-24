@@ -15,34 +15,33 @@ init = { path = "userspace/init", artifact = "bin", target = "x86_64-unknown-non
 
 [workspace]
 members = [
-    "kernel",
-    "kernel/crates/kernel_abi",
-    "kernel/crates/kernel_devfs",
-    "kernel/crates/kernel_device",
-    "kernel/crates/kernel_elfloader",
-    "kernel/crates/kernel_memapi",
-    "kernel/crates/kernel_pci",
-    "kernel/crates/kernel_physical_memory",
-    "kernel/crates/kernel_syscall",
-    "kernel/crates/kernel_vfs",
-    "kernel/crates/kernel_virtual_memory",
-    "userspace/file_structure",
-    "userspace/init",
+  "kernel",
+  "kernel/crates/kernel_abi",
+  "kernel/crates/kernel_devfs",
+  "kernel/crates/kernel_device",
+  "kernel/crates/kernel_elfloader",
+  "kernel/crates/kernel_memapi",
+  "kernel/crates/kernel_pci",
+  "kernel/crates/kernel_physical_memory",
+  "kernel/crates/kernel_syscall",
+  "kernel/crates/kernel_vfs",
+  "kernel/crates/kernel_virtual_memory",
+  "userspace/file_structure",
+  "userspace/init",
 ]
 default-members = [
-    ".",
-    "kernel/crates/kernel_abi",
-    "kernel/crates/kernel_devfs",
-    "kernel/crates/kernel_device",
-    "kernel/crates/kernel_elfloader",
-    "kernel/crates/kernel_memapi",
-    "kernel/crates/kernel_pci",
-    "kernel/crates/kernel_physical_memory",
-    "kernel/crates/kernel_syscall",
-    "kernel/crates/kernel_vfs",
-    "kernel/crates/kernel_virtual_memory",
-    "userspace/file_structure",
-    "userspace/init",
+  ".",
+  "kernel/crates/kernel_abi",
+  "kernel/crates/kernel_devfs",
+  "kernel/crates/kernel_device",
+  "kernel/crates/kernel_elfloader",
+  "kernel/crates/kernel_memapi",
+  "kernel/crates/kernel_pci",
+  "kernel/crates/kernel_physical_memory",
+  "kernel/crates/kernel_syscall",
+  "kernel/crates/kernel_vfs",
+  "kernel/crates/kernel_virtual_memory",
+  "userspace/file_structure",
 ]
 
 [dependencies]
@@ -50,14 +49,19 @@ clap = { version = "4.5", features = ["derive"] }
 
 [workspace.dependencies]
 acpi = "5.2"
-addr2line = { version = "0.24", default-features = false, features = ["fallible-iterator", "rustc-demangle"] }
+addr2line = { version = "0.24", default-features = false, features = [
+  "fallible-iterator",
+  "rustc-demangle",
+] }
 bitfield = "0.19"
 bitflags = "2.9"
 conquer-once = { version = "0.4", default-features = false }
 cordyceps = { version = "0.3", default-features = false, features = ["alloc"] }
 raw-cpuid = "11"
 elf = { version = "0.7", default-features = false, features = ["nightly"] }
-itertools = { version = "0.14.0", default-features = false, features = ["use_alloc"] }
+itertools = { version = "0.14.0", default-features = false, features = [
+  "use_alloc",
+] }
 jiff = { version = "0.2", default-features = false, features = ["alloc"] }
 limine = "0.5"
 linked_list_allocator = "0.10"

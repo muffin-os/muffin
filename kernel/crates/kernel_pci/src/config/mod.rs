@@ -107,7 +107,7 @@ pub trait ReadConfigs: ReadConfig<u8> + ReadConfig<u16> + ReadConfig<u32> {}
 
 impl<T> ReadConfigs for T where Self: ReadConfig<u8> + ReadConfig<u16> + ReadConfig<u32> {}
 
-pub trait ReadConfig<T> {
+pub trait ReadConfig<T>: Send + Sync {
     fn read_config(&self, addr: PciAddress, config: ConfigKey<T>) -> T;
 }
 
@@ -130,7 +130,7 @@ pub trait WriteConfigs: WriteConfig<u8> + WriteConfig<u16> + WriteConfig<u32> {}
 
 impl<T> WriteConfigs for T where Self: WriteConfig<u8> + WriteConfig<u16> + WriteConfig<u32> {}
 
-pub trait WriteConfig<T> {
+pub trait WriteConfig<T>: Send + Sync {
     fn write_config(&self, addr: PciAddress, config: ConfigKey<T>, value: T);
 }
 

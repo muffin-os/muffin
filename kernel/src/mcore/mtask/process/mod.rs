@@ -11,19 +11,19 @@ use core::ptr;
 use conquer_once::spin::OnceCell;
 use kernel_elfloader::{ElfFile, ElfLoader};
 use kernel_memapi::{Allocation, Guarded, Location, MemoryApi, UserAccessible};
-use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_vfs::Stat;
+use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
 use log::debug;
 use spin::RwLock;
 use thiserror::Error;
+use x86_64::VirtAddr;
 use x86_64::registers::model_specific::FsBase;
 use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrameValue;
 use x86_64::structures::paging::{PageSize, Size4KiB};
-use x86_64::VirtAddr;
 
-use crate::file::{vfs, OpenFileDescription};
+use crate::file::{OpenFileDescription, vfs};
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::tree::process_tree;
@@ -121,6 +121,25 @@ impl Process {
 
         let path = path.as_ref();
         let process = Self::create_new(parent, path.to_string(), Some(path));
+        {
+            // register STDIN, STDOUT and STDERR
+            let mut fds = process.file_descriptors().write();
+
+            for (i, path) in ["/dev/stdin", "/dev/stdout", "/dev/stderr"]
+                .iter()
+                .map(|v| AbsolutePath::try_new(v).unwrap())
+                .enumerate()
+            {
+                let node = vfs()
+                    .write()
+                    .open(path)
+                    .expect("should be able to open stdin");
+                let ofd = OpenFileDescription::from(node);
+                let fd_num = FdNum::from(i as i32);
+                let fd = FileDescriptor::new(fd_num, FileDescriptorFlags::empty(), ofd.into());
+                fds.insert(fd_num, fd);
+            }
+        }
 
         let kstack = HigherHalfStack::allocate(16, trampoline, ptr::null_mut(), Task::exit)?;
         let main_task = Task::create_with_stack(&process, kstack);

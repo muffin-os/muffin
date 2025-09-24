@@ -8,7 +8,7 @@ use x86_64::structures::idt::InterruptDescriptorTable;
 
 use crate::arch::gdt::Selectors;
 use crate::mcore::lapic::Lapic;
-use crate::mcore::mtask::process::Process;
+use crate::mcore::mtask::process::{Process, ProcessId};
 use crate::mcore::mtask::scheduler::Scheduler;
 use crate::mcore::mtask::task::Task;
 
@@ -104,6 +104,10 @@ impl ExecutionContext {
             // The above is true because everything in the context is cpu-local.
             &*self.scheduler.get()
         }
+    }
+
+    pub fn pid(&self) -> ProcessId {
+        self.scheduler().current_task().process().pid()
     }
 
     pub fn current_task(&self) -> &Task {

@@ -48,7 +48,7 @@ where
         static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         // instead of creating a new inode, check whether we already have that inode open behind another handle
-        if let Some(v) = self.handles.values().find(|v| &*path == v.0.as_ref()) {
+        if let Some(v) = self.handles.values().find(|v| path == v.0.as_ref()) {
             let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
             self.handles.insert(handle, v.clone());
             return Ok(handle);
