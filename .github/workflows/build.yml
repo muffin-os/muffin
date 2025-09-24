@@ -31,18 +31,12 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y xorriso
-          cargo install clippy-sarif sarif-fmt
       - name: Rustfmt
         run: |
           cargo fmt -- --check
       - name: Clippy
         run: |
-          cargo clippy --message-format=json -- -D clippy::all | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
-      - name: Upload analysis results to GitHub
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: rust-clippy-results.sarif
-          wait-for-processing: true
+          cargo clippy -- -D clippy::all
 
   test:
     name: "Test"
