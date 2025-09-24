@@ -7,7 +7,7 @@ use minilib::{exit, write};
 pub extern "C" fn _start() {
     let bytes = b"hello from init!\n";
     write(1, bytes);
-    exit();
+    exit(0);
 }
 
 #[cfg(not(test))]

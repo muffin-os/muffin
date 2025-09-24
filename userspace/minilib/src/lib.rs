@@ -4,8 +4,8 @@ use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
 use core::ffi::c_int;
 
-pub fn exit() -> ! {
-    syscall0(1);
+pub fn exit(code: i32) -> ! {
+    syscall1(1, code as usize);
     loop {
         unsafe {
             _mm_pause();
