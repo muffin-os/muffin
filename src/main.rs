@@ -54,6 +54,7 @@ continue"
     }
 
     let mut cmd = std::process::Command::new("qemu-system-x86_64");
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
 
     // serial comms via console - needed for log output of the kernel
     cmd.arg("-serial");

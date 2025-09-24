@@ -33,6 +33,10 @@ impl VirtualMemoryManager {
     }
 
     pub fn reserve(&mut self, n: usize) -> Option<Segment> {
+        if n == 0 {
+            return None;
+        }
+
         let mut segment = Segment::new(self.mem_start, n as u64);
         while let Some(existing) = self.find_overlapping(&segment) {
             segment.start = existing.start + existing.len;
@@ -88,7 +92,7 @@ mod tests {
     fn test_reserve_release() {
         let size = 50000_usize;
         let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0xabcd), size as u64);
-        for n in (0..=size).step_by(713) {
+        for n in (1..=size).step_by(713) {
             let segment = vmm
                 .reserve(n)
                 .unwrap_or_else(|| panic!("should be able to reserve segment of size {n}"));
