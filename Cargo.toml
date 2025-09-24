@@ -28,6 +28,7 @@ members = [
   "kernel/crates/kernel_virtual_memory",
   "userspace/file_structure",
   "userspace/init",
+  "userspace/minilib",
 ]
 default-members = [
   ".",

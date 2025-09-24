@@ -398,10 +398,13 @@ pub struct Symbol {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(miri))]
     use zerocopy::TryFromBytes;
 
+    #[cfg(not(miri))]
     use crate::file::{ElfHeader, ElfIdent, ElfType};
 
+    #[cfg(not(miri))]
     #[test]
     fn test_elf_header_ref_from_bytes() {
         let data: [u8; 64] = [
