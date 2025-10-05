@@ -190,7 +190,7 @@ mod tests {
     fn test_open_not_found() {
         let mut devfs = DevFs::new();
         let path = AbsolutePath::try_new("/nonexistent").unwrap();
-        let result = devfs.open(&path);
+        let result = devfs.open(path);
         assert_eq!(result, Err(OpenError::NotFound));
     }
 
@@ -260,7 +260,7 @@ mod tests {
             .expect("should be able to register file");
 
         let file = devfs
-            .open(&path)
+            .open(path)
             .expect("should be able to open registered file");
 
         devfs.close(file).expect("should be able to close file");
@@ -284,10 +284,10 @@ mod tests {
             .expect("should be able to register file");
 
         let file1 = devfs
-            .open(&path)
+            .open(path)
             .expect("should be able to open registered file");
         let file2 = devfs
-            .open(&path)
+            .open(path)
             .expect("should be able to open registered file");
 
         assert_ne!(
@@ -307,7 +307,7 @@ mod tests {
             .expect("should be able to register file");
 
         let file = devfs
-            .open(&path)
+            .open(path)
             .expect("should be able to open registered file");
 
         let write_buf = b"hello";

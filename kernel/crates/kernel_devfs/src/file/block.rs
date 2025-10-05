@@ -325,6 +325,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::identity_op, clippy::erasing_op)]
     #[test]
     fn test_write() {
         const DEVICE_BLOCKS: usize = 5;
@@ -393,6 +394,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::identity_op, clippy::erasing_op)]
     #[test]
     fn test_read() {
         const DEVICE_BLOCKS: usize = 5;
