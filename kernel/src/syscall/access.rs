@@ -13,6 +13,8 @@ use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::task::Task;
 
+mod mem;
+
 pub struct KernelAccess<'a> {
     _task: &'a Task,
     process: Arc<Process>,
@@ -21,7 +23,7 @@ pub struct KernelAccess<'a> {
 impl<'a> KernelAccess<'a> {
     pub fn new() -> Self {
         let task = ExecutionContext::load().current_task();
-        let process = task.process().clone();
+        let process = task.process().clone(); // TODO: can we remove the clone?
 
         KernelAccess {
             _task: task,

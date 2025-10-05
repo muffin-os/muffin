@@ -53,4 +53,5 @@ n! {
     SYS_WRITEV = 38,
     SYS_LSEEK = 39,
     SYS_CLOSE = 40,
+    SYS_MMAP = 41,
 }

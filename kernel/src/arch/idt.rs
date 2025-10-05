@@ -3,6 +3,7 @@ use core::arch::asm;
 use core::arch::x86_64::{_fxrstor, _fxsave};
 use core::fmt::{Debug, Formatter};
 use core::mem::transmute;
+use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use log::{error, warn};
@@ -12,8 +13,10 @@ use x86_64::registers::control::Cr2;
 use x86_64::registers::debug::{Dr6, Dr7};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
+use crate::UsizeExt;
 use crate::arch::gdt;
 use crate::mcore::context::ExecutionContext;
+use crate::mcore::mtask::process::mem::MemoryRegion;
 use crate::mcore::mtask::task::FxArea;
 use crate::mem::memapi::LowerHalfMemoryApi;
 use crate::syscall::dispatch_syscall;
@@ -210,6 +213,9 @@ extern "x86-interrupt" fn page_fault_handler(
         // ...and we have initialized multitasking...
         if let Some(ctx) = ExecutionContext::try_load() {
             let task = ctx.current_task();
+            let process = task.process();
+            process.telemetry().page_faults.fetch_add(1, Relaxed);
+
             // ...and the current task has stack...
             if let Some(stack) = task.kstack() {
                 // ...then the accessed address must not be within the guard page of the stack,
@@ -221,12 +227,57 @@ extern "x86-interrupt" fn page_fault_handler(
                         task.name(),
                     );
 
+                    // FIXME: once we have signals, trigger a SIGSEGV here
+
                     // ...in which case we mark the task for termination...
                     task.set_should_terminate(true);
                     // ...and halt, waiting for the scheduler to terminate the task
                     interrupts::enable();
                     loop {
                         hlt();
+                    }
+                }
+            }
+
+            // ...but if it's not a stack issue, maybe it is a lazy mapping?
+            let regions = process.memory_regions();
+            if let Some(region) = regions.find_memory_region_for_address(addr) {
+                debug_assert!(
+                    region.addr() <= addr,
+                    "region addr must be less than or equal to the addr we are looking for"
+                );
+                debug_assert!(
+                    region.addr() + region.size().into_u64() > addr,
+                    "region addr + it's size must be larger than the addr we are looking for"
+                );
+
+                // we found a region that matches the accessed address
+                match region {
+                    MemoryRegion::Lazy(_lazy_memory_region) => {
+                        // TODO: allocate new physical page, map it and add it to the lazy memory
+                        // region
+                    }
+                    MemoryRegion::Mapped(_mapped_memory_region) => {
+                        error!(
+                            "invalid memory access in process '{}' task '{}', terminating...",
+                            process.name(),
+                            task.name()
+                        );
+
+                        // TODO: refactor task/process termination into a separate method
+
+                        // TODO: refactor the whole page fault handler into a separate crate
+
+                        // FIXME: once we have signals, trigger a SIGSEGV here
+                        task.set_should_terminate(true);
+                        interrupts::enable();
+                        loop {
+                            hlt();
+                        }
+                    }
+                    MemoryRegion::FileBacked(_file_backed_memory_region) => {
+                        // TODO: invoke an access on the nested lazy memory region, then read from
+                        // the node and write data accordingly
                     }
                 }
             }
