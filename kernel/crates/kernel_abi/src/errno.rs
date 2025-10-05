@@ -1,5 +1,6 @@
 use core::ffi::c_int;
 use core::fmt::{Debug, Display};
+use core::num::TryFromIntError;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(transparent)]
@@ -32,6 +33,12 @@ impl From<Errno> for isize {
 impl From<isize> for Errno {
     fn from(errno: isize) -> Self {
         Errno(errno as c_int)
+    }
+}
+
+impl From<TryFromIntError> for Errno {
+    fn from(_: TryFromIntError) -> Self {
+        EOVERFLOW
     }
 }
 

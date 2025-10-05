@@ -1,4 +1,5 @@
 use core::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
+use core::usize;
 
 use kernel_abi::{EINVAL, Errno};
 use thiserror::Error;
@@ -18,6 +19,17 @@ impl From<NotUserspace> for Errno {
     }
 }
 
+impl<T> TryFrom<*const T> for UserspacePtr<T> {
+    type Error = NotUserspace;
+
+    fn try_from(ptr: *const T) -> Result<Self, Self::Error> {
+        unsafe {
+            // Safety: we use a valid pointer
+            Self::try_from_usize(ptr as usize)
+        }
+    }
+}
+
 impl<T> UserspacePtr<T> {
     /// # Safety
     /// The caller must ensure that the passed address is a valid pointer.
@@ -34,10 +46,6 @@ impl<T> UserspacePtr<T> {
         }
     }
 
-    pub fn from_ptr(ptr: *const T) -> Self {
-        Self { ptr }
-    }
-
     #[must_use]
     pub fn addr(&self) -> usize {
         self.ptr as usize
@@ -52,9 +60,14 @@ pub struct UserspaceMutPtr<T> {
     ptr: *mut T,
 }
 
-impl<T> From<*mut T> for UserspaceMutPtr<T> {
-    fn from(ptr: *mut T) -> Self {
-        Self { ptr }
+impl<T> TryFrom<*mut T> for UserspaceMutPtr<T> {
+    type Error = NotUserspace;
+
+    fn try_from(ptr: *mut T) -> Result<Self, Self::Error> {
+        unsafe {
+            // Safety: we use a valid pointer
+            Self::try_from_usize(ptr as usize)
+        }
     }
 }
 
