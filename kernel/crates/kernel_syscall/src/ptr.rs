@@ -1,5 +1,4 @@
 use core::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
-use core::usize;
 
 use kernel_abi::{EINVAL, Errno};
 use thiserror::Error;
