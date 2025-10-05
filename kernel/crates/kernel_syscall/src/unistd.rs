@@ -72,7 +72,7 @@ mod tests {
             let access = Cwd(&cwd);
             let mut buf = vec![0u8; size];
             let ptr = buf.as_mut_ptr();
-            let res = sys_getcwd(&access, ptr.into(), buf.len());
+            let res = sys_getcwd(&access, ptr.try_into().unwrap(), buf.len());
             match expected {
                 Ok(()) => match res {
                     Ok(addr) => {

@@ -19,6 +19,12 @@ struct Args {
     smp: u8,
     #[arg(long, help = "Don't boot, just build")]
     no_run: bool,
+    #[arg(
+        long,
+        help = "The amount of RAM that the emulator will boot with ('4G', '17M' etc.)",
+        default_value = "4G"
+    )]
+    mem: String,
 }
 
 fn main() {
@@ -78,7 +84,7 @@ continue"
     }
 
     cmd.arg("-m");
-    cmd.arg("4G");
+    cmd.arg(args.mem);
 
     // OVMF firmware
     cmd.arg("-drive");

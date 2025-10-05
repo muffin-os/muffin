@@ -26,6 +26,8 @@ use x86_64::structures::paging::{PageSize, Size4KiB};
 use crate::file::{OpenFileDescription, vfs};
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
+use crate::mcore::mtask::process::mem::MemoryRegions;
+use crate::mcore::mtask::process::telemetry::Telemetry;
 use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::task::{HigherHalfStack, StackAllocationError, Task};
 use crate::mem::address_space::AddressSpace;
@@ -35,6 +37,8 @@ use crate::{U64Ext, UsizeExt};
 pub mod fd;
 mod id;
 pub use id::*;
+pub mod mem;
+pub mod telemetry;
 
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mem::virt::VirtualMemoryAllocator;
@@ -56,6 +60,10 @@ pub struct Process {
     address_space: Option<AddressSpace>,
     lower_half_memory: Arc<RwLock<VirtualMemoryManager>>,
 
+    telemetry: Telemetry,
+
+    memory_regions: MemoryRegions,
+
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
 }
 
@@ -75,6 +83,8 @@ impl Process {
                     VirtAddr::new(0x00),
                     0x0000_7FFF_FFFF_FFFF,
                 ))),
+                telemetry: Telemetry::default(),
+                memory_regions: MemoryRegions::new(),
                 file_descriptors: RwLock::new(BTreeMap::new()),
             });
             process_tree().write().processes.insert(pid, root.clone());
@@ -103,6 +113,8 @@ impl Process {
                 VirtAddr::new(0xF000),
                 0x0000_7FFF_FFFF_0FFF,
             ))),
+            telemetry: Telemetry::default(),
+            memory_regions: MemoryRegions::new(),
             file_descriptors: RwLock::new(BTreeMap::new()),
         };
 
@@ -176,6 +188,14 @@ impl Process {
 
     pub fn current_working_directory(&self) -> &RwLock<AbsoluteOwnedPath> {
         &self.current_working_directory
+    }
+
+    pub fn memory_regions(&self) -> &MemoryRegions {
+        &self.memory_regions
+    }
+
+    pub fn telemetry(&self) -> &Telemetry {
+        &self.telemetry
     }
 }
 

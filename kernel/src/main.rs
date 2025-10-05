@@ -86,6 +86,7 @@ impl<const N: usize> filesystem::BlockDevice for ArcLockedBlockDevice<N> {
 }
 
 #[panic_handler]
+#[cfg(not(test))]
 fn rust_panic(info: &PanicInfo) -> ! {
     handle_panic(info);
     loop {
@@ -93,6 +94,7 @@ fn rust_panic(info: &PanicInfo) -> ! {
     }
 }
 
+#[cfg(not(test))]
 fn handle_panic(info: &PanicInfo) {
     let location = info.location().unwrap();
     error!(
