@@ -121,7 +121,7 @@ mod tests {
         let cx = TestOpenCx::new(ROOT.to_owned(), Mutex::new(file_access));
 
         let path = "/foo.txt";
-        let p = UserspacePtr::from_ptr(path.as_ptr());
+        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
 
         let result = sys_open(&cx, p, path.len(), 0, 0);
         assert_eq!(result, Err(ENOENT));
@@ -137,7 +137,7 @@ mod tests {
         let cx = TestOpenCx::new(ROOT.to_owned(), Mutex::new(file_access));
 
         let path = "/foo.txt";
-        let p = UserspacePtr::from_ptr(path.as_ptr());
+        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
 
         let result = sys_open(&cx, p, path.len(), 0, 0).expect("should be able to open file");
         assert_eq!(result, 0);
@@ -153,7 +153,7 @@ mod tests {
         let cx = TestOpenCx::new(ROOT.to_owned(), Mutex::new(file_access));
 
         let path = "/foo.txt";
-        let p = UserspacePtr::from_ptr(path.as_ptr());
+        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
 
         let result1 = sys_open(&cx, p, path.len(), 0, 0).expect("should be able to open file");
         let result2 = sys_open(&cx, p, path.len(), 0, 0).expect("should be able to open file");
