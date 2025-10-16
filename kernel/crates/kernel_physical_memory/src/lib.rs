@@ -192,47 +192,6 @@ impl PhysicalMemoryManager {
 
         None
     }
-
-    /// Converts a 4KiB frame index to a physical frame, if that frame index
-    /// aligns with the page size [`S`] and the index is within a usable region.
-    ///
-    /// For example, if [`S`] is [`Size4KiB`], the frame index must be a multiple
-    /// of 1, if [`S`] is [`Size2MiB`], the frame index must be a multiple of 512
-    /// and so on.
-    ///
-    /// Calling this function with an index of 2 (address 0x2000) and [`S`] being
-    /// [`Size2MiB`] will return [`None`], since frame index 2 is not 2MiB aligned.
-    fn index_to_frame<S: PageSize>(&self, index: usize) -> Option<PhysFrame<S>> {
-        let addr = index as u64 * Size4KiB::SIZE;
-
-        // address must be aligned to [`S`]'s page size
-        if !addr.is_multiple_of(S::SIZE) {
-            return None;
-        }
-
-        // Check if address is in a usable region
-        for region in &self.regions {
-            if region.frame_index(addr).is_some() {
-                return Some(PhysFrame::containing_address(PhysAddr::new(addr)));
-            }
-        }
-
-        None
-    }
-
-    fn frame_to_index<S: PageSize>(&self, frame: PhysFrame<S>) -> Option<usize> {
-        let addr = frame.start_address().as_u64();
-
-        // Check if frame is in a usable region
-        for region in &self.regions {
-            if region.frame_index(addr).is_some() {
-                let index = (addr / Size4KiB::SIZE) as usize;
-                return Some(index);
-            }
-        }
-
-        None
-    }
 }
 
 pub trait PhysicalFrameAllocator<S: PageSize> {
