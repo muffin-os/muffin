@@ -114,9 +114,15 @@ pub(in crate::mem) fn init_stage2() {
     2. USABLE regions are sorted by base address, lowest to highest
     3. USABLE regions are 4KiB aligned (address and length)
      */
-    
+
     // Build memory regions for usable regions
-    let mut memory_regions = Vec::new();
+    // Preallocate to avoid fragmentation in stage1 (which can't deallocate)
+    let usable_region_count = regions
+        .iter()
+        .filter(|r| r.entry_type == EntryType::USABLE)
+        .count();
+    let mut memory_regions = Vec::with_capacity(usable_region_count);
+
     for entry in regions.iter().filter(|r| r.entry_type == EntryType::USABLE) {
         let num_frames = (entry.length / Size4KiB::SIZE) as usize;
         let region = kernel_physical_memory::MemoryRegion::new(
@@ -126,7 +132,7 @@ pub(in crate::mem) fn init_stage2() {
         );
         memory_regions.push(region);
     }
-    
+
     // Mark frames allocated by stage1
     for frame in stage1.usable_frames().take(stage_one_next_free) {
         let addr = frame.start_address().as_u64();

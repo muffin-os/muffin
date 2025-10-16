@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+
 use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::FrameState;
@@ -72,8 +73,9 @@ impl MemoryRegion {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use x86_64::structures::paging::PageSize;
+
+    use super::*;
 
     #[test]
     fn test_new_region() {
@@ -86,19 +88,19 @@ mod tests {
     #[test]
     fn test_frame_index() {
         let region = MemoryRegion::new(0x1000, 10, FrameState::Free);
-        
+
         // Address below region
         assert_eq!(region.frame_index(0x0), None);
-        
+
         // First frame
         assert_eq!(region.frame_index(0x1000), Some(0));
-        
+
         // Second frame
         assert_eq!(region.frame_index(0x2000), Some(1));
-        
+
         // Last frame
         assert_eq!(region.frame_index(0x1000 + 9 * Size4KiB::SIZE), Some(9));
-        
+
         // Beyond region
         assert_eq!(region.frame_index(0x1000 + 10 * Size4KiB::SIZE), None);
     }
@@ -106,7 +108,7 @@ mod tests {
     #[test]
     fn test_frame_address() {
         let region = MemoryRegion::new(0x1000, 10, FrameState::Free);
-        
+
         assert_eq!(region.frame_address(0), Some(0x1000));
         assert_eq!(region.frame_address(1), Some(0x1000 + Size4KiB::SIZE));
         assert_eq!(region.frame_address(9), Some(0x1000 + 9 * Size4KiB::SIZE));
@@ -117,7 +119,7 @@ mod tests {
     fn test_frames_mut() {
         let mut region = MemoryRegion::new(0x0, 5, FrameState::Free);
         region.frames_mut()[2] = FrameState::Allocated;
-        
+
         assert_eq!(region.frames()[0], FrameState::Free);
         assert_eq!(region.frames()[2], FrameState::Allocated);
         assert_eq!(region.frames()[4], FrameState::Free);
