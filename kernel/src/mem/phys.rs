@@ -1,10 +1,9 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::from_fn;
 use core::mem::swap;
 
 use conquer_once::spin::OnceCell;
-use kernel_physical_memory::{FrameState, PhysicalFrameAllocator, PhysicalMemoryManager};
+use kernel_physical_memory::{PhysicalFrameAllocator, PhysicalMemoryManager};
 use limine::memory_map::{Entry, EntryType};
 use log::{info, warn};
 use spin::Mutex;
@@ -130,7 +129,9 @@ pub(in crate::mem) fn init_stage2() {
             num_frames,
             kernel_physical_memory::FrameState::Free,
         );
-        memory_regions.push(region);
+        memory_regions
+            .push_within_capacity(region)
+            .expect("preallocated capacity should be sufficient");
     }
 
     // Mark frames allocated by stage1

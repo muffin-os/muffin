@@ -17,9 +17,9 @@ impl MemoryAccess for KernelAccess<'_> {
         &self,
         location: Location,
         size: usize,
-        allocation_strategy: AllocationStrategy,
+        _allocation_strategy: AllocationStrategy,
     ) -> Result<Self::Mapping, CreateMappingError> {
-        let segment = if let Location::Fixed(addr) = location {
+        let _segment = if let Location::Fixed(addr) = location {
             let size = size.next_multiple_of(Size4KiB::SIZE as usize);
             self.process
                 .vmm()

@@ -36,6 +36,11 @@ impl MemoryRegion {
         self.frames.len()
     }
 
+    /// Returns true if this region contains no frames.
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
     /// Returns a reference to the frame states.
     pub(crate) fn frames(&self) -> &[FrameState] {
         &self.frames
