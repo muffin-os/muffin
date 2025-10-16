@@ -14,7 +14,9 @@ static HEAP_START: VirtAddr = virt_addr_from_page_table_indices([257, 0, 0, 0], 
 
 /// Since stage1 (which is when we initialize the heap) is slow in allocating physical memory,
 /// we allocate a small portion of memory for the heap in stage1 and then allocate the rest in stage2.
-static INITIAL_HEAP_SIZE: usize = 2 * 1024 * 1024; // 2MiB
+/// The size needs to be large enough to hold the Vec<FrameState> in init_stage2, which requires
+/// approximately 1 byte per 4KiB frame of RAM (e.g., 8MB for 32GB of RAM).
+static INITIAL_HEAP_SIZE: usize = 10 * 1024 * 1024; // 10MiB
 
 /// The amount of heap that is available after the stage2 initialization.
 pub static HEAP_SIZE: usize = 32 * 1024 * 1024; // 32MiB
