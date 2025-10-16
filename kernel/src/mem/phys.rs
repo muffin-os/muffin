@@ -113,33 +113,21 @@ pub(in crate::mem) fn init_stage2() {
     2. USABLE regions are sorted by base address, lowest to highest
     3. USABLE regions are 4KiB aligned (address and length)
      */
-    let highest_usable_address = {
-        let last_usable_region = regions
-            .iter()
-            .rev()
-            .find(|r| r.entry_type == EntryType::USABLE)
-            .expect("no usable regions");
-        last_usable_region.base + last_usable_region.length
-    };
+    
+    // Collect usable regions as (base_address, length) tuples
+    let usable_regions = regions
+        .iter()
+        .filter(|r| r.entry_type == EntryType::USABLE)
+        .map(|r| (r.base, r.length));
 
-    let mut frames = vec![FrameState::Unusable; (highest_usable_address / Size4KiB::SIZE) as usize];
-
-    stage1
+    // Collect already-allocated frame addresses from stage1
+    let allocated_frames = stage1
         .usable_frames()
         .take(stage_one_next_free)
-        .for_each(|frame| {
-            let index = frame.start_address().as_u64() / Size4KiB::SIZE;
-            frames[index as usize] = FrameState::Allocated;
-        });
-    stage1
-        .usable_frames()
-        .skip(stage_one_next_free)
-        .for_each(|frame| {
-            let index = frame.start_address().as_u64() / Size4KiB::SIZE;
-            frames[index as usize] = FrameState::Free;
-        });
+        .map(|frame| frame.start_address().as_u64());
 
-    let bitmap_allocator = PhysicalMemoryManager::new(frames);
+    // Create sparse physical memory manager - much more memory efficient!
+    let bitmap_allocator = PhysicalMemoryManager::new_sparse(usable_regions, allocated_frames);
     let mut stage2 = MultiStageAllocator::Stage2(bitmap_allocator);
     swap(&mut *guard, &mut stage2);
 }
