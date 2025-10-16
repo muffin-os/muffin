@@ -25,11 +25,11 @@ impl FrameState {
     }
 }
 
-/// A "fat index" that represents a position in the sparse memory manager.
-/// Contains both the region index and the frame index within that region.
-/// This ensures that region and index are always consistent.
+/// A position in the sparse memory manager containing both the region index
+/// and the frame index within that region. This ensures that region and index
+/// are always consistent.
 #[derive(Debug, Copy, Clone)]
-struct FirstFree {
+struct RegionFrameIndex {
     region_idx: usize,
     frame_idx: usize,
 }
@@ -38,56 +38,71 @@ struct FirstFree {
 /// system using a sparse representation that only tracks usable memory regions.
 pub struct PhysicalMemoryManager {
     regions: Vec<MemoryRegion>,
-    first_free: Option<FirstFree>,
+    first_free: Option<RegionFrameIndex>,
 }
 
 impl PhysicalMemoryManager {
     /// Creates a new manager from usable memory regions.
-    /// 
+    ///
     /// # Arguments
     /// * `regions` - Pre-allocated vector of memory regions. Each region should already have
     ///   frames marked as Free or Allocated based on stage1 allocations.
     #[must_use]
     pub fn new(regions: Vec<MemoryRegion>) -> Self {
         let first_free = Self::find_first_free_internal(&regions);
-        Self { regions, first_free }
+        Self {
+            regions,
+            first_free,
+        }
     }
 
     /// Find the region and local index for a given physical address
-    fn find_frame_location(regions: &[MemoryRegion], addr: u64) -> Option<(usize, usize)> {
+    fn find_frame_location(regions: &[MemoryRegion], addr: u64) -> Option<RegionFrameIndex> {
         for (region_idx, region) in regions.iter().enumerate() {
-            if let Some(local_idx) = region.frame_index(addr) {
-                return Some((region_idx, local_idx));
+            if let Some(frame_idx) = region.frame_index(addr) {
+                return Some(RegionFrameIndex {
+                    region_idx,
+                    frame_idx,
+                });
             }
         }
         None
     }
 
     /// Internal helper to find the first free frame across all regions
-    fn find_first_free_internal(regions: &[MemoryRegion]) -> Option<FirstFree> {
+    fn find_first_free_internal(regions: &[MemoryRegion]) -> Option<RegionFrameIndex> {
         for (region_idx, region) in regions.iter().enumerate() {
             if let Some(frame_idx) = region.frames().iter().position(|&s| s == FrameState::Free) {
-                return Some(FirstFree { region_idx, frame_idx });
+                return Some(RegionFrameIndex {
+                    region_idx,
+                    frame_idx,
+                });
             }
         }
         None
     }
 
     /// Get the current first free frame position, updating it if necessary
-    fn first_free(&mut self) -> Option<FirstFree> {
+    fn first_free(&mut self) -> Option<RegionFrameIndex> {
         if self.first_free.is_none() {
             return None;
         }
-        
+
         let ff = self.first_free?;
-        
+
         // Verify that the cached first_free is still valid
+        #[cfg(debug_assertions)]
         if let Some(region) = self.regions.get(ff.region_idx) {
             if ff.frame_idx < region.len() && region.frames()[ff.frame_idx] == FrameState::Free {
                 return Some(ff);
             }
         }
-        
+
+        #[cfg(not(debug_assertions))]
+        {
+            return Some(ff);
+        }
+
         // If not valid, update it
         self.update_first_free(ff.region_idx, ff.frame_idx);
         self.first_free
@@ -98,8 +113,11 @@ impl PhysicalMemoryManager {
         // Check if there are more free frames in the current region
         if let Some(region) = self.regions.get(start_region) {
             if start_index < region.len() {
-                if let Some(idx) = region.frames()[start_index..].iter().position(|&s| s == FrameState::Free) {
-                    self.first_free = Some(FirstFree {
+                if let Some(idx) = region.frames()[start_index..]
+                    .iter()
+                    .position(|&s| s == FrameState::Free)
+                {
+                    self.first_free = Some(RegionFrameIndex {
                         region_idx: start_region,
                         frame_idx: start_index + idx,
                     });
@@ -111,7 +129,10 @@ impl PhysicalMemoryManager {
         // Search subsequent regions
         for (region_idx, region) in self.regions.iter().enumerate().skip(start_region + 1) {
             if let Some(frame_idx) = region.frames().iter().position(|&s| s == FrameState::Free) {
-                self.first_free = Some(FirstFree { region_idx, frame_idx });
+                self.first_free = Some(RegionFrameIndex {
+                    region_idx,
+                    frame_idx,
+                });
                 return;
             }
         }
@@ -132,8 +153,12 @@ impl PhysicalMemoryManager {
         // TODO: Support searching across region boundaries for better memory utilization
         // Search for contiguous free frames within regions
         for region_idx in ff.region_idx..self.regions.len() {
-            let search_start = if region_idx == ff.region_idx { ff.frame_idx } else { 0 };
-            
+            let search_start = if region_idx == ff.region_idx {
+                ff.frame_idx
+            } else {
+                0
+            };
+
             let region = &self.regions[region_idx];
             if search_start >= region.len() {
                 continue;
@@ -156,18 +181,20 @@ impl PhysicalMemoryManager {
                 let all_free = region.frames()[current_start..current_start + small_frame_count]
                     .iter()
                     .all(|&state| state == FrameState::Free);
-                
+
                 if all_free {
                     let frame_start_idx = current_start;
                     let frame_end_idx = current_start + small_frame_count - 1;
 
                     // Get the physical addresses before mutating
                     let start_addr = self.regions[region_idx].frame_address(frame_start_idx)?;
-                    let end_addr_idx = frame_end_idx / small_frames_per_frame * small_frames_per_frame;
+                    let end_addr_idx =
+                        frame_end_idx / small_frames_per_frame * small_frames_per_frame;
                     let end_addr = self.regions[region_idx].frame_address(end_addr_idx)?;
 
                     // Mark frames as allocated
-                    self.regions[region_idx].frames_mut()[frame_start_idx..=frame_end_idx].fill(FrameState::Allocated);
+                    self.regions[region_idx].frames_mut()[frame_start_idx..=frame_end_idx]
+                        .fill(FrameState::Allocated);
 
                     // Update first_free pointers
                     if region_idx == ff.region_idx && frame_start_idx <= ff.frame_idx {
@@ -180,7 +207,7 @@ impl PhysicalMemoryManager {
                         end: PhysFrame::from_start_address(PhysAddr::new(end_addr)).ok()?,
                     });
                 }
-                
+
                 // Move to next aligned position
                 current_start += small_frames_per_frame;
             }
@@ -200,7 +227,7 @@ impl PhysicalMemoryManager {
     /// [`Size2MiB`] will return [`None`], since frame index 2 is not 2MiB aligned.
     fn index_to_frame<S: PageSize>(&self, index: usize) -> Option<PhysFrame<S>> {
         let addr = index as u64 * Size4KiB::SIZE;
-        
+
         // address must be aligned to [`S`]'s page size
         if !addr.is_multiple_of(S::SIZE) {
             return None;
@@ -218,7 +245,7 @@ impl PhysicalMemoryManager {
 
     fn frame_to_index<S: PageSize>(&self, frame: PhysFrame<S>) -> Option<usize> {
         let addr = frame.start_address().as_u64();
-        
+
         // Check if frame is in a usable region
         for region in &self.regions {
             if region.frame_index(addr).is_some() {
@@ -261,26 +288,26 @@ impl PhysicalFrameAllocator<Size4KiB> for PhysicalMemoryManager {
 
     fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>) -> Option<PhysFrame<Size4KiB>> {
         let addr = frame.start_address().as_u64();
-        
+
         // Find which region contains this frame
-        let (region_idx, local_idx) = Self::find_frame_location(&self.regions, addr)?;
-        
-        if self.regions[region_idx].frames()[local_idx] == FrameState::Allocated {
-            self.regions[region_idx].frames_mut()[local_idx] = FrameState::Free;
-            
+        let loc = Self::find_frame_location(&self.regions, addr)?;
+
+        if self.regions[loc.region_idx].frames()[loc.frame_idx] == FrameState::Allocated {
+            self.regions[loc.region_idx].frames_mut()[loc.frame_idx] = FrameState::Free;
+
             // Update first_free if this is before the current first_free
             let is_before_first_free = match self.first_free {
-                Some(ff) => region_idx < ff.region_idx || (region_idx == ff.region_idx && local_idx < ff.frame_idx),
+                Some(ff) => {
+                    loc.region_idx < ff.region_idx
+                        || (loc.region_idx == ff.region_idx && loc.frame_idx < ff.frame_idx)
+                }
                 None => true,
             };
-            
+
             if is_before_first_free {
-                self.first_free = Some(FirstFree {
-                    region_idx,
-                    frame_idx: local_idx,
-                });
+                self.first_free = Some(loc);
             }
-            
+
             Some(frame)
         } else {
             None
@@ -426,7 +453,7 @@ mod tests {
         let region1 = MemoryRegion::new(0x0000_0000, 4, FrameState::Free);
         let region2 = MemoryRegion::new(0x1000_0000, 4, FrameState::Free);
         let pmm = PhysicalMemoryManager::new(vec![region1, region2]);
-        
+
         assert_eq!(2, pmm.regions.len());
         assert_eq!(4, pmm.regions[0].len());
         assert_eq!(4, pmm.regions[1].len());
@@ -440,14 +467,14 @@ mod tests {
         let region1 = MemoryRegion::new(0x0000_0000, 4, FrameState::Free);
         let region2 = MemoryRegion::new(0x1000_0000, 4, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
-        
+
         // Allocate from first region
         let frame1: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x0000, frame1.start_address().as_u64());
-        
+
         let frame2: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x1000, frame2.start_address().as_u64());
-        
+
         // Deallocate and reallocate
         assert_eq!(Some(frame1), pmm.deallocate_frame(frame1));
         let frame3: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
@@ -462,13 +489,13 @@ mod tests {
         region.frames_mut()[1] = FrameState::Allocated;
         region.frames_mut()[3] = FrameState::Allocated;
         region.frames_mut()[5] = FrameState::Allocated;
-        
+
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
-        
+
         // First free should be frame 0
         let frame1: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x0000, frame1.start_address().as_u64());
-        
+
         // Next should be frame 2 (frame 1 is allocated)
         let frame2: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x2000, frame2.start_address().as_u64());
