@@ -83,7 +83,7 @@ impl PhysicalMemoryManager {
     }
 
     /// Get the current first free frame position
-    fn first_free(&mut self) -> Option<RegionFrameIndex> {
+    fn first_free(&self) -> Option<RegionFrameIndex> {
         self.first_free
     }
 
@@ -92,16 +92,16 @@ impl PhysicalMemoryManager {
         // Check if there are more free frames in the current region
         if let Some(region) = self.regions.get(start_region)
             && start_index < region.len()
-                && let Some(idx) = region.frames()[start_index..]
-                    .iter()
-                    .position(|&s| s == FrameState::Free)
-                {
-                    self.first_free = Some(RegionFrameIndex {
-                        region_idx: start_region,
-                        frame_idx: start_index + idx,
-                    });
-                    return;
-                }
+            && let Some(idx) = region.frames()[start_index..]
+                .iter()
+                .position(|&s| s == FrameState::Free)
+        {
+            self.first_free = Some(RegionFrameIndex {
+                region_idx: start_region,
+                frame_idx: start_index + idx,
+            });
+            return;
+        }
 
         // Search subsequent regions
         for (region_idx, region) in self.regions.iter().enumerate().skip(start_region + 1) {
