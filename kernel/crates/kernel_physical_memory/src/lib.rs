@@ -82,29 +82,9 @@ impl PhysicalMemoryManager {
         None
     }
 
-    /// Get the current first free frame position, updating it if necessary
+    /// Get the current first free frame position
     fn first_free(&mut self) -> Option<RegionFrameIndex> {
-        let ff = self.first_free?;
-
-        // In debug mode, verify that the cached first_free is still valid
-        #[cfg(debug_assertions)]
-        {
-            if let Some(region) = self.regions.get(ff.region_idx)
-                && ff.frame_idx < region.len()
-                    && region.frames()[ff.frame_idx] == FrameState::Free
-                {
-                    return Some(ff);
-                }
-            // If not valid, update it
-            self.update_first_free(ff.region_idx, ff.frame_idx);
-            self.first_free
-        }
-
-        // In release mode, trust the cached value for performance
-        #[cfg(not(debug_assertions))]
-        {
-            Some(ff)
-        }
+        self.first_free
     }
 
     /// Update the first_free pointer starting from a given position
@@ -496,5 +476,140 @@ mod tests {
         // Next should be frame 2 (frame 1 is allocated)
         let frame2: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x2000, frame2.start_address().as_u64());
+    }
+
+    #[test]
+    fn test_first_free_maintained_on_allocate() {
+        // Test that allocate() correctly updates first_free
+        let region = MemoryRegion::new(0, 10, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+
+        // Initially, first_free should point to frame 0
+        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+
+        // Allocate frame 0
+        let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // first_free should now point to frame 1
+        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
+
+        // Allocate frame 1
+        let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // first_free should now point to frame 2
+        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 2);
+    }
+
+    #[test]
+    fn test_first_free_maintained_on_deallocate() {
+        // Test that deallocate() correctly updates first_free when deallocating before current first_free
+        let region = MemoryRegion::new(0, 10, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+
+        // Allocate several frames
+        let frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        let frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        let frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // first_free should be at frame 3 now
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 3);
+
+        // Deallocate frame2 (which is before first_free)
+        pmm.deallocate_frame(frame2).unwrap();
+
+        // first_free should now point to frame2
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
+
+        // Deallocate frame1 (which is before current first_free)
+        pmm.deallocate_frame(frame1).unwrap();
+
+        // first_free should now point to frame1
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+
+        // Deallocate frame3 (which is after first_free)
+        pmm.deallocate_frame(frame3).unwrap();
+
+        // first_free should still point to frame1
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+    }
+
+    #[test]
+    fn test_first_free_all_frames_allocated() {
+        // Test that first_free becomes None when all frames are allocated
+        let region = MemoryRegion::new(0, 3, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+
+        let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // All frames allocated, first_free should be None
+        assert!(pmm.first_free.is_none());
+
+        // Try to allocate - should fail
+        let result: Option<PhysFrame<Size4KiB>> = PhysicalFrameAllocator::allocate_frame(&mut pmm);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_first_free_across_regions() {
+        // Test that first_free correctly transitions between regions
+        let region1 = MemoryRegion::new(0x0000_0000, 2, FrameState::Free);
+        let region2 = MemoryRegion::new(0x1000_0000, 2, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
+
+        // first_free should be in region 0, frame 0
+        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+
+        // Allocate all frames from region 0
+        let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // first_free should now be in region 1, frame 0
+        assert_eq!(pmm.first_free.unwrap().region_idx, 1);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+
+        // Allocate from region 1
+        let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // first_free should be in region 1, frame 1
+        assert_eq!(pmm.first_free.unwrap().region_idx, 1);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
+    }
+
+    #[test]
+    fn test_first_free_deallocate_to_earlier_region() {
+        // Test that deallocating in an earlier region updates first_free
+        let region1 = MemoryRegion::new(0x0000_0000, 2, FrameState::Free);
+        let region2 = MemoryRegion::new(0x1000_0000, 2, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
+
+        // Allocate all frames from region 0
+        let frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        let frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // Allocate from region 1
+        let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+
+        // first_free should be in region 1
+        assert_eq!(pmm.first_free.unwrap().region_idx, 1);
+
+        // Deallocate a frame from region 0
+        pmm.deallocate_frame(frame1).unwrap();
+
+        // first_free should now be in region 0
+        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+
+        // Deallocate another frame from region 0 (after the current first_free)
+        pmm.deallocate_frame(frame2).unwrap();
+
+        // first_free should still be at region 0, frame 0
+        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
     }
 }
