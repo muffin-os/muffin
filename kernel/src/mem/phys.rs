@@ -1,4 +1,5 @@
 use alloc::vec;
+use alloc::vec::Vec;
 use core::iter::from_fn;
 use core::mem::swap;
 
@@ -114,20 +115,32 @@ pub(in crate::mem) fn init_stage2() {
     3. USABLE regions are 4KiB aligned (address and length)
      */
     
-    // Collect usable regions as (base_address, length) tuples
-    let usable_regions = regions
-        .iter()
-        .filter(|r| r.entry_type == EntryType::USABLE)
-        .map(|r| (r.base, r.length));
-
-    // Collect already-allocated frame addresses from stage1
-    let allocated_frames = stage1
-        .usable_frames()
-        .take(stage_one_next_free)
-        .map(|frame| frame.start_address().as_u64());
+    // Build memory regions for usable regions
+    let mut memory_regions = Vec::new();
+    for entry in regions.iter().filter(|r| r.entry_type == EntryType::USABLE) {
+        let num_frames = (entry.length / Size4KiB::SIZE) as usize;
+        let region = kernel_physical_memory::MemoryRegion::new(
+            entry.base,
+            num_frames,
+            kernel_physical_memory::FrameState::Free,
+        );
+        memory_regions.push(region);
+    }
+    
+    // Mark frames allocated by stage1
+    for frame in stage1.usable_frames().take(stage_one_next_free) {
+        let addr = frame.start_address().as_u64();
+        // Find which region this frame belongs to and mark it as allocated
+        for region in &mut memory_regions {
+            if let Some(idx) = region.frame_index(addr) {
+                region.frames_mut()[idx] = kernel_physical_memory::FrameState::Allocated;
+                break;
+            }
+        }
+    }
 
     // Create sparse physical memory manager - much more memory efficient!
-    let bitmap_allocator = PhysicalMemoryManager::new_sparse(usable_regions, allocated_frames);
+    let bitmap_allocator = PhysicalMemoryManager::new(memory_regions);
     let mut stage2 = MultiStageAllocator::Stage2(bitmap_allocator);
     swap(&mut *guard, &mut stage2);
 }
