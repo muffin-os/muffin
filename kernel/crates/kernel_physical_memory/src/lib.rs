@@ -84,36 +84,35 @@ impl PhysicalMemoryManager {
 
     /// Get the current first free frame position, updating it if necessary
     fn first_free(&mut self) -> Option<RegionFrameIndex> {
-        if self.first_free.is_none() {
-            return None;
-        }
-
         let ff = self.first_free?;
 
-        // Verify that the cached first_free is still valid
+        // In debug mode, verify that the cached first_free is still valid
         #[cfg(debug_assertions)]
-        if let Some(region) = self.regions.get(ff.region_idx) {
-            if ff.frame_idx < region.len() && region.frames()[ff.frame_idx] == FrameState::Free {
-                return Some(ff);
-            }
+        {
+            if let Some(region) = self.regions.get(ff.region_idx)
+                && ff.frame_idx < region.len()
+                    && region.frames()[ff.frame_idx] == FrameState::Free
+                {
+                    return Some(ff);
+                }
+            // If not valid, update it
+            self.update_first_free(ff.region_idx, ff.frame_idx);
+            self.first_free
         }
 
+        // In release mode, trust the cached value for performance
         #[cfg(not(debug_assertions))]
         {
-            return Some(ff);
+            Some(ff)
         }
-
-        // If not valid, update it
-        self.update_first_free(ff.region_idx, ff.frame_idx);
-        self.first_free
     }
 
     /// Update the first_free pointer starting from a given position
     fn update_first_free(&mut self, start_region: usize, start_index: usize) {
         // Check if there are more free frames in the current region
-        if let Some(region) = self.regions.get(start_region) {
-            if start_index < region.len() {
-                if let Some(idx) = region.frames()[start_index..]
+        if let Some(region) = self.regions.get(start_region)
+            && start_index < region.len()
+                && let Some(idx) = region.frames()[start_index..]
                     .iter()
                     .position(|&s| s == FrameState::Free)
                 {
@@ -123,8 +122,6 @@ impl PhysicalMemoryManager {
                     });
                     return;
                 }
-            }
-        }
 
         // Search subsequent regions
         for (region_idx, region) in self.regions.iter().enumerate().skip(start_region + 1) {

@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt, negative_impls)]
+#![feature(abi_x86_interrupt, negative_impls, vec_push_within_capacity)]
 extern crate alloc;
 
 use ::log::info;
