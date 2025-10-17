@@ -74,7 +74,7 @@ rustc-demangle = "0.1"
 sha3 = { version = "0.11.0-rc.3", default-features = false }
 spin = "0.10"
 thiserror = { version = "2.0", default-features = false }
-uart_16550 = "0.3"
+uart_16550 = "0.4"
 virtio-drivers = "0.11"
 volatile = { version = "0.6", features = ["derive"] }
 x2apic = "0.5"
