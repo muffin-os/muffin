@@ -144,7 +144,10 @@ impl PhysicalMemoryManager {
             // Align search_start up to the required page size alignment
             // We must consider the region's base address, not just the frame index
             let aligned_search_start = {
-                let start_addr = region.frame_address(search_start)?;
+                let start_addr = match region.frame_address(search_start) {
+                    Some(addr) => addr,
+                    None => continue, // skip to next region if out of bounds
+                };
                 let alignment = S::SIZE;
 
                 // Calculate how much to add to reach next aligned address
@@ -171,12 +174,16 @@ impl PhysicalMemoryManager {
                     let frame_end_idx = current_start + small_frame_count - 1;
 
                     // Get the physical addresses before mutating
-                    let start_addr = self.regions[region_idx].frame_address(frame_start_idx)?;
+                    let start_addr = self.regions[region_idx]
+                        .frame_address(frame_start_idx)
+                        .expect("frame_address(frame_start_idx) should succeed: frame exists and is free");
                     // For PhysFrameRangeInclusive, end points to the start of the last page in the range
                     // Since frame_start_idx is already aligned, it's the start of the first page
                     // The last page starts at: first_page_start + (n-1) * frames_per_page
                     let last_page_start_idx = frame_start_idx + (n - 1) * small_frames_per_frame;
-                    let end_addr = self.regions[region_idx].frame_address(last_page_start_idx)?;
+                    let end_addr = self.regions[region_idx]
+                        .frame_address(last_page_start_idx)
+                        .expect("frame_address(last_page_start_idx) should succeed: frame exists and is free");
 
                     // Mark frames as allocated
                     self.regions[region_idx].frames_mut()[frame_start_idx..=frame_end_idx]
