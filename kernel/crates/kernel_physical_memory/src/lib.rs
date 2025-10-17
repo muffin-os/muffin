@@ -180,8 +180,10 @@ impl PhysicalMemoryManager {
 
                     // Convert to physical frames
                     return Some(PhysFrameRangeInclusive {
-                        start: PhysFrame::from_start_address(PhysAddr::new(start_addr)).ok()?,
-                        end: PhysFrame::from_start_address(PhysAddr::new(end_addr)).ok()?,
+                        start: PhysFrame::from_start_address(PhysAddr::new(start_addr))
+                            .expect("start address must be aligned to page size"),
+                        end: PhysFrame::from_start_address(PhysAddr::new(end_addr))
+                            .expect("end address must be aligned to page size"),
                     });
                 }
 
@@ -570,5 +572,34 @@ mod tests {
         // first_free should still be at region 0, frame 0
         assert_eq!(pmm.first_free.unwrap().region_idx, 0);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+    }
+
+    #[test]
+    fn test_allocate_2mib_with_misaligned_first_free() {
+        // Test that allocating a 2MiB frame works even when first_free points to
+        // a 4KiB frame that is not 2MiB aligned. This tests that the allocator
+        // correctly skips to the next aligned position.
+        
+        // Create a region with 1024 frames (4MiB total)
+        let region = MemoryRegion::new(0, 1024, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+        
+        // Allocate one 4KiB frame to make first_free not 2MiB aligned
+        let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(0, small_frame.start_address().as_u64());
+        
+        // first_free should now be at index 1, which is NOT 2MiB aligned
+        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
+        
+        // Try to allocate a 2MiB frame - this should succeed by finding the next
+        // 2MiB aligned position (at frame index 512, address 0x200000)
+        let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
+        
+        // The 2MiB frame should start at the next 2MiB aligned address (0x200000)
+        assert_eq!(512 * 4096, large_frame.start_address().as_u64());
+        
+        // Verify we can still allocate from the gap (frames 1-511)
+        let small_frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(4096, small_frame2.start_address().as_u64());
     }
 }
