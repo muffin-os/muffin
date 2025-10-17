@@ -14,7 +14,7 @@ static HEAP_START: VirtAddr = virt_addr_from_page_table_indices([257, 0, 0, 0], 
 
 /// Since stage1 (which is when we initialize the heap) is slow in allocating physical memory,
 /// we allocate a small portion of memory for the heap in stage1 and then allocate the rest in stage2.
-static INITIAL_HEAP_SIZE: usize = 2 * 1024 * 1024; // 2MiB
+static INITIAL_HEAP_SIZE: usize = 8 * 1024 * 1024; // 8MiB
 
 /// The amount of heap that is available after the stage2 initialization.
 pub static HEAP_SIZE: usize = 32 * 1024 * 1024; // 32MiB
