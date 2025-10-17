@@ -142,12 +142,19 @@ impl PhysicalMemoryManager {
             }
 
             // Align search_start up to the required page size alignment
+            // We must consider the region's base address, not just the frame index
             let aligned_search_start = {
-                let offset = search_start % small_frames_per_frame;
-                if offset == 0 {
+                let start_addr = region.frame_address(search_start)?;
+                let alignment = S::SIZE;
+
+                // Calculate how much to add to reach next aligned address
+                let misalignment = start_addr % alignment;
+                if misalignment == 0 {
                     search_start
                 } else {
-                    search_start + (small_frames_per_frame - offset)
+                    let bytes_to_add = alignment - misalignment;
+                    let frames_to_add = (bytes_to_add / Size4KiB::SIZE) as usize;
+                    search_start + frames_to_add
                 }
             };
 
@@ -165,9 +172,11 @@ impl PhysicalMemoryManager {
 
                     // Get the physical addresses before mutating
                     let start_addr = self.regions[region_idx].frame_address(frame_start_idx)?;
-                    let end_addr_idx =
-                        frame_end_idx / small_frames_per_frame * small_frames_per_frame;
-                    let end_addr = self.regions[region_idx].frame_address(end_addr_idx)?;
+                    // For PhysFrameRangeInclusive, end points to the start of the last page in the range
+                    // Since frame_start_idx is already aligned, it's the start of the first page
+                    // The last page starts at: first_page_start + (n-1) * frames_per_page
+                    let last_page_start_idx = frame_start_idx + (n - 1) * small_frames_per_frame;
+                    let end_addr = self.regions[region_idx].frame_address(last_page_start_idx)?;
 
                     // Mark frames as allocated
                     self.regions[region_idx].frames_mut()[frame_start_idx..=frame_end_idx]
@@ -579,27 +588,77 @@ mod tests {
         // Test that allocating a 2MiB frame works even when first_free points to
         // a 4KiB frame that is not 2MiB aligned. This tests that the allocator
         // correctly skips to the next aligned position.
-        
+
         // Create a region with 1024 frames (4MiB total)
         let region = MemoryRegion::new(0, 1024, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
-        
+
         // Allocate one 4KiB frame to make first_free not 2MiB aligned
         let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0, small_frame.start_address().as_u64());
-        
+
         // first_free should now be at index 1, which is NOT 2MiB aligned
         assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
-        
+
         // Try to allocate a 2MiB frame - this should succeed by finding the next
         // 2MiB aligned position (at frame index 512, address 0x200000)
         let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
-        
+
         // The 2MiB frame should start at the next 2MiB aligned address (0x200000)
         assert_eq!(512 * 4096, large_frame.start_address().as_u64());
-        
+
         // Verify we can still allocate from the gap (frames 1-511)
         let small_frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         assert_eq!(4096, small_frame2.start_address().as_u64());
+    }
+
+    #[test]
+    fn test_allocate_2mib_from_misaligned_region() {
+        // Test allocating 2MiB frames from a region whose base address is NOT 2MiB aligned
+        // Region starts at 4KiB (0x1000), so first 2MiB-aligned address is at 0x200000
+        let region = MemoryRegion::new(0x1000, 1024, FrameState::Free); // Starts at 4KiB
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+
+        // Try to allocate a 2MiB frame - should start at first 2MiB aligned address (0x200000)
+        // That's frame index 511 in the region (0x200000 - 0x1000 = 0x1FF000 = 511 * 4KiB)
+        let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(0x200000, large_frame.start_address().as_u64());
+
+        // Verify frames before the 2MiB frame are still available
+        let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(0x1000, small_frame.start_address().as_u64());
+    }
+
+    #[cfg(not(miri))] // this takes a while
+    #[test]
+    fn test_allocate_1gib_from_misaligned_region() {
+        // Test allocating 1GiB frames from a region whose base address is NOT 1GiB aligned
+        // Region starts at 2MiB (0x200000), so first 1GiB-aligned address is at 0x40000000
+        // We need enough frames: (0x40000000 - 0x200000) / 4096 + (1GiB / 4096) frames
+        let frames_before_aligned = (0x40000000 - 0x200000) / 4096; // 261632 frames
+        let frames_for_1gib = (1024 * 1024 * 1024) / 4096; // 262144 frames
+        let total_frames = frames_before_aligned + frames_for_1gib;
+
+        let region = MemoryRegion::new(0x200000, total_frames as usize, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+
+        // Try to allocate a 1GiB frame - should start at first 1GiB aligned address (0x40000000)
+        let large_frame: PhysFrame<Size1GiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(0x40000000, large_frame.start_address().as_u64());
+
+        // Verify frames before the 1GiB frame are still available
+        let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(0x200000, small_frame.start_address().as_u64());
+    }
+
+    #[test]
+    fn test_allocate_2mib_from_perfectly_aligned_region() {
+        // Test that allocation still works correctly when region IS properly aligned
+        let region = MemoryRegion::new(0x200000, 1024, FrameState::Free); // Starts at 2MiB
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+
+        // Should allocate immediately at the start since it's already aligned
+        let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(0x200000, large_frame.start_address().as_u64());
     }
 }
