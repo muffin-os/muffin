@@ -12,7 +12,7 @@ use crate::UsizeExt;
 use crate::mem::virt::OwnedSegment;
 
 pub struct MemoryRegions {
-    regions: Vec<MemoryRegion>,
+    regions: Mutex<Vec<MemoryRegion>>,
 }
 
 impl Default for MemoryRegions {
@@ -24,16 +24,30 @@ impl Default for MemoryRegions {
 impl MemoryRegions {
     pub fn new() -> Self {
         Self {
-            regions: Vec::new(),
+            regions: Mutex::new(Vec::new()),
         }
     }
 
-    pub fn find_memory_region_for_address(&self, addr: VirtAddr) -> Option<&MemoryRegion> {
+    pub fn add_region(&self, region: MemoryRegion) {
+        self.regions.lock().push(region);
+    }
+
+    pub fn with_memory_region_for_address<F, R>(&self, addr: VirtAddr, f: F) -> Option<R>
+    where
+        F: FnOnce(&MemoryRegion) -> R,
+    {
         self.regions
+            .lock()
             .iter()
-            .filter(|r| r.addr() <= addr && r.addr() + r.size().into_u64() > addr)
-            .at_most_one()
-            .expect("should not have more than one segment matching the address")
+            .find(|r| r.addr() <= addr && r.addr() + r.size().into_u64() > addr)
+            .map(f)
+    }
+
+    pub fn find_memory_region_for_address(&self, addr: VirtAddr) -> bool {
+        self.regions
+            .lock()
+            .iter()
+            .any(|r| r.addr() <= addr && r.addr() + r.size().into_u64() > addr)
     }
 }
 
@@ -114,6 +128,20 @@ pub struct MappedMemoryRegion {
     segment: OwnedSegment<'static>,
     size: usize,
     physical_frames: PhysFrameRangeInclusive,
+}
+
+impl MappedMemoryRegion {
+    pub fn new(
+        segment: OwnedSegment<'static>,
+        size: usize,
+        physical_frames: PhysFrameRangeInclusive,
+    ) -> Self {
+        Self {
+            segment,
+            size,
+            physical_frames,
+        }
+    }
 }
 
 impl Drop for MappedMemoryRegion {
