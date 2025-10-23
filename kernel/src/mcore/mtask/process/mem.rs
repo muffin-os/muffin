@@ -43,7 +43,7 @@ impl MemoryRegions {
             .map(f)
     }
 
-    pub fn find_memory_region_for_address(&self, addr: VirtAddr) -> bool {
+    pub fn is_memory_region_at_address(&self, addr: VirtAddr) -> bool {
         self.regions
             .lock()
             .iter()

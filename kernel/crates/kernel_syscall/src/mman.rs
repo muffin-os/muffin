@@ -1,51 +1,51 @@
-use kernel_abi::{Errno, EINVAL, ENOMEM, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE};
+use kernel_abi::{Errno, EINVAL, ENOMEM, MapFlags, ProtFlags};
 
 use crate::UserspacePtr;
-use crate::access::{AllocationStrategy, FileAccess, Location, MemoryAccess, MemoryRegionAccess};
+use crate::access::{AllocationStrategy, Location, MemoryRegionAccess};
 
-pub fn sys_mmap<Cx: FileAccess + MemoryAccess + MemoryRegionAccess>(
+pub fn sys_mmap<Cx: MemoryRegionAccess>(
     cx: &Cx,
     addr: UserspacePtr<u8>,
     len: usize,
     prot: i32,
     flags: i32,
-    fd: Cx::Fd,
-    offset: usize,
+    _fd: i32,
+    _offset: usize,
 ) -> Result<usize, Errno> {
     // Validate size is non-zero
     if len == 0 {
         return Err(EINVAL);
     }
 
+    let flags = MapFlags::from_bits(flags).ok_or(EINVAL)?;
+
     // For now, only support anonymous private mappings
-    if flags & MAP_ANONYMOUS == 0 {
+    if !flags.contains(MapFlags::ANONYMOUS) {
         return Err(EINVAL);
     }
-    if flags & MAP_PRIVATE == 0 {
+    if !flags.contains(MapFlags::PRIVATE) {
         return Err(EINVAL);
     }
 
     // Validate protection flags
-    if prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
-        return Err(EINVAL);
-    }
+    let _prot = ProtFlags::from_bits(prot).ok_or(EINVAL)?;
 
     // Determine location
-    let location = if addr.as_ptr().is_null() {
-        Location::Anywhere
-    } else {
+    let location = if flags.contains(MapFlags::FIXED) {
+        // When MAP_FIXED is set, addr must not be null
+        if addr.as_ptr().is_null() {
+            return Err(EINVAL);
+        }
         // Validate that addr and addr+len are in lower half
-        unsafe {
-            addr.validate_range(len)?;
-        }
-        
-        if flags & MAP_FIXED != 0 {
-            Location::Fixed(addr)
-        } else {
-            // When MAP_FIXED is not set, addr is just a hint
-            // For simplicity, we'll treat it as Anywhere
-            Location::Anywhere
-        }
+        addr.validate_range(len)?;
+        Location::Fixed(addr)
+    } else {
+        // When MAP_FIXED is not set, addr is ignored
+        debug_assert!(
+            addr.as_ptr().is_null(),
+            "addr should be null when MAP_FIXED is not set"
+        );
+        Location::Anywhere
     };
 
     // We'll use eager allocation for now (as specified in requirements)
@@ -53,50 +53,29 @@ pub fn sys_mmap<Cx: FileAccess + MemoryAccess + MemoryRegionAccess>(
 
     // Create the mapping and add it to the process's memory regions
     // The context is responsible for converting the mapping to a region
-    cx.create_and_track_mapping(location, len, allocation_strategy)
+    let mapped_addr = cx
+        .create_and_track_mapping(location, len, allocation_strategy)
         .map_err(|e| match e {
             crate::access::CreateMappingError::LocationAlreadyMapped => EINVAL,
             crate::access::CreateMappingError::OutOfMemory => ENOMEM,
-        })
-        .map(|addr| addr.addr())
-        .map(|addr| {
-            // Suppress unused parameter warnings for fd, offset, and prot (not used for anonymous mappings)
-            let _ = (fd, offset, prot);
-            addr
-        })
+        })?;
+
+    Ok(mapped_addr.addr())
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
     use alloc::vec::Vec;
-    use core::ffi::c_int;
 
-    use kernel_abi::{EINVAL, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-    use kernel_vfs::path::AbsolutePath;
+    use kernel_abi::{EINVAL, MapFlags, ProtFlags};
     use spin::mutex::Mutex;
 
     use crate::UserspacePtr;
     use crate::access::{
-        AllocationStrategy, CreateMappingError, FileAccess, FileInfo, Location, Mapping,
-        MemoryAccess, MemoryRegion, MemoryRegionAccess,
+        AllocationStrategy, CreateMappingError, Location, MemoryRegion, MemoryRegionAccess,
     };
     use crate::mman::sys_mmap;
-
-    struct TestMapping {
-        addr: UserspacePtr<u8>,
-        size: usize,
-    }
-
-    impl Mapping for TestMapping {
-        fn addr(&self) -> UserspacePtr<u8> {
-            self.addr
-        }
-
-        fn size(&self) -> usize {
-            self.size
-        }
-    }
 
     struct TestRegion {
         addr: UserspacePtr<u8>,
@@ -113,9 +92,6 @@ mod tests {
         }
     }
 
-    struct TestFileInfo;
-    impl FileInfo for TestFileInfo {}
-
     struct TestMemoryAccess {
         mappings: Mutex<Vec<(usize, usize)>>, // (addr, size)
         next_addr: Mutex<usize>,
@@ -130,44 +106,15 @@ mod tests {
         }
     }
 
-    impl FileAccess for Arc<TestMemoryAccess> {
-        type FileInfo = TestFileInfo;
-        type Fd = c_int;
-        type OpenError = ();
-        type ReadError = ();
-        type WriteError = ();
-        type CloseError = ();
+    impl MemoryRegionAccess for Arc<TestMemoryAccess> {
+        type Region = TestRegion;
 
-        fn file_info(&self, _path: &AbsolutePath) -> Option<Self::FileInfo> {
-            None
-        }
-
-        fn open(&self, _info: &Self::FileInfo) -> Result<Self::Fd, ()> {
-            Err(())
-        }
-
-        fn read(&self, _fd: Self::Fd, _buf: &mut [u8]) -> Result<usize, ()> {
-            Err(())
-        }
-
-        fn write(&self, _fd: Self::Fd, _buf: &[u8]) -> Result<usize, ()> {
-            Err(())
-        }
-
-        fn close(&self, _fd: Self::Fd) -> Result<(), ()> {
-            Ok(())
-        }
-    }
-
-    impl MemoryAccess for Arc<TestMemoryAccess> {
-        type Mapping = TestMapping;
-
-        fn create_mapping(
+        fn create_and_track_mapping(
             &self,
             location: Location,
             size: usize,
             _allocation_strategy: AllocationStrategy,
-        ) -> Result<Self::Mapping, CreateMappingError> {
+        ) -> Result<UserspacePtr<u8>, CreateMappingError> {
             let addr = match location {
                 Location::Anywhere => {
                     let mut next = self.next_addr.lock();
@@ -189,30 +136,15 @@ mod tests {
             };
 
             let ptr = unsafe { UserspacePtr::try_from_usize(addr).unwrap() };
-            Ok(TestMapping { addr: ptr, size })
-        }
-    }
-
-    impl MemoryRegionAccess for Arc<TestMemoryAccess> {
-        type Region = TestRegion;
-
-        fn create_and_track_mapping(
-            &self,
-            location: Location,
-            size: usize,
-            allocation_strategy: AllocationStrategy,
-        ) -> Result<UserspacePtr<u8>, CreateMappingError> {
-            let mapping = self.create_mapping(location, size, allocation_strategy)?;
-            let addr = mapping.addr();
             
-            self.mappings.lock().push((addr.addr(), mapping.size()));
+            self.mappings.lock().push((addr, size));
             
             let region = TestRegion {
-                addr: mapping.addr(),
-                size: mapping.size(),
+                addr: ptr,
+                size,
             };
             self.add_memory_region(region);
-            Ok(addr)
+            Ok(ptr)
         }
 
         fn add_memory_region(&self, _region: Self::Region) {
@@ -229,8 +161,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            PROT_READ | PROT_WRITE,
-            MAP_ANONYMOUS | MAP_PRIVATE,
+            (ProtFlags::READ | ProtFlags::WRITE).bits(),
+            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
             0,
             0,
         );
@@ -250,8 +182,8 @@ mod tests {
             &cx,
             addr,
             0,
-            PROT_READ | PROT_WRITE,
-            MAP_ANONYMOUS | MAP_PRIVATE,
+            (ProtFlags::READ | ProtFlags::WRITE).bits(),
+            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
             0,
             0,
         );
@@ -268,8 +200,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            PROT_READ | PROT_WRITE,
-            MAP_PRIVATE, // Missing MAP_ANONYMOUS
+            (ProtFlags::READ | ProtFlags::WRITE).bits(),
+            MapFlags::PRIVATE.bits(), // Missing MAP_ANONYMOUS
             0,
             0,
         );
@@ -286,8 +218,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            PROT_READ | PROT_WRITE,
-            MAP_ANONYMOUS, // Missing MAP_PRIVATE
+            (ProtFlags::READ | ProtFlags::WRITE).bits(),
+            MapFlags::ANONYMOUS.bits(), // Missing MAP_PRIVATE
             0,
             0,
         );
@@ -305,8 +237,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            PROT_READ | PROT_WRITE,
-            MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+            (ProtFlags::READ | ProtFlags::WRITE).bits(),
+            (MapFlags::ANONYMOUS | MapFlags::PRIVATE | MapFlags::FIXED).bits(),
             0,
             0,
         );
@@ -317,7 +249,6 @@ mod tests {
 
     #[test]
     fn test_mmap_upper_half_rejected() {
-        let cx = Arc::new(TestMemoryAccess::new());
         // Try to map to upper half (kernel space)
         let result = unsafe { UserspacePtr::<u8>::try_from_usize(0x8000_0000_0000_0000) };
         

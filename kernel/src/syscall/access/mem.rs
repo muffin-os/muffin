@@ -22,9 +22,10 @@ impl MemoryAccess for KernelAccess<'_> {
         allocation_strategy: AllocationStrategy,
     ) -> Result<Self::Mapping, CreateMappingError> {
         // For now, we only support eager allocation
-        if !matches!(allocation_strategy, AllocationStrategy::Eager) {
-            return Err(CreateMappingError::OutOfMemory);
-        }
+        assert!(
+            matches!(allocation_strategy, AllocationStrategy::Eager),
+            "only eager allocation is supported"
+        );
 
         let page_aligned_size = size.next_multiple_of(Size4KiB::SIZE as usize);
         let page_count = page_aligned_size / Size4KiB::SIZE as usize;
@@ -45,6 +46,7 @@ impl MemoryAccess for KernelAccess<'_> {
         };
 
         // Allocate physical frames and map them
+        // TODO: Optimize by using 2MiB and 1GiB frames when possible instead of only 4KiB frames
         let frames = PhysicalMemory::allocate_frames::<Size4KiB>(page_count)
             .ok_or(CreateMappingError::OutOfMemory)?;
 
@@ -82,7 +84,7 @@ impl KernelMapping {
         let addr = self.addr
             .as_ptr::<u8>()
             .try_into()
-            .unwrap(); // Safe because we know the mapping is in userspace
+            .expect("kernel mapping should be located in user space");
         let size = self.size;
         
         let inner = MemoryRegion::Mapped(MappedMemoryRegion::new(

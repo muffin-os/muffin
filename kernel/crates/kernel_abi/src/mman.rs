@@ -1,12 +1,27 @@
-// Memory protection flags
-pub const PROT_NONE: i32 = 0x0;
-pub const PROT_READ: i32 = 0x1;
-pub const PROT_WRITE: i32 = 0x2;
-pub const PROT_EXEC: i32 = 0x4;
+use bitflags::bitflags;
 
-// Memory mapping flags
-pub const MAP_SHARED: i32 = 0x01;
-pub const MAP_PRIVATE: i32 = 0x02;
-pub const MAP_FIXED: i32 = 0x10;
-pub const MAP_ANONYMOUS: i32 = 0x20;
-pub const MAP_ANON: i32 = MAP_ANONYMOUS;
+bitflags! {
+    /// Memory protection flags for mmap
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ProtFlags: i32 {
+        const NONE = 0x0;
+        const READ = 0x1;
+        const WRITE = 0x2;
+        const EXEC = 0x4;
+    }
+}
+
+bitflags! {
+    /// Memory mapping flags for mmap
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MapFlags: i32 {
+        const SHARED = 0x01;
+        const PRIVATE = 0x02;
+        const FIXED = 0x10;
+        const ANONYMOUS = 0x20;
+    }
+}
+
+impl MapFlags {
+    pub const ANON: Self = Self::ANONYMOUS;
+}
