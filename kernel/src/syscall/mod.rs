@@ -90,7 +90,7 @@ fn dispatch_sys_mmap(
     let addr = unsafe { UserspacePtr::try_from_usize(addr)? };
     let prot = i32::try_from(prot)?;
     let flags = i32::try_from(flags)?;
-    let fd = <KernelAccess as FileAccess>::Fd::from(i32::try_from(fd)?);
+    let fd = i32::try_from(fd)?;
     sys_mmap(&cx, addr, len, prot, flags, fd, offset)
 }
 

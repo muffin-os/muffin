@@ -105,3 +105,56 @@ impl FileAccess for KernelAccess<'_> {
         Ok(())
     }
 }
+
+impl kernel_syscall::access::MemoryRegionAccess for KernelAccess<'_> {
+    type Region = KernelMemoryRegionHandle;
+
+    fn create_and_track_mapping(
+        &self,
+        location: kernel_syscall::access::Location,
+        size: usize,
+        allocation_strategy: kernel_syscall::access::AllocationStrategy,
+    ) -> Result<kernel_syscall::UserspacePtr<u8>, kernel_syscall::access::CreateMappingError> {
+        // Use the MemoryAccess trait to create the mapping
+        let mapping = <Self as kernel_syscall::access::MemoryAccess>::create_mapping(
+            self,
+            location,
+            size,
+            allocation_strategy,
+        )?;
+
+        let addr =
+            <crate::syscall::access::mem::KernelMapping as kernel_syscall::access::Mapping>::addr(
+                &mapping,
+            );
+
+        // Convert the mapping to a region and track it
+        let region_handle = mapping.into_region_handle();
+        self.add_memory_region(region_handle);
+
+        Ok(addr)
+    }
+
+    fn add_memory_region(&self, region: Self::Region) {
+        self.process.memory_regions().add_region(region.inner);
+    }
+}
+
+/// A handle to a memory region that implements the MemoryRegion trait
+/// from kernel_syscall. This bridges the gap between the syscall layer
+/// and the kernel's internal MemoryRegion type.
+pub struct KernelMemoryRegionHandle {
+    addr: kernel_syscall::UserspacePtr<u8>,
+    size: usize,
+    inner: crate::mcore::mtask::process::mem::MemoryRegion,
+}
+
+impl kernel_syscall::access::MemoryRegion for KernelMemoryRegionHandle {
+    fn addr(&self) -> kernel_syscall::UserspacePtr<u8> {
+        self.addr
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}

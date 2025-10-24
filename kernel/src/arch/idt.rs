@@ -241,7 +241,7 @@ extern "x86-interrupt" fn page_fault_handler(
 
             // ...but if it's not a stack issue, maybe it is a lazy mapping?
             let regions = process.memory_regions();
-            if let Some(region) = regions.find_memory_region_for_address(addr) {
+            if let Some(()) = regions.with_memory_region_for_address(addr, |region| {
                 debug_assert!(
                     region.addr() <= addr,
                     "region addr must be less than or equal to the addr we are looking for"
@@ -280,6 +280,9 @@ extern "x86-interrupt" fn page_fault_handler(
                         // the node and write data accordingly
                     }
                 }
+            }) {
+                // Region was found and handled
+                return;
             }
         }
     }

@@ -588,6 +588,9 @@ dependencies = [
 [[package]]
 name = "kernel_abi"
 version = "0.1.0"
+dependencies = [
+ "bitflags 2.9.4",
+]
 
 [[package]]
 name = "kernel_devfs"
@@ -657,6 +660,7 @@ dependencies = [
  "log",
  "spin",
  "thiserror",
+ "x86_64",
 ]
 
 [[package]]
