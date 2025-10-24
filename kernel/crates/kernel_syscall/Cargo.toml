@@ -10,3 +10,4 @@ kernel_vfs = { path = "../kernel_vfs" }
 log.workspace = true
 spin.workspace = true
 thiserror.workspace = true
+x86_64.workspace = true

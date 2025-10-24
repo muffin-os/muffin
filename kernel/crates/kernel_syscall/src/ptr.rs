@@ -1,7 +1,8 @@
 use core::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
 
-use kernel_abi::{EINVAL, Errno};
+use kernel_abi::{Errno, EINVAL};
 use thiserror::Error;
+use x86_64::VirtAddr;
 
 #[derive(Copy, Clone)]
 pub struct UserspacePtr<T> {
@@ -36,7 +37,13 @@ impl<T> UserspacePtr<T> {
     pub unsafe fn try_from_usize(ptr: usize) -> Result<Self, NotUserspace> {
         #[cfg(not(target_pointer_width = "64"))]
         compile_error!("only 64bit pointer width is supported");
-        if is_upper_half(ptr) {
+
+        // Use VirtAddr to check if the address is canonical and in lower half
+        let virt_addr = VirtAddr::try_new(ptr as u64).map_err(|_| NotUserspace(ptr))?;
+
+        // Check if it's in the lower half (userspace)
+        // Upper half starts at 0xFFFF_8000_0000_0000
+        if virt_addr.as_u64() >= 0xFFFF_8000_0000_0000 {
             Err(NotUserspace(ptr))
         } else {
             Ok(Self {
@@ -52,7 +59,11 @@ impl<T> UserspacePtr<T> {
         let start = self.addr();
         let end = start.checked_add(size).ok_or(NotUserspace(start))?;
 
-        if is_upper_half(end) {
+        // Use VirtAddr to check if the end address is canonical and in lower half
+        let virt_addr = VirtAddr::try_new(end as u64).map_err(|_| NotUserspace(end))?;
+
+        // Check if it's in the lower half (userspace)
+        if virt_addr.as_u64() >= 0xFFFF_8000_0000_0000 {
             Err(NotUserspace(end))
         } else {
             Ok(())
@@ -67,19 +78,6 @@ impl<T> UserspacePtr<T> {
     pub fn as_ptr(&self) -> *const T {
         self.ptr
     }
-}
-
-/// Checks if an address is in the upper half (kernel space).
-///
-/// On x86_64 with 4-level paging, only 48 bits of the address are used.
-/// Addresses must be in canonical form, meaning bits 48-63 must be
-/// sign-extended from bit 47:
-/// - Lower half (userspace): 0x0000_0000_0000_0000 to 0x0000_7FFF_FFFF_FFFF
-/// - Upper half (kernel):    0xFFFF_8000_0000_0000 to 0xFFFF_FFFF_FFFF_FFFF
-#[inline]
-fn is_upper_half(addr: usize) -> bool {
-    // Check if bit 47 is set (canonical upper half start)
-    addr & (1 << 47) != 0
 }
 
 pub struct UserspaceMutPtr<T> {

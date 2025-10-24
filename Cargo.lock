@@ -660,6 +660,7 @@ dependencies = [
  "log",
  "spin",
  "thiserror",
+ "x86_64",
 ]
 
 [[package]]
