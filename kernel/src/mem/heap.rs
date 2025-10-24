@@ -32,22 +32,30 @@ impl HeapSizes {
     ///
     /// We use a conservative multiplier to ensure we have enough heap for other data structures:
     /// - Initial heap: RAM / 1024 (minimum 2 MiB, maximum 128 MiB to keep stage1 fast)
-    /// - Total heap: RAM / 256 (minimum 8 MiB, maximum 512 MiB)
+    ///   Must be 2MiB-aligned (for stage2 to start at a 2MiB boundary)
+    /// - Total heap: RAM / 256 (minimum initial + 2 MiB, maximum 512 MiB)
+    ///   The extension (total - initial) must also be 2MiB-aligned
     fn from_physical_memory(usable_ram: u64) -> Self {
+        const MIB_2: usize = 2 * 1024 * 1024;
+        
         // Calculate initial heap size: RAM / 1024
         // This gives us ~0.1% of RAM, which is more than enough for Vec<FrameState>
         let initial = {
             let calculated = (usable_ram / 1024) as usize;
             // Clamp between 2 MiB and 128 MiB
-            calculated.clamp(2 * 1024 * 1024, 128 * 1024 * 1024)
+            let clamped = calculated.clamp(2 * 1024 * 1024, 128 * 1024 * 1024);
+            // Round up to next 2MiB boundary (required for stage2 to start at 2MiB boundary)
+            (clamped + MIB_2 - 1) / MIB_2 * MIB_2
         };
 
         // Calculate total heap size: RAM / 256
         // This gives us ~0.4% of RAM for all kernel heap needs
         let total = {
             let calculated = (usable_ram / 256) as usize;
-            // Clamp between 8 MiB and 512 MiB
-            calculated.clamp(8 * 1024 * 1024, 512 * 1024 * 1024)
+            // Clamp between (initial + 2 MiB) and 512 MiB
+            let clamped = calculated.clamp(initial + MIB_2, 512 * 1024 * 1024);
+            // Round up to next 2MiB boundary
+            (clamped + MIB_2 - 1) / MIB_2 * MIB_2
         };
 
         Self { initial, total }
