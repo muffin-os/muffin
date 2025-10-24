@@ -398,11 +398,37 @@ pub struct Symbol {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     #[cfg(not(miri))]
     use zerocopy::TryFromBytes;
 
     #[cfg(not(miri))]
-    use crate::file::{ElfHeader, ElfIdent, ElfType};
+    use crate::file::{
+        ElfFile, ElfHeader, ElfIdent, ElfParseError, ElfType, ProgramHeaderType, SectionHeaderType,
+    };
+
+    // Helper to create minimal valid ELF header for testing
+    fn create_minimal_valid_elf() -> [u8; 64] {
+        let mut data = [0u8; 64];
+        data[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]); // ELF magic
+        data[4] = 2; // 64-bit
+        data[5] = 1; // little-endian
+        data[6] = 1; // ELF version
+        data[7] = 0; // OS ABI (System V)
+        data[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        data[20..24].copy_from_slice(&1u32.to_le_bytes()); // version
+        // shoff = 0 (no section headers)
+        data[40..48].copy_from_slice(&0usize.to_le_bytes());
+        data[52..54].copy_from_slice(&64u16.to_le_bytes()); // ehsize
+        data[54..56].copy_from_slice(&56u16.to_le_bytes()); // phentsize
+        data[56..58].copy_from_slice(&0u16.to_le_bytes()); // phnum = 0
+        data[58..60].copy_from_slice(&64u16.to_le_bytes()); // shentsize
+        data[60..62].copy_from_slice(&0u16.to_le_bytes()); // shnum = 0
+        data[62..64].copy_from_slice(&0u16.to_le_bytes()); // shstrndx = 0
+        data
+    }
 
     #[cfg(not(miri))]
     #[test]
@@ -458,5 +484,331 @@ mod tests {
                 shstrndx: 5,
             }
         );
+    }
+
+    #[test]
+    fn test_elf_file_parse_valid() {
+        let data = create_minimal_valid_elf();
+        let result = ElfFile::try_parse(&data);
+        if let Err(e) = &result {
+            panic!("Failed to parse ELF: {:?}. Data: {:?}", e, &data[50..64]);
+        }
+        let elf = result.unwrap();
+        assert_eq!(elf.header.typ, ElfType::Exec);
+        assert_eq!(elf.entry(), 0);
+    }
+
+    #[test]
+    fn test_elf_file_parse_invalid_magic() {
+        let mut data = create_minimal_valid_elf();
+        data[0] = 0x00; // Corrupt magic
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::InvalidMagic)));
+    }
+
+    #[test]
+    fn test_elf_file_parse_unsupported_endian() {
+        let mut data = create_minimal_valid_elf();
+        data[5] = 2; // big-endian on little-endian system
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::UnsupportedEndian)));
+    }
+
+    #[test]
+    fn test_elf_file_parse_unsupported_version() {
+        let mut data = create_minimal_valid_elf();
+        data[6] = 2; // Invalid ELF version
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::UnsupportedElfVersion)));
+    }
+
+    #[test]
+    fn test_elf_file_parse_unsupported_os_abi() {
+        let mut data = create_minimal_valid_elf();
+        data[7] = 0x03; // Not System V
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::UnsupportedOsAbi)));
+    }
+
+    #[test]
+    fn test_elf_file_parse_invalid_phentsize() {
+        // Start with a valid ELF and only change phentsize
+        let data: [u8; 64] = [
+            0x7f, 0x45, 0x4c, 0x46, // ELF magic
+            0x02, // 64-bit
+            0x01, // little-endian
+            0x01, // ELF version
+            0x00, // OS ABI (System V)
+            0x00, // ABI Version
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+            0x02, 0x00, // ET_EXEC
+            0x00, 0x00, // machine
+            0x01, 0x00, 0x00, 0x00, // ELF version 1
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // entry point
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // program header offset
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // section header offset
+            0x00, 0x00, 0x00, 0x00, // flags
+            0x40, 0x00, // ehsize = 64
+            0x20, 0x00, // phentsize = 32 (INVALID, should be 56)
+            0x00, 0x00, // phnum = 0
+            0x40, 0x00, // shentsize = 64
+            0x00, 0x00, // shnum = 0
+            0x00, 0x00, // shstrndx = 0
+        ];
+
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::InvalidPhEntSize)));
+    }
+
+    #[test]
+    fn test_elf_file_parse_invalid_shentsize() {
+        // Start with a valid ELF and only change shentsize
+        let data: [u8; 64] = [
+            0x7f, 0x45, 0x4c, 0x46, // ELF magic
+            0x02, // 64-bit
+            0x01, // little-endian
+            0x01, // ELF version
+            0x00, // OS ABI (System V)
+            0x00, // ABI Version
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+            0x02, 0x00, // ET_EXEC
+            0x00, 0x00, // machine
+            0x01, 0x00, 0x00, 0x00, // ELF version 1
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // entry point
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // program header offset
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // section header offset
+            0x00, 0x00, 0x00, 0x00, // flags
+            0x40, 0x00, // ehsize = 64
+            0x38, 0x00, // phentsize = 56
+            0x00, 0x00, // phnum = 0
+            0x20, 0x00, // shentsize = 32 (INVALID, should be 64)
+            0x00, 0x00, // shnum = 0
+            0x00, 0x00, // shstrndx = 0
+        ];
+
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::InvalidShEntSize)));
+    }
+
+    #[test]
+    fn test_elf_file_entry() {
+        let mut data = create_minimal_valid_elf();
+        let entry_addr = 0x1000usize;
+        data[24..32].copy_from_slice(&entry_addr.to_le_bytes());
+        let elf = ElfFile::try_parse(&data).unwrap();
+        assert_eq!(elf.entry(), entry_addr);
+    }
+
+    #[test]
+    fn test_elf_file_program_headers() {
+        let mut data = vec![0u8; 64 + 56 * 2]; // header + 2 program headers
+        let header = create_minimal_valid_elf();
+        data[..64].copy_from_slice(&header);
+
+        // Set phoff and phnum
+        data[32..40].copy_from_slice(&64usize.to_le_bytes());
+        data[56..58].copy_from_slice(&2u16.to_le_bytes());
+
+        // First program header: PT_LOAD
+        let ph1_offset = 64;
+        data[ph1_offset..ph1_offset + 4].copy_from_slice(&1u32.to_le_bytes());
+
+        // Second program header: PT_DYNAMIC
+        let ph2_offset = 64 + 56;
+        data[ph2_offset..ph2_offset + 4].copy_from_slice(&2u32.to_le_bytes());
+
+        let elf = ElfFile::try_parse(&data).unwrap();
+        let headers: Vec<_> = elf.program_headers().collect();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0].typ, ProgramHeaderType::LOAD);
+        assert_eq!(headers[1].typ, ProgramHeaderType::DYNAMIC);
+    }
+
+    #[test]
+    fn test_elf_file_program_headers_by_type() {
+        let mut data = vec![0u8; 64 + 56 * 3];
+        let header = create_minimal_valid_elf();
+        data[..64].copy_from_slice(&header);
+
+        data[32..40].copy_from_slice(&64usize.to_le_bytes());
+        data[56..58].copy_from_slice(&3u16.to_le_bytes());
+
+        // PT_LOAD
+        data[64..68].copy_from_slice(&1u32.to_le_bytes());
+        // PT_TLS
+        data[120..124].copy_from_slice(&7u32.to_le_bytes());
+        // PT_LOAD
+        data[176..180].copy_from_slice(&1u32.to_le_bytes());
+
+        let elf = ElfFile::try_parse(&data).unwrap();
+        let load_headers: Vec<_> = elf
+            .program_headers_by_type(ProgramHeaderType::LOAD)
+            .collect();
+        assert_eq!(load_headers.len(), 2);
+
+        let tls_headers: Vec<_> = elf
+            .program_headers_by_type(ProgramHeaderType::TLS)
+            .collect();
+        assert_eq!(tls_headers.len(), 1);
+    }
+
+    #[test]
+    fn test_elf_file_section_headers() {
+        let mut data = vec![0u8; 64 + 64 * 2]; // header + 2 section headers
+        let header = create_minimal_valid_elf();
+        data[..64].copy_from_slice(&header);
+
+        // Set shoff and shnum
+        data[40..48].copy_from_slice(&64usize.to_le_bytes());
+        data[60..62].copy_from_slice(&2u16.to_le_bytes()); // shnum is at 60-62
+
+        // First section header: NULL
+        let sh1_offset = 64;
+        data[sh1_offset + 4..sh1_offset + 8].copy_from_slice(&0u32.to_le_bytes());
+
+        // Second section header: PROGBITS
+        let sh2_offset = 64 + 64;
+        data[sh2_offset + 4..sh2_offset + 8].copy_from_slice(&1u32.to_le_bytes());
+
+        let elf = ElfFile::try_parse(&data).unwrap();
+        let headers: Vec<_> = elf.section_headers().collect();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0].typ, SectionHeaderType::NULL);
+        assert_eq!(headers[1].typ, SectionHeaderType::PROGBITS);
+    }
+
+    #[test]
+    fn test_elf_file_section_headers_by_type() {
+        let mut data = vec![0u8; 64 + 64 * 3];
+        let header = create_minimal_valid_elf();
+        data[..64].copy_from_slice(&header);
+
+        data[40..48].copy_from_slice(&64usize.to_le_bytes());
+        data[60..62].copy_from_slice(&3u16.to_le_bytes()); // shnum is at 60-62
+
+        // SYMTAB
+        data[64 + 4..64 + 8].copy_from_slice(&2u32.to_le_bytes());
+        // STRTAB
+        data[128 + 4..128 + 8].copy_from_slice(&3u32.to_le_bytes());
+        // SYMTAB
+        data[192 + 4..192 + 8].copy_from_slice(&2u32.to_le_bytes());
+
+        let elf = ElfFile::try_parse(&data).unwrap();
+        let symtab_headers: Vec<_> = elf
+            .section_headers_by_type(SectionHeaderType::SYMTAB)
+            .collect();
+        assert_eq!(symtab_headers.len(), 2);
+
+        let strtab_headers: Vec<_> = elf
+            .section_headers_by_type(SectionHeaderType::STRTAB)
+            .collect();
+        assert_eq!(strtab_headers.len(), 1);
+    }
+
+    #[test]
+    fn test_elf_file_program_data() {
+        let segment_data = b"Test Data";
+        let mut data = vec![0u8; 64 + 56 + segment_data.len()];
+        let header = create_minimal_valid_elf();
+        data[..64].copy_from_slice(&header);
+
+        data[32..40].copy_from_slice(&64usize.to_le_bytes());
+        data[56..58].copy_from_slice(&1u16.to_le_bytes());
+
+        // Program header pointing to data
+        let segment_offset = 64 + 56;
+        data[segment_offset..segment_offset + segment_data.len()].copy_from_slice(segment_data);
+
+        let ph_offset = 64;
+        data[ph_offset + 8..ph_offset + 16].copy_from_slice(&segment_offset.to_le_bytes()); // offset
+        data[ph_offset + 32..ph_offset + 40].copy_from_slice(&segment_data.len().to_le_bytes()); // filesz
+
+        let elf = ElfFile::try_parse(&data).unwrap();
+        let headers: Vec<_> = elf.program_headers().collect();
+        let prog_data = elf.program_data(&headers[0]);
+        assert_eq!(prog_data, segment_data);
+    }
+
+    #[test]
+    fn test_elf_file_section_data() {
+        let section_data = b"Section Content";
+        let mut data = vec![0u8; 64 + 64 + section_data.len()];
+        let header = create_minimal_valid_elf();
+        data[..64].copy_from_slice(&header);
+
+        data[40..48].copy_from_slice(&64usize.to_le_bytes());
+        data[60..62].copy_from_slice(&1u16.to_le_bytes()); // shnum is at 60-62
+
+        // Section data
+        let section_offset = 64 + 64;
+        data[section_offset..section_offset + section_data.len()].copy_from_slice(section_data);
+
+        // Section header (offset field is at +24, size field is at +32)
+        let sh_offset = 64;
+        data[sh_offset + 24..sh_offset + 32].copy_from_slice(&section_offset.to_le_bytes()); // offset field
+        data[sh_offset + 32..sh_offset + 40].copy_from_slice(&section_data.len().to_le_bytes()); // size field
+
+        let elf = ElfFile::try_parse(&data).unwrap();
+        let headers: Vec<_> = elf.section_headers().collect();
+        let sec_data = elf.section_data(&headers[0]);
+        assert_eq!(sec_data, section_data);
+    }
+
+    #[test]
+    fn test_program_header_flags_contains() {
+        use crate::file::ProgramHeaderFlags;
+
+        let rwx = ProgramHeaderFlags(0x07);
+        assert!(rwx.contains(&ProgramHeaderFlags::READABLE));
+        assert!(rwx.contains(&ProgramHeaderFlags::WRITABLE));
+        assert!(rwx.contains(&ProgramHeaderFlags::EXECUTABLE));
+
+        let rx = ProgramHeaderFlags(0x05);
+        assert!(rx.contains(&ProgramHeaderFlags::READABLE));
+        assert!(!rx.contains(&ProgramHeaderFlags::WRITABLE));
+        assert!(rx.contains(&ProgramHeaderFlags::EXECUTABLE));
+
+        let none = ProgramHeaderFlags(0x00);
+        assert!(!none.contains(&ProgramHeaderFlags::READABLE));
+    }
+
+    #[test]
+    fn test_section_header_flags_contains() {
+        use crate::file::SectionHeaderFlags;
+
+        let flags = SectionHeaderFlags(SectionHeaderFlags::WRITE.0 | SectionHeaderFlags::ALLOC.0);
+        assert!(flags.contains(&SectionHeaderFlags::WRITE));
+        assert!(flags.contains(&SectionHeaderFlags::ALLOC));
+        assert!(!flags.contains(&SectionHeaderFlags::EXECINSTR));
+    }
+
+    #[test]
+    fn test_elf_type_variants() {
+        assert_eq!(ElfType::None as u16, 0x00);
+        assert_eq!(ElfType::Rel as u16, 0x01);
+        assert_eq!(ElfType::Exec as u16, 0x02);
+        assert_eq!(ElfType::Dyn as u16, 0x03);
+        assert_eq!(ElfType::Core as u16, 0x04);
+    }
+
+    #[test]
+    fn test_program_header_type_constants() {
+        assert_eq!(ProgramHeaderType::NULL.0, 0x00);
+        assert_eq!(ProgramHeaderType::LOAD.0, 0x01);
+        assert_eq!(ProgramHeaderType::DYNAMIC.0, 0x02);
+        assert_eq!(ProgramHeaderType::INTERP.0, 0x03);
+        assert_eq!(ProgramHeaderType::NOTE.0, 0x04);
+        assert_eq!(ProgramHeaderType::SHLIB.0, 0x05);
+        assert_eq!(ProgramHeaderType::PHDR.0, 0x06);
+        assert_eq!(ProgramHeaderType::TLS.0, 0x07);
+    }
+
+    #[test]
+    fn test_section_header_type_constants() {
+        assert_eq!(SectionHeaderType::NULL.0, 0x00);
+        assert_eq!(SectionHeaderType::PROGBITS.0, 0x01);
+        assert_eq!(SectionHeaderType::SYMTAB.0, 0x02);
+        assert_eq!(SectionHeaderType::STRTAB.0, 0x03);
+        assert_eq!(SectionHeaderType::NOBITS.0, 0x08);
     }
 }
