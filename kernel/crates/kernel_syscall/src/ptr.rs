@@ -1,6 +1,6 @@
 use core::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
 
-use kernel_abi::{Errno, EINVAL};
+use kernel_abi::{EINVAL, Errno};
 use thiserror::Error;
 use x86_64::VirtAddr;
 
