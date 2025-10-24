@@ -46,12 +46,12 @@ impl<T> UserspacePtr<T> {
     }
 
     /// Validates that the pointer and size are within userspace bounds.
-    /// 
+    ///
     /// This function checks that ptr + size doesn't overflow into kernel space (upper half).
     pub fn validate_range(&self, size: usize) -> Result<(), NotUserspace> {
         let start = self.addr();
         let end = start.checked_add(size).ok_or(NotUserspace(start))?;
-        
+
         if is_upper_half(end) {
             Err(NotUserspace(end))
         } else {
@@ -70,7 +70,7 @@ impl<T> UserspacePtr<T> {
 }
 
 /// Checks if an address is in the upper half (kernel space).
-/// 
+///
 /// On x86_64 with 4-level paging, only 48 bits of the address are used.
 /// Addresses must be in canonical form, meaning bits 48-63 must be
 /// sign-extended from bit 47:
@@ -183,7 +183,7 @@ mod tests {
         // Upper half starts at 0x0000_8000_0000_0000 (bit 47 set)
         let base = 0x0000_7FFF_FFFF_F000_usize;
         let ptr = unsafe { UserspacePtr::<u8>::try_from_usize(base).unwrap() };
-        
+
         // Should be OK: base + 0xFFF = 0x0000_7FFF_FFFF_FFFF (max lower half)
         assert!(ptr.validate_range(0xFFF).is_ok());
         // Should fail: base + 0x1000 = 0x0000_8000_0000_0000 (bit 47 set)
@@ -242,7 +242,7 @@ mod tests {
         let just_below = 0x0000_7FFF_FFFF_FFFE_usize;
         let result = unsafe { UserspacePtr::<u8>::try_from_usize(just_below) };
         assert!(result.is_ok());
-        
+
         let ptr = result.unwrap();
         // Should be able to access 1 byte (up to 0x0000_7FFF_FFFF_FFFF)
         assert!(ptr.validate_range(1).is_ok());
@@ -262,7 +262,7 @@ mod tests {
             0x0000_7FFF_0000_0000_usize,
             0x0000_7FFF_FFFF_0000_usize,
         ];
-        
+
         for &addr in &valid_addrs {
             let result = unsafe { UserspacePtr::<u8>::try_from_usize(addr) };
             assert!(result.is_ok(), "Address 0x{:016x} should be valid", addr);

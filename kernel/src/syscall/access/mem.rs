@@ -7,9 +7,9 @@ use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::UsizeExt;
+use crate::mcore::mtask::process::mem::{MappedMemoryRegion, MemoryRegion};
 use crate::mem::phys::PhysicalMemory;
 use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator};
-use crate::mcore::mtask::process::mem::{MappedMemoryRegion, MemoryRegion};
 use crate::syscall::access::{KernelAccess, KernelMemoryRegionHandle};
 
 impl MemoryAccess for KernelAccess<'_> {
@@ -81,18 +81,19 @@ pub struct KernelMapping {
 impl KernelMapping {
     /// Convert this mapping into a MemoryRegion handle that can be tracked by the process.
     pub fn into_region_handle(self) -> KernelMemoryRegionHandle {
-        let addr = self.addr
+        let addr = self
+            .addr
             .as_ptr::<u8>()
             .try_into()
             .expect("kernel mapping should be located in user space");
         let size = self.size;
-        
+
         let inner = MemoryRegion::Mapped(MappedMemoryRegion::new(
             self.segment,
             self.size,
             self.physical_frames,
         ));
-        
+
         KernelMemoryRegionHandle { addr, size, inner }
     }
 }

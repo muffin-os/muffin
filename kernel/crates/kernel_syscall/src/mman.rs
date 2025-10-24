@@ -1,4 +1,4 @@
-use kernel_abi::{Errno, EINVAL, ENOMEM, MapFlags, ProtFlags};
+use kernel_abi::{EINVAL, ENOMEM, Errno, MapFlags, ProtFlags};
 
 use crate::UserspacePtr;
 use crate::access::{AllocationStrategy, Location, MemoryRegionAccess};
@@ -29,7 +29,7 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
 
     // Validate protection flags
     let prot = ProtFlags::from_bits(prot).ok_or(EINVAL)?;
-    
+
     // Ensure WRITE and EXEC are mutually exclusive (W^X policy)
     if prot.contains(ProtFlags::WRITE) && prot.contains(ProtFlags::EXEC) {
         return Err(EINVAL);
@@ -45,11 +45,7 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
         addr.validate_range(len)?;
         Location::Fixed(addr)
     } else {
-        // When MAP_FIXED is not set, addr is ignored
-        debug_assert!(
-            addr.as_ptr().is_null(),
-            "addr should be null when MAP_FIXED is not set"
-        );
+        // When MAP_FIXED is not set, addr is just a hint and is ignored
         Location::Anywhere
     };
 
@@ -141,13 +137,10 @@ mod tests {
             };
 
             let ptr = unsafe { UserspacePtr::try_from_usize(addr).unwrap() };
-            
+
             self.mappings.lock().push((addr, size));
-            
-            let region = TestRegion {
-                addr: ptr,
-                size,
-            };
+
+            let region = TestRegion { addr: ptr, size };
             self.add_memory_region(region);
             Ok(ptr)
         }

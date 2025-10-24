@@ -123,8 +123,11 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess<'_> {
             allocation_strategy,
         )?;
 
-        let addr = <crate::syscall::access::mem::KernelMapping as kernel_syscall::access::Mapping>::addr(&mapping);
-        
+        let addr =
+            <crate::syscall::access::mem::KernelMapping as kernel_syscall::access::Mapping>::addr(
+                &mapping,
+            );
+
         // Convert the mapping to a region and track it
         let region_handle = mapping.into_region_handle();
         self.add_memory_region(region_handle);
