@@ -1,6 +1,6 @@
 use core::ops::{Deref, DerefMut};
 
-use acpi::{InterruptModel, PlatformInfo};
+use acpi::platform::InterruptModel;
 use conquer_once::spin::OnceCell;
 use spin::Mutex;
 use x86_64::PhysAddr;
@@ -42,10 +42,10 @@ pub fn init() {
     let acpi_tables = acpi_tables();
     let acpi_tables = acpi_tables.lock();
 
-    let Ok(platform_info) = PlatformInfo::new(&acpi_tables) else {
-        panic!("failed to get platform info");
+    let Ok((interrupt_model, _processor_info)) = InterruptModel::new(&acpi_tables) else {
+        panic!("failed to get interrupt model");
     };
-    let InterruptModel::Apic(apic) = platform_info.interrupt_model else {
+    let InterruptModel::Apic(apic) = interrupt_model else {
         panic!("Unsupported interrupt model");
     };
 
