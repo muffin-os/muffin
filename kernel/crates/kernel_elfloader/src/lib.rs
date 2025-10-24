@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_load_minimal_elf() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         let header_data = create_minimal_elf_header();
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_with_load_segment() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         // Create ELF with program header
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_with_writable_segment() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         let mut data = vec![0u8; 64 + 56];
@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_with_readonly_segment() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         let mut data = vec![0u8; 64 + 56];
@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_allocation_failure() {
-        let mut memory_api = MockMemoryApi::with_failing_allocation();
+        let memory_api = MockMemoryApi::with_failing_allocation();
         let mut loader = ElfLoader::new(memory_api);
 
         let mut data = vec![0u8; 64 + 56];
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_with_tls_segment() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         let mut data = vec![0u8; 64 + 56];
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_data_copied_correctly() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         // Create ELF with actual data in segment
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_invalid_size_or_align() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         let mut data = vec![0u8; 64 + 56];
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_multiple_segments() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         // Create ELF with 3 program headers: executable, writable, readonly
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "segments that are executable and writable are not supported")]
     fn test_load_elf_executable_and_writable_segment_panics() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         let mut data = vec![0u8; 64 + 56];
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn test_load_elf_multiple_tls_segments_error() {
-        let mut memory_api = MockMemoryApi::new();
+        let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
         let mut data = vec![0u8; 64 + 56 * 2];
