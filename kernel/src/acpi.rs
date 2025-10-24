@@ -1,6 +1,7 @@
 use core::ptr::NonNull;
 
-use acpi::{AcpiTables, Handler, PhysicalMapping, aml::AmlError};
+use acpi::aml::AmlError;
+use acpi::{AcpiTables, Handler, PhysicalMapping};
 use conquer_once::spin::OnceCell;
 use kernel_virtual_memory::Segment;
 use spin::Mutex;
@@ -189,7 +190,6 @@ impl Handler for AcpiHandlerImpl {
         self.stall(milliseconds * 1000);
     }
 
-    // AML mutex operations
     fn create_mutex(&self) -> acpi::Handle {
         unimplemented!("AML mutex operations not implemented")
     }
