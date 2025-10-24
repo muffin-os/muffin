@@ -1,6 +1,7 @@
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering::Relaxed;
 
+use conquer_once::spin::OnceCell;
 use log::info;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::page::PageRangeInclusive;
@@ -12,23 +13,81 @@ use crate::mem::phys::PhysicalMemory;
 static HEAP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HEAP_START: VirtAddr = virt_addr_from_page_table_indices([257, 0, 0, 0], 0);
 
-/// Since stage1 (which is when we initialize the heap) is slow in allocating physical memory,
-/// we allocate a small portion of memory for the heap in stage1 and then allocate the rest in stage2.
-static INITIAL_HEAP_SIZE: usize = 8 * 1024 * 1024; // 8MiB
+/// Runtime-initialized heap sizes based on available physical memory.
+static HEAP_SIZES: OnceCell<HeapSizes> = OnceCell::uninit();
 
-/// The amount of heap that is available after the stage2 initialization.
-pub static HEAP_SIZE: usize = 32 * 1024 * 1024; // 32MiB
+struct HeapSizes {
+    /// Initial heap size for stage1
+    initial: usize,
+    /// Total heap size after stage2
+    total: usize,
+}
+
+impl HeapSizes {
+    /// Calculate heap sizes based on available physical memory.
+    ///
+    /// We use a conservative multiplier to ensure we have enough heap for other data structures:
+    /// - Initial heap: RAM / 1024 (minimum 2 MiB, maximum 128 MiB to keep stage1 fast)
+    ///   Must be 2MiB-aligned (for stage2 to start at a 2MiB boundary)
+    /// - Total heap: RAM / 256 (minimum initial + 2 MiB, maximum 512 MiB)
+    ///   The extension (total - initial) must also be 2MiB-aligned
+    fn from_physical_memory(usable_ram_bytes: usize) -> Self {
+        const MIB_2: usize = 2 * 1024 * 1024;
+
+        // Calculate initial heap size: RAM / 1024
+        // This gives us ~0.1% of RAM, which is more than enough for Vec<FrameState>
+        let initial = {
+            let calculated = usable_ram_bytes / 1024;
+            // Clamp between 2 MiB and 128 MiB
+            let clamped = calculated.clamp(2 * 1024 * 1024, 128 * 1024 * 1024);
+            // Round up to next 2MiB boundary (required for stage2 to start at 2MiB boundary)
+            clamped.div_ceil(MIB_2) * MIB_2
+        };
+
+        // Calculate total heap size: RAM / 256
+        // This gives us ~0.4% of RAM for all kernel heap needs
+        let total = {
+            let calculated = usable_ram_bytes / 256;
+            // Clamp between (initial + 2 MiB) and 512 MiB
+            let clamped = calculated.clamp(initial + MIB_2, 512 * 1024 * 1024);
+            // Round up to next 2MiB boundary
+            clamped.div_ceil(MIB_2) * MIB_2
+        };
+
+        Self { initial, total }
+    }
+
+    fn initial(&self) -> usize {
+        self.initial
+    }
+
+    fn total(&self) -> usize {
+        self.total
+    }
+}
 
 #[global_allocator]
 static ALLOCATOR: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
 
-pub(in crate::mem) fn init(address_space: &AddressSpace) {
+pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory_bytes: usize) {
     assert!(PhysicalMemory::is_initialized());
+
+    // Calculate and store heap sizes based on available RAM
+    let heap_sizes = HeapSizes::from_physical_memory(usable_physical_memory_bytes);
+    info!(
+        "heap sizes: initial={} MiB, total={} MiB (for {} MiB RAM)",
+        heap_sizes.initial() / 1024 / 1024,
+        heap_sizes.total() / 1024 / 1024,
+        usable_physical_memory_bytes / 1024 / 1024
+    );
+    HEAP_SIZES.init_once(|| heap_sizes);
+
+    let initial_heap_size = HEAP_SIZES.get().unwrap().initial();
 
     info!("initializing heap at {HEAP_START:p}");
     let page_range = PageRangeInclusive::<Size4KiB> {
         start: Page::containing_address(HEAP_START),
-        end: Page::containing_address(HEAP_START + INITIAL_HEAP_SIZE as u64 - 1),
+        end: Page::containing_address(HEAP_START + initial_heap_size as u64 - 1),
     };
 
     address_space
@@ -42,7 +101,7 @@ pub(in crate::mem) fn init(address_space: &AddressSpace) {
     unsafe {
         ALLOCATOR
             .lock()
-            .init(HEAP_START.as_mut_ptr(), INITIAL_HEAP_SIZE);
+            .init(HEAP_START.as_mut_ptr(), initial_heap_size);
     }
 
     HEAP_INITIALIZED.store(true, Relaxed);
@@ -53,11 +112,15 @@ pub(in crate::mem) fn init(address_space: &AddressSpace) {
 pub(in crate::mem) fn init_stage2() {
     assert!(HEAP_INITIALIZED.load(Relaxed));
 
-    let new_start = HEAP_START + INITIAL_HEAP_SIZE as u64;
+    let heap_sizes = HEAP_SIZES.get().expect("heap sizes should be initialized");
+    let initial_heap_size = heap_sizes.initial();
+    let total_heap_size = heap_sizes.total();
+
+    let new_start = HEAP_START + initial_heap_size as u64;
 
     let page_range = PageRangeInclusive::<Size2MiB> {
         start: Page::containing_address(new_start),
-        end: Page::containing_address(new_start + (HEAP_SIZE - INITIAL_HEAP_SIZE) as u64),
+        end: Page::containing_address(new_start + (total_heap_size - initial_heap_size) as u64),
     };
 
     let address_space = AddressSpace::kernel();
@@ -70,7 +133,7 @@ pub(in crate::mem) fn init_stage2() {
         .expect("should be able to map more heap");
 
     unsafe {
-        ALLOCATOR.lock().extend(HEAP_SIZE - INITIAL_HEAP_SIZE);
+        ALLOCATOR.lock().extend(total_heap_size - initial_heap_size);
     }
 }
 
