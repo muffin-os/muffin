@@ -38,7 +38,7 @@ Assumes Rust is installed through [rustup](https://rustup.rs/). The project uses
 
 ```bash
 # Install system dependencies for ISO creation and running the OS
-sudo apt update && sudo apt install -y xorriso qemu-system-x86_64
+sudo apt update && sudo apt install -y xorriso qemu-system
 ```
 
 ### Optional Tools
@@ -110,30 +110,11 @@ cargo miri test -p kernel_abi
 cargo miri test -p kernel_vfs
 ```
 
-## Code Quality
-
-### Formatting
-
-The project uses rustfmt with custom configuration (`rustfmt.toml`):
-
-```bash
-# Check formatting
-cargo fmt -- --check
-
-# Apply formatting
-cargo fmt
-```
-
-### Linting
-
-All clippy warnings are treated as errors in CI:
-
-```bash
-# Lint all crates
-cargo clippy -- -D clippy::all
-```
-
 ## Development Workflow
+
+### Code Quality Standards
+
+The project uses rustfmt with custom configuration (`rustfmt.toml`) and enforces all clippy warnings as errors in CI.
 
 ### Before Submitting a PR
 
