@@ -398,11 +398,36 @@ pub struct Symbol {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(miri))]
     use zerocopy::TryFromBytes;
-
-    #[cfg(not(miri))]
     use crate::file::{ElfHeader, ElfIdent, ElfType};
+
+    #[test]
+    fn test_elf_header_ref_from_bytes_miri() {
+        let data: [u8; 64] = [
+            0x7f, 0x45, 0x4c, 0x46, // ELF magic
+            0x02, // 64-bit
+            0x01, // little-endian
+            0x01, // ELF version
+            0x06, // OS ABI
+            0x07, // ABI Version
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+            0x02, 0x00, // ET_EXEC (little endian)
+            0x00, 0x00, // no specific instruction set
+            0x01, 0x00, 0x00, 0x00, // ELF version 1
+            0xE8, 0xE7, 0xE6, 0xE5, 0xE4, 0xE3, 0xE2, 0xE1, // entry point
+            0xB8, 0xB7, 0xB6, 0xB5, 0xB4, 0xB3, 0xB2, 0xB1, // program header table offset
+            0xC8, 0xC7, 0xC6, 0xC5, 0xC4, 0xC3, 0xC2, 0xC1, // section header table offset
+            0xF4, 0xF3, 0xF2, 0xF1, // flags
+            0x40, 0x00, // header size
+            0x40, 0x00, // program header entry size
+            0x22, 0x11, // num program headers
+            0x40, 0x00, // section header entry size
+            0x44, 0x33, // num section headers
+            0x05, 0x00, // section names section header index
+        ];
+
+        let _header = ElfHeader::try_ref_from_bytes(&data).unwrap();
+    }
 
     #[cfg(not(miri))]
     #[test]
