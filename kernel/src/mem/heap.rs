@@ -37,7 +37,7 @@ impl HeapSizes {
     ///   The extension (total - initial) must also be 2MiB-aligned
     fn from_physical_memory(usable_ram: u64) -> Self {
         const MIB_2: usize = 2 * 1024 * 1024;
-        
+
         // Calculate initial heap size: RAM / 1024
         // This gives us ~0.1% of RAM, which is more than enough for Vec<FrameState>
         let initial = {
