@@ -194,7 +194,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 mod tests {
     use alloc::collections::BTreeMap;
     use alloc::vec;

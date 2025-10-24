@@ -396,15 +396,13 @@ pub struct Symbol {
     pub shndx: u16,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    #[cfg(not(miri))]
     use zerocopy::TryFromBytes;
 
-    #[cfg(not(miri))]
     use crate::file::{
         ElfFile, ElfHeader, ElfIdent, ElfParseError, ElfType, ProgramHeaderType, SectionHeaderType,
     };
@@ -430,7 +428,6 @@ mod tests {
         data
     }
 
-    #[cfg(not(miri))]
     #[test]
     fn test_elf_header_ref_from_bytes() {
         let data: [u8; 64] = [
@@ -680,6 +677,7 @@ mod tests {
     #[test]
     fn test_elf_file_section_headers_by_type() {
         let mut data = vec![0u8; 64 + 64 * 3];
+        #[cfg(not(miri))]
         let header = create_minimal_valid_elf();
         data[..64].copy_from_slice(&header);
 
@@ -733,6 +731,7 @@ mod tests {
     fn test_elf_file_section_data() {
         let section_data = b"Section Content";
         let mut data = vec![0u8; 64 + 64 + section_data.len()];
+        #[cfg(not(miri))]
         let header = create_minimal_valid_elf();
         data[..64].copy_from_slice(&header);
 
@@ -758,6 +757,7 @@ mod tests {
     fn test_program_header_flags_contains() {
         use crate::file::ProgramHeaderFlags;
 
+        #[cfg(not(miri))]
         let rwx = ProgramHeaderFlags(0x07);
         assert!(rwx.contains(&ProgramHeaderFlags::READABLE));
         assert!(rwx.contains(&ProgramHeaderFlags::WRITABLE));
@@ -776,6 +776,7 @@ mod tests {
     fn test_section_header_flags_contains() {
         use crate::file::SectionHeaderFlags;
 
+        #[cfg(not(miri))]
         let flags = SectionHeaderFlags(SectionHeaderFlags::WRITE.0 | SectionHeaderFlags::ALLOC.0);
         assert!(flags.contains(&SectionHeaderFlags::WRITE));
         assert!(flags.contains(&SectionHeaderFlags::ALLOC));
@@ -785,6 +786,7 @@ mod tests {
     #[test]
     fn test_elf_type_variants() {
         assert_eq!(ElfType::None as u16, 0x00);
+        #[cfg(not(miri))]
         assert_eq!(ElfType::Rel as u16, 0x01);
         assert_eq!(ElfType::Exec as u16, 0x02);
         assert_eq!(ElfType::Dyn as u16, 0x03);
@@ -794,6 +796,7 @@ mod tests {
     #[test]
     fn test_program_header_type_constants() {
         assert_eq!(ProgramHeaderType::NULL.0, 0x00);
+        #[cfg(not(miri))]
         assert_eq!(ProgramHeaderType::LOAD.0, 0x01);
         assert_eq!(ProgramHeaderType::DYNAMIC.0, 0x02);
         assert_eq!(ProgramHeaderType::INTERP.0, 0x03);
