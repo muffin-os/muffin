@@ -1,6 +1,7 @@
 #![no_std]
 extern crate alloc;
 
+mod aligned;
 mod file;
 
 use alloc::vec;
@@ -8,6 +9,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::fmt::Debug;
 
+pub use aligned::*;
 pub use file::*;
 use itertools::Itertools;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
@@ -333,75 +335,35 @@ mod tests {
         }
     }
 
-    // Aligned buffer for ELF header data to satisfy zerocopy alignment requirements
-    #[repr(align(8))]
-    struct AlignedElfData([u8; 64]);
-
-    impl AlignedElfData {
-        fn as_slice(&self) -> &[u8] {
-            &self.0
-        }
-
-        fn as_mut_slice(&mut self) -> &mut [u8] {
-            &mut self.0
-        }
-    }
-
-    // Helper to create an aligned Vec for ELF data
-    // Uses proper memory layout to ensure 8-byte alignment required by zerocopy
-    fn create_aligned_vec(size: usize) -> Vec<u64> {
-        // Allocate as Vec<u64> to ensure 8-byte alignment, then reinterpret as bytes
-        let num_u64s = (size + 7) / 8; // Round up to nearest u64
-        let vec = vec![0u64; num_u64s];
-        vec
-    }
-
-    // Helper to get byte slice from aligned vec
-    fn aligned_vec_as_bytes(vec: &[u64], size: usize) -> &[u8] {
-        let bytes = unsafe { core::slice::from_raw_parts(vec.as_ptr() as *const u8, size) };
-        bytes
-    }
-
-    // Helper to get mutable byte slice from aligned vec
-    fn aligned_vec_as_bytes_mut(vec: &mut [u64], size: usize) -> &mut [u8] {
-        let bytes = unsafe { core::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
-        bytes
-    }
-
     // Helper to create minimal valid ELF header
     fn create_minimal_elf_header() -> AlignedElfData {
-        let mut data = [0u8; 64];
+        let mut data = AlignedElfData::new();
+        let buf = data.as_mut();
         // ELF magic
-        data[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]);
+        buf[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]);
         // 64-bit
-        data[4] = 2;
+        buf[4] = 2;
         // little-endian
-        data[5] = 1;
+        buf[5] = 1;
         // ELF version
-        data[6] = 1;
+        buf[6] = 1;
         // OS ABI (System V)
-        data[7] = 0;
+        buf[7] = 0;
         // ET_EXEC
-        data[16..18].copy_from_slice(&2u16.to_le_bytes());
+        buf[16..18].copy_from_slice(&2u16.to_le_bytes());
         // version
-        data[20..24].copy_from_slice(&1u32.to_le_bytes());
+        buf[20..24].copy_from_slice(&1u32.to_le_bytes());
         // shoff = 0 (no section headers)
-        data[40..48].copy_from_slice(&0usize.to_le_bytes());
+        buf[40..48].copy_from_slice(&0usize.to_le_bytes());
         // ehsize
-        data[52..54].copy_from_slice(&64u16.to_le_bytes());
+        buf[52..54].copy_from_slice(&64u16.to_le_bytes());
         // phentsize
-        data[54..56].copy_from_slice(&56u16.to_le_bytes());
-        data[56..58].copy_from_slice(&0u16.to_le_bytes()); // phnum = 0
-        data[58..60].copy_from_slice(&64u16.to_le_bytes()); // shentsize
-        data[60..62].copy_from_slice(&0u16.to_le_bytes()); // shnum = 0
-        data[62..64].copy_from_slice(&0u16.to_le_bytes()); // shstrndx = 0
-        AlignedElfData(data)
-    }
-
-    #[test]
-    fn test_elf_loader_new() {
-        let memory_api = MockMemoryApi::new();
-        let _loader = ElfLoader::new(memory_api);
+        buf[54..56].copy_from_slice(&56u16.to_le_bytes());
+        buf[56..58].copy_from_slice(&0u16.to_le_bytes()); // phnum = 0
+        buf[58..60].copy_from_slice(&64u16.to_le_bytes()); // shentsize
+        buf[60..62].copy_from_slice(&0u16.to_le_bytes()); // shnum = 0
+        buf[62..64].copy_from_slice(&0u16.to_le_bytes()); // shstrndx = 0
+        data
     }
 
     #[test]
