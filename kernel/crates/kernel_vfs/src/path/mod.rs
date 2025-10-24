@@ -90,7 +90,7 @@ impl Path {
 
         // Find the last non-separator character
         let last_non_sep = chars.rfind(|&(_, c)| c != FILEPATH_SEPARATOR)?;
-        
+
         let last_non_sep_pos = last_non_sep.0;
 
         // Find the last separator before the last component
@@ -126,6 +126,7 @@ impl Path {
             Cow::Borrowed(path)
         } else {
             let mut p = AbsoluteOwnedPath::new();
+            // Don't push empty paths - AbsoluteOwnedPath::new() already gives us "/"
             if !self.is_empty() {
                 p.push(self);
             }
