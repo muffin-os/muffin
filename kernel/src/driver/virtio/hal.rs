@@ -52,7 +52,7 @@ unsafe impl Hal for HalImpl {
         let frames = PhysFrameRangeInclusive::<Size4KiB> {
             start: PhysFrame::containing_address(PhysAddr::new(paddr)),
             end: PhysFrame::containing_address(PhysAddr::new(
-                paddr + (pages * Size4KiB::SIZE.into_usize()) as u64 - 1,
+                paddr + (pages * Size4KiB::SIZE.into_usize()).into_u64() - 1,
             )),
         };
         let segment = Segment::new(
@@ -71,7 +71,7 @@ unsafe impl Hal for HalImpl {
     unsafe fn mmio_phys_to_virt(paddr: u64, size: usize) -> NonNull<u8> {
         let frames = PhysFrameRangeInclusive::<Size4KiB> {
             start: PhysFrame::containing_address(PhysAddr::new(paddr)),
-            end: PhysFrame::containing_address(PhysAddr::new(paddr + size as u64 - 1)),
+            end: PhysFrame::containing_address(PhysAddr::new(paddr + size.into_u64() - 1)),
         };
 
         let segment = VirtualMemoryHigherHalf
