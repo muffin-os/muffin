@@ -17,23 +17,11 @@ The project uses a modular workspace structure:
 
 ```
 ├── kernel/                      # Main kernel crate (bare-metal)
-│   ├── crates/                 # 10 testable kernel subsystem crates:
-│   │   ├── kernel_abi          #   - ABI definitions
-│   │   ├── kernel_devfs        #   - Device filesystem
-│   │   ├── kernel_device       #   - Device abstractions
-│   │   ├── kernel_elfloader    #   - ELF loader
-│   │   ├── kernel_memapi       #   - Memory API
-│   │   ├── kernel_pci          #   - PCI support
-│   │   ├── kernel_physical_memory  # - Physical memory management
-│   │   ├── kernel_syscall      #   - System call interface
-│   │   ├── kernel_vfs          #   - Virtual filesystem
-│   │   └── kernel_virtual_memory   # - Virtual memory management
+│   ├── crates/                 # Kernel subsystem crates (testable on host)
+│   │   └── kernel_*            #   - VFS, memory management, device drivers, etc.
 │   ├── src/                    # Kernel source code
 │   └── linker-x86_64.ld        # Custom linker script
 ├── userspace/                  # User-space components
-│   ├── file_structure          # Filesystem utilities
-│   ├── init                    # Init process
-│   └── minilib                 # Minimal C library
 ├── src/main.rs                 # QEMU runner
 └── build.rs                    # Build orchestration
 ```
@@ -46,42 +34,30 @@ The project uses a modular workspace structure:
 
 ### Required Tools
 
+Assumes Rust is installed through [rustup](https://rustup.rs/). The project uses Rust nightly with required components configured in `rust-toolchain.toml`, which will be automatically set up by rustup.
+
 ```bash
-# Install xorriso for ISO creation
-sudo apt update && sudo apt install -y xorriso
-
-# Rust toolchain (configured via rust-toolchain.toml)
-# The nightly toolchain with required components will be auto-installed
+# Install system dependencies for ISO creation and running the OS
+sudo apt update && sudo apt install -y xorriso qemu-system-x86_64
 ```
-
-The `rust-toolchain.toml` file configures the nightly compiler with these components:
-- rustfmt (code formatting)
-- clippy (linting)
-- llvm-tools-preview (toolchain utilities)
-- rust-src (standard library sources)
-- miri (interpreter for detecting undefined behavior)
-- Target: x86_64-unknown-none
 
 ### Optional Tools
 
-- **QEMU:** Required to run the OS (for `cargo run`)
-- **GDB:** For debugging with `--debug` flag
+- **GDB or LLDB:** For debugging with `--debug` flag
 
 ## Building
 
 ### Quick Build
 
-To build and validate library crates (recommended for development):
+To build the project:
 
 ```bash
-# Build all workspace libraries
-cargo build --workspace --lib
+# Build all workspace components
+cargo build
 
 # Build in release mode
-cargo build --workspace --lib --release
+cargo build --release
 ```
-
-**Build time:** 1-3 minutes for a clean library build (incremental builds ~10-30 seconds)
 
 ### Full System Build
 
@@ -111,20 +87,15 @@ The build process automatically:
 Due to the bare-metal nature of the kernel, testing is done at the crate level:
 
 ```bash
+# Run all tests (automatically tests only testable crates)
+cargo test
+
 # Test individual crates
 cargo test -p kernel_abi
 cargo test -p kernel_vfs
-cargo test -p kernel_physical_memory
-
-# Test all kernel subsystem crates
-for crate in kernel_abi kernel_devfs kernel_device kernel_elfloader \
-             kernel_memapi kernel_pci kernel_physical_memory kernel_syscall \
-             kernel_vfs kernel_virtual_memory; do
-    cargo test -p $crate
-done
 ```
 
-**Note:** Many crates may have no tests yet (0 tests is normal). The kernel binary itself cannot be tested with standard unit tests.
+**Note:** The kernel binary itself cannot be tested with standard unit tests. Many crates may have no tests yet (0 tests is normal).
 
 ### Miri Tests (Undefined Behavior Detection)
 
@@ -158,14 +129,9 @@ cargo fmt
 All clippy warnings are treated as errors in CI:
 
 ```bash
-# Lint library crates
-cargo clippy --workspace --lib -- -D clippy::all
-
-# Or exclude the main binary explicitly
-cargo clippy --workspace --exclude muffinos -- -D clippy::all
+# Lint all crates
+cargo clippy -- -D clippy::all
 ```
-
-**Important:** Always run clippy on library crates with `--lib` to avoid bare-metal compilation issues.
 
 ## Development Workflow
 
@@ -178,13 +144,13 @@ Run these commands in order to validate your changes:
 cargo fmt -- --check
 
 # 2. Lint check
-cargo clippy --workspace --lib -- -D clippy::all
+cargo clippy -- -D clippy::all
 
 # 3. Build check
-cargo build --workspace --lib
+cargo build
 
-# 4. Test modified crates
-cargo test -p <modified_crate>
+# 4. Test
+cargo test
 
 # 5. (Optional) Miri tests if you changed kernel crates
 cargo miri setup
@@ -264,13 +230,12 @@ Muffin OS is dual-licensed under Apache-2.0 OR MIT. All contributions must be co
 ### Known Limitations
 
 - The kernel binary uses a custom linker script and cannot run standard Rust tests
-- Some kernel structures have intentional dead code warnings for fields used by hardware
 
 ### Performance Tips
 
 - Use incremental builds (default) for faster iteration
 - First build takes longer due to downloading dependencies
-- Subsequent builds are much faster (~10-30 seconds for library changes)
+- Subsequent builds are much faster
 
 ---
 
