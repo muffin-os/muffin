@@ -23,7 +23,7 @@ Muffin OS is a bare-metal operating system kernel that boots using the Limine bo
 
 ## POSIX Compliance
 
-Muffin OS aims for basic POSIX.1-2024 compliance, implementing standard system calls and APIs to support portable Unix-like applications. The kernel provides POSIX-compatible interfaces for file operations, process management, threading, and memory management.
+Muffin OS aims for basic POSIX.1-2024 compliance, implementing standard system functions to support portable POSIX-compliant applications. The kernel provides POSIX-compatible interfaces for file operations, process management, threading, and memory management.
 
 ## Building and Running
 
@@ -36,7 +36,7 @@ Muffin OS is designed to be easy to build with minimal dependencies:
 sudo apt update && sudo apt install -y xorriso e2fsprogs
 
 # QEMU for running the OS (optional, only needed to run)
-sudo apt install -y qemu-system-x86-64
+sudo apt install -y qemu-system
 ```
 
 Rust toolchain is automatically configured via `rust-toolchain.toml` (nightly channel with required components).
@@ -74,36 +74,9 @@ This creates a bootable ISO image (`muffin.iso`) and ext2 disk image.
 ```bash
 # Run tests on workspace crates
 cargo test
-
-# Test specific crates
-cargo test -p kernel_vfs
-cargo test -p kernel_abi
 ```
 
 **Note:** The kernel binary itself uses a custom linker script for bare-metal execution and cannot run standard unit tests. Testable functionality is extracted into separate crates (like `kernel_vfs`, `kernel_physical_memory`, etc.) that can be tested on the host.
-
-## Architecture
-
-The project uses a modular workspace structure:
-
-```
-kernel/
-├── crates/          # Testable kernel subsystems
-│   ├── kernel_abi         # System call interface definitions
-│   ├── kernel_vfs         # Virtual filesystem layer
-│   ├── kernel_device      # Device abstraction
-│   ├── kernel_syscall     # System call handling
-│   └── ...                # Memory management, PCI, devfs, ELF loader
-├── src/             # Core kernel implementation
-│   ├── arch/              # Architecture-specific code (x86-64)
-│   ├── driver/            # Device drivers (VirtIO, PCI)
-│   ├── mcore/             # Multi-core support and task management
-│   └── syscall/           # System call implementations
-userspace/
-├── init/            # Init process (PID 1)
-├── minilib/         # Minimal C library for userspace
-└── file_structure/  # Filesystem layout utilities
-```
 
 ## Contributing
 
