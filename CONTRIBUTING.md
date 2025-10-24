@@ -4,7 +4,7 @@ Welcome to Muffin OS! This guide will help you get started with contributing to 
 
 ## Project Overview
 
-**Muffin OS** is a bare-metal operating system kernel that boots using the Limine bootloader and runs on QEMU. The project consists of ~109 Rust source files organized into a kernel and userspace components.
+**Muffin OS** is a bare-metal operating system kernel that boots using the Limine bootloader and runs on QEMU. The project is organized into kernel and userspace components.
 
 - **Language:** Rust (Nightly)
 - **Target:** x86_64-unknown-none
