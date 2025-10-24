@@ -16,13 +16,13 @@ pub fn init() {
         .get_response()
         .expect("should have a memory map response");
 
-    phys::init_stage1(response.entries());
+    let usable_physical_memory = phys::init_stage1(response.entries());
 
     address_space::init();
 
     let address_space = AddressSpace::kernel();
 
-    heap::init(address_space);
+    heap::init(address_space, usable_physical_memory);
 
     virt::init();
 
