@@ -409,7 +409,7 @@ mod tests {
 
     use zerocopy::TryFromBytes;
 
-    use crate::file::{ElfFile, ElfHeader, ElfParseError, ElfType, ProgramHeaderType};
+    use crate::file::{ElfFile, ElfHeader, ElfIdent, ElfParseError, ElfType, ProgramHeaderType};
 
     // Minimal valid ELF64 executable for testing
     const MINIMAL_ELF: &[u8] = &[
