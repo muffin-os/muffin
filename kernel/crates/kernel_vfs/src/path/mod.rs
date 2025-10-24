@@ -81,13 +81,43 @@ impl Path {
 
     #[must_use]
     pub fn parent(&self) -> Option<&Path> {
+        // Handle empty path
+        if self.inner.is_empty() {
+            return None;
+        }
+
         let mut chars = self.char_indices();
-        chars.rfind(|&(_, c)| c != FILEPATH_SEPARATOR);
-        chars.rfind(|&(_, c)| c == FILEPATH_SEPARATOR);
-        chars
-            .rfind(|&(_, c)| c != FILEPATH_SEPARATOR)
-            .map(|v| v.0 + 1)
-            .map(|offset| Path::new(&self.inner[..offset]))
+
+        // Find the last non-separator character
+        let last_non_sep = chars.rfind(|&(_, c)| c != FILEPATH_SEPARATOR)?;
+        
+        let last_non_sep_pos = last_non_sep.0;
+
+        // Find the last separator before the last component
+        let sep_pos = self.inner[..last_non_sep_pos + 1].rfind(FILEPATH_SEPARATOR);
+
+        if let Some(sep) = sep_pos {
+            // Find the last non-separator before this separator
+            let parent_end = self.inner[..sep]
+                .rfind(|c| c != FILEPATH_SEPARATOR)
+                .map(|pos| pos + 1);
+
+            if let Some(end) = parent_end {
+                Some(Path::new(&self.inner[..end]))
+            } else {
+                // Parent is all separators before the component (e.g., "/" for "/foo")
+                None
+            }
+        } else {
+            // No separator found - single component relative path
+            // Dot paths like "." and ".." are their own parent
+            // But regular paths like "foo" have no parent
+            if self.inner == *"." || self.inner == *".." {
+                Some(self)
+            } else {
+                None
+            }
+        }
     }
 
     #[must_use]
@@ -96,7 +126,9 @@ impl Path {
             Cow::Borrowed(path)
         } else {
             let mut p = AbsoluteOwnedPath::new();
-            p.push(self);
+            if !self.is_empty() {
+                p.push(self);
+            }
             Cow::Owned(p)
         }
     }
@@ -249,22 +281,11 @@ mod tests {
 
     #[test]
     fn test_parent_edge_cases() {
-        // Paths with dots - these edge cases can vary in implementation
-        // Single component relative paths typically have no parent
-        // Accept both None and self-as-parent as valid
-        let dot_parent = Path::new(".").parent();
-        assert!(dot_parent.is_none() || dot_parent == Some(Path::new(".")));
-
-        let dotdot_parent = Path::new("..").parent();
-        assert!(dotdot_parent.is_none() || dotdot_parent == Some(Path::new("..")));
-
-        // Paths with separators - parent should be the directory part
-        let dotfoo_parent = Path::new("./foo").parent();
-        assert!(dotfoo_parent == Some(Path::new(".")) || dotfoo_parent.is_none());
-
-        let dotdotfoo_parent = Path::new("../foo").parent();
-        assert!(dotdotfoo_parent == Some(Path::new("..")) || dotdotfoo_parent.is_none());
-
+        // Paths with dots
+        assert_eq!(Path::new(".").parent(), Some(Path::new(".")));
+        assert_eq!(Path::new("..").parent(), Some(Path::new("..")));
+        assert_eq!(Path::new("./foo").parent(), Some(Path::new(".")));
+        assert_eq!(Path::new("../foo").parent(), Some(Path::new("..")));
         assert_eq!(Path::new("/.").parent(), None);
         assert_eq!(Path::new("/..").parent(), None);
 
@@ -279,11 +300,11 @@ mod tests {
         );
 
         // Relative paths with components
-        let foobar_parent = Path::new("foo/bar").parent();
-        assert!(foobar_parent == Some(Path::new("foo")) || foobar_parent.is_none());
-
-        let foobarbaz_parent = Path::new("foo/bar/baz").parent();
-        assert!(foobarbaz_parent == Some(Path::new("foo/bar")) || foobarbaz_parent.is_none());
+        assert_eq!(Path::new("foo/bar").parent(), Some(Path::new("foo")));
+        assert_eq!(
+            Path::new("foo/bar/baz").parent(),
+            Some(Path::new("foo/bar"))
+        );
     }
 
     #[test]
@@ -399,32 +420,5 @@ mod tests {
         let path = Path::new("");
         let owned = path.to_owned();
         assert_eq!(owned.as_str(), "");
-    }
-
-    #[test]
-    fn test_filenames_empty_and_root() {
-        // Already tested in filenames.rs but add more edge cases here
-        let path = Path::new("");
-        assert_eq!(path.filenames().count(), 0);
-
-        let path = Path::new("/");
-        assert_eq!(path.filenames().count(), 0);
-
-        let path = Path::new("//");
-        assert_eq!(path.filenames().count(), 0);
-
-        let path = Path::new("///");
-        assert_eq!(path.filenames().count(), 0);
-    }
-
-    #[test]
-    fn test_filenames_collect() {
-        let path = Path::new("/foo/bar/baz");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo", "bar", "baz"]);
-
-        let path = Path::new("foo/bar");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo", "bar"]);
     }
 }

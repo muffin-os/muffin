@@ -228,6 +228,4 @@ mod tests {
         let owned = path.to_owned();
         assert_eq!(owned.as_str(), "/");
     }
-
-
 }

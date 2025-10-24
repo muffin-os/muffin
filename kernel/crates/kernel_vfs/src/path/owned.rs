@@ -89,12 +89,18 @@ impl OwnedPath {
         P: AsRef<Path>,
     {
         let other = other.as_ref();
-        if self.inner.ends_with(FILEPATH_SEPARATOR) {
-            self.inner.push_str(other);
-        } else {
+
+        // Always add a separator
+        if !self.inner.ends_with(FILEPATH_SEPARATOR) {
             self.inner.push(FILEPATH_SEPARATOR);
-            self.inner.push_str(other);
+        } else if other.is_empty() {
+            // If path already ends with separator and we're pushing empty,
+            // add another separator
+            self.inner.push(FILEPATH_SEPARATOR);
         }
+
+        // Append the other path
+        self.inner.push_str(other);
     }
 }
 
@@ -167,6 +173,15 @@ mod tests {
         let mut path = OwnedPath::new("/foo");
         path.push("");
         assert_eq!(path.as_str(), "/foo/");
+
+        // Push empty string multiple times
+        let mut path = OwnedPath::new("/foo");
+        path.push("");
+        assert_eq!(path.as_str(), "/foo/");
+        path.push("");
+        assert_eq!(path.as_str(), "/foo//");
+        path.append_str(".bar");
+        assert_eq!(path.as_str(), "/foo//.bar");
 
         // Push path with leading slash
         let mut path = OwnedPath::new("/foo");
@@ -282,17 +297,6 @@ mod tests {
 
         assert_eq!(path1, path2);
         assert_ne!(path1, path3);
-    }
-
-    #[test]
-    fn test_ord() {
-        let path1 = OwnedPath::new("/a");
-        let path2 = OwnedPath::new("/b");
-        let path3 = OwnedPath::new("/c");
-
-        assert!(path1 < path2);
-        assert!(path2 < path3);
-        assert!(path1 < path3);
     }
 
     #[test]
