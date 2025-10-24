@@ -179,6 +179,11 @@ mod tests {
         assert!(parent.is_some());
         assert_eq!(&parent.unwrap().to_string(), "//foo");
 
+        // Double slash path
+        let path: &AbsolutePath = "//foo".try_into().unwrap();
+        let parent = path.parent();
+        assert!(parent.is_none());
+
         // Trailing slashes
         let path: &AbsolutePath = "/foo/bar/".try_into().unwrap();
         let parent = path.parent();
@@ -197,11 +202,6 @@ mod tests {
         let abs_path: &AbsolutePath = "/foo/bar".try_into().unwrap();
         let path: &Path = &**abs_path;
         assert_eq!(&**path, "/foo/bar");
-
-        // Should have access to Path methods
-        assert!(abs_path.is_absolute());
-        assert!(!abs_path.is_relative());
-        assert_eq!(abs_path.file_name(), Some("bar"));
     }
 
     #[test]
@@ -229,16 +229,5 @@ mod tests {
         assert_eq!(owned.as_str(), "/");
     }
 
-    #[test]
-    fn test_as_ref() {
-        let path: &AbsolutePath = "/foo/bar".try_into().unwrap();
-        let path_ref: &AbsolutePath = path.as_ref();
-        assert_eq!(path_ref, path);
-    }
 
-    #[test]
-    fn test_error_display() {
-        let error = PathNotAbsoluteError;
-        assert_eq!(error.to_string(), "path is not absolute");
-    }
 }

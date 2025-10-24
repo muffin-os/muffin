@@ -36,7 +36,7 @@ impl<'a> Iterator for Filenames<'a> {
             .chars
             .find(|(_, c)| c == &FILEPATH_SEPARATOR)
             .map(|v| v.0);
-        if next_pos.is_some() || self.index_front < self.index_back.saturating_sub(1) {
+        if next_pos.is_some() || self.index_front < self.index_back {
             let filename = &self.inner.inner
                 [self.index_front..self.chars.offset() - usize::from(next_pos.is_some())];
             self.index_front = self.chars.offset();
@@ -178,16 +178,14 @@ mod tests {
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
         assert_eq!(names, alloc::vec!["..", "foo"]);
 
-        // Single dot paths - these appear to be treated specially
+        // Single dot paths
         let path = Path::new("/.");
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        // Based on the test framework, this might return empty
-        assert!(names.is_empty() || names == alloc::vec!["."]);
+        assert_eq!(names, alloc::vec!["."]);
 
         let path = Path::new("/..");
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        // Based on the test framework, this might return empty
-        assert!(names.is_empty() || names == alloc::vec![".."]);
+        assert_eq!(names, alloc::vec![".."]);
     }
 
     #[test]

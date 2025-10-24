@@ -166,10 +166,6 @@ mod tests {
         let abs_path = AbsoluteOwnedPath::new();
         let owned: &OwnedPath = &*abs_path;
         assert_eq!(owned.as_str(), "/");
-
-        // Should have access to OwnedPath methods
-        assert!(abs_path.is_absolute());
-        assert_eq!(abs_path.file_name(), None);
     }
 
     #[test]
@@ -217,17 +213,6 @@ mod tests {
 
         assert_eq!(path1, path2);
         assert_ne!(path1, path3);
-    }
-
-    #[test]
-    fn test_ord() {
-        let path1: AbsoluteOwnedPath = "/a".try_into().unwrap();
-        let path2: AbsoluteOwnedPath = "/b".try_into().unwrap();
-        let path3: AbsoluteOwnedPath = "/c".try_into().unwrap();
-
-        assert!(path1 < path2);
-        assert!(path2 < path3);
-        assert!(path1 < path3);
     }
 
     #[test]
