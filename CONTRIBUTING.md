@@ -34,7 +34,7 @@ The project uses a modular workspace structure:
 
 ### Required Tools
 
-Assumes Rust is installed through [rustup](https://rustup.rs/). The project uses Rust nightly with required components configured in `rust-toolchain.toml`, which will be automatically set up by rustup.
+This guide assumes Rust is installed through [rustup](https://rustup.rs/). The project uses Rust nightly with required components configured in `rust-toolchain.toml`, which rustup will automatically set up.
 
 ```bash
 # Install system dependencies for ISO creation and running the OS
