@@ -28,10 +28,6 @@ fn allocator() -> &'static Mutex<MultiStageAllocator> {
 ///   Only supports 4 KiB allocations, no deallocation.
 /// - **Stage 2**: A sparse bitmap allocator that efficiently tracks free frames across
 ///   non-contiguous memory regions. Supports all page sizes and deallocation.
-///
-/// The underlying allocator is protected by a spinlock, so all methods will spin-wait
-/// if another CPU holds the lock. Do not call these methods with interrupts disabled
-/// or from interrupt handlers, as this may cause deadlocks.
 #[derive(Copy, Clone)]
 pub struct PhysicalMemory;
 
@@ -51,9 +47,9 @@ impl PhysicalMemory {
     /// caller doesn't need physically contiguous memory (e.g., for page tables that use
     /// virtual addressing anyway).
     ///
-    /// Each call to `next()` acquires and releases the allocator lock, so batch allocation
-    /// with [`allocate_frames()`](Self::allocate_frames) is more efficient when contiguous
-    /// memory is available.
+    /// Each call to `next()` acquires and releases the allocator's spinlock, so batch
+    /// allocation with [`allocate_frames()`](Self::allocate_frames) is more efficient when
+    /// contiguous memory is available. Do not call with interrupts disabled.
     pub fn allocate_frames_non_contiguous<S: PageSize>() -> impl Iterator<Item = PhysFrame<S>>
     where
         PhysicalMemoryManager: PhysicalFrameAllocator<S>,
@@ -64,9 +60,11 @@ impl PhysicalMemory {
     /// Allocates a single physical frame of the specified page size.
     ///
     /// Returns a properly aligned frame (4 KiB aligned for 4 KiB pages, 2 MiB aligned for
-    /// 2 MiB pages, etc.). Logs a warning when allocation fails. For large page sizes
-    /// (2 MiB, 1 GiB), this searches for a sufficiently large aligned region, which may
-    /// fail even if enough total memory exists but is fragmented.
+    /// 2 MiB pages, etc.). For large page sizes (2 MiB, 1 GiB), this searches for a
+    /// sufficiently large aligned region, which may fail even if enough total memory exists
+    /// but is fragmented.
+    ///
+    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
     #[must_use]
     pub fn allocate_frame<S: PageSize>() -> Option<PhysFrame<S>>
     where
@@ -81,6 +79,8 @@ impl PhysicalMemory {
     /// required for DMA operations and more efficient than using the non-contiguous
     /// iterator for bulk allocations. May fail even when sufficient total memory exists
     /// if the memory is fragmented.
+    ///
+    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
     ///
     /// # Panics
     ///
@@ -99,6 +99,8 @@ impl PhysicalMemory {
     /// For large pages (2 MiB, 1 GiB), this deallocates all constituent 4 KiB frames.
     /// Double-freeing a frame is a bug and will panic in debug builds.
     ///
+    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
+    ///
     /// # Panics
     ///
     /// In debug builds, panics if:
@@ -116,6 +118,8 @@ impl PhysicalMemory {
     /// Iterates through the range deallocating each frame individually. If a panic occurs
     /// during iteration (e.g., double-free detected in debug build), remaining frames are
     /// not deallocated.
+    ///
+    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
     ///
     /// # Panics
     ///
