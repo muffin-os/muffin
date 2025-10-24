@@ -55,7 +55,7 @@ addr2line = { version = "0.25", default-features = false, features = [
   "rustc-demangle",
 ] }
 bitfield = "0.19"
-bitflags = "2.9"
+bitflags = "2.10"
 conquer-once = { version = "0.4", default-features = false }
 cordyceps = { version = "0.3", default-features = false, features = ["alloc"] }
 raw-cpuid = "11"
