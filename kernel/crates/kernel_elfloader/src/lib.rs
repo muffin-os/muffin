@@ -194,7 +194,7 @@ where
     }
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 mod tests {
     use alloc::collections::BTreeMap;
     use alloc::vec;
@@ -333,8 +333,43 @@ mod tests {
         }
     }
 
+    // Aligned buffer for ELF header data to satisfy zerocopy alignment requirements
+    #[repr(align(8))]
+    struct AlignedElfData([u8; 64]);
+
+    impl AlignedElfData {
+        fn as_slice(&self) -> &[u8] {
+            &self.0
+        }
+
+        fn as_mut_slice(&mut self) -> &mut [u8] {
+            &mut self.0
+        }
+    }
+
+    // Helper to create an aligned Vec for ELF data
+    // Uses proper memory layout to ensure 8-byte alignment required by zerocopy
+    fn create_aligned_vec(size: usize) -> Vec<u64> {
+        // Allocate as Vec<u64> to ensure 8-byte alignment, then reinterpret as bytes
+        let num_u64s = (size + 7) / 8; // Round up to nearest u64
+        let vec = vec![0u64; num_u64s];
+        vec
+    }
+
+    // Helper to get byte slice from aligned vec
+    fn aligned_vec_as_bytes(vec: &[u64], size: usize) -> &[u8] {
+        let bytes = unsafe { core::slice::from_raw_parts(vec.as_ptr() as *const u8, size) };
+        bytes
+    }
+
+    // Helper to get mutable byte slice from aligned vec
+    fn aligned_vec_as_bytes_mut(vec: &mut [u64], size: usize) -> &mut [u8] {
+        let bytes = unsafe { core::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
+        bytes
+    }
+
     // Helper to create minimal valid ELF header
-    fn create_minimal_elf_header() -> [u8; 64] {
+    fn create_minimal_elf_header() -> AlignedElfData {
         let mut data = [0u8; 64];
         // ELF magic
         data[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]);
@@ -360,7 +395,7 @@ mod tests {
         data[58..60].copy_from_slice(&64u16.to_le_bytes()); // shentsize
         data[60..62].copy_from_slice(&0u16.to_le_bytes()); // shnum = 0
         data[62..64].copy_from_slice(&0u16.to_le_bytes()); // shstrndx = 0
-        data
+        AlignedElfData(data)
     }
 
     #[test]
@@ -375,7 +410,7 @@ mod tests {
         let mut loader = ElfLoader::new(memory_api);
 
         let header_data = create_minimal_elf_header();
-        let elf_file = ElfFile::try_parse(&header_data).unwrap();
+        let elf_file = ElfFile::try_parse(header_data.as_slice()).unwrap();
 
         let result = loader.load(elf_file);
         assert!(result.is_ok());
@@ -392,9 +427,11 @@ mod tests {
         let mut loader = ElfLoader::new(memory_api);
 
         // Create ELF with program header
-        let mut data = vec![0u8; 64 + 56]; // header + 1 program header
+        let size = 64 + 56;
+        let mut aligned_data = create_aligned_vec(size); // header + 1 program header
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         // Set phoff to point after header
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
@@ -411,7 +448,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes()); // memsz
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&0x1000usize.to_le_bytes()); // align
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(result.is_ok());
         let image = result.unwrap();
@@ -425,9 +463,11 @@ mod tests {
         let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
-        let mut data = vec![0u8; 64 + 56];
+        let size = 64 + 56;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -442,7 +482,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes()); // memsz
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&0x1000usize.to_le_bytes()); // align
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(result.is_ok());
         let image = result.unwrap();
@@ -456,9 +497,11 @@ mod tests {
         let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
-        let mut data = vec![0u8; 64 + 56];
+        let size = 64 + 56;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -473,7 +516,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes()); // memsz
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&0x1000usize.to_le_bytes()); // align
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(result.is_ok());
         let image = result.unwrap();
@@ -487,9 +531,11 @@ mod tests {
         let memory_api = MockMemoryApi::with_failing_allocation();
         let mut loader = ElfLoader::new(memory_api);
 
-        let mut data = vec![0u8; 64 + 56];
+        let size = 64 + 56;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -501,7 +547,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes()); // memsz
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&0x1000usize.to_le_bytes()); // align
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(matches!(result, Err(LoadElfError::AllocationFailed)));
     }
@@ -511,9 +558,11 @@ mod tests {
         let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
-        let mut data = vec![0u8; 64 + 56];
+        let size = 64 + 56;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -527,7 +576,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes()); // memsz
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&8usize.to_le_bytes()); // align
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(result.is_ok());
         let image = result.unwrap();
@@ -541,9 +591,11 @@ mod tests {
 
         // Create ELF with actual data in segment
         let segment_data = b"Hello, World!";
-        let mut data = vec![0u8; 64 + 56 + segment_data.len()];
+        let size = 64 + 56 + segment_data.len();
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -562,7 +614,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes()); // memsz (larger than filesz)
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&0x1000usize.to_le_bytes()); // align
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(result.is_ok());
         let image = result.unwrap();
@@ -581,9 +634,11 @@ mod tests {
         let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
-        let mut data = vec![0u8; 64 + 56];
+        let size = 64 + 56;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -596,7 +651,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes()); // memsz
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&3usize.to_le_bytes()); // invalid align
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(matches!(result, Err(LoadElfError::InvalidSizeOrAlign)));
     }
@@ -607,9 +663,11 @@ mod tests {
         let mut loader = ElfLoader::new(memory_api);
 
         // Create ELF with 3 program headers: executable, writable, readonly
-        let mut data = vec![0u8; 64 + 56 * 3];
+        let size = 64 + 56 * 3;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&3u16.to_le_bytes()); // 3 program headers
@@ -638,7 +696,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes());
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&0x1000usize.to_le_bytes());
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(result.is_ok());
         let image = result.unwrap();
@@ -653,9 +712,11 @@ mod tests {
         let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
-        let mut data = vec![0u8; 64 + 56];
+        let size = 64 + 56;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -668,7 +729,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes());
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&0x1000usize.to_le_bytes());
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let _ = loader.load(elf_file);
     }
 
@@ -677,9 +739,11 @@ mod tests {
         let memory_api = MockMemoryApi::new();
         let mut loader = ElfLoader::new(memory_api);
 
-        let mut data = vec![0u8; 64 + 56 * 2];
+        let size = 64 + 56 * 2;
+        let mut aligned_data = create_aligned_vec(size);
+        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
         let header_data = create_minimal_elf_header();
-        data[..64].copy_from_slice(&header_data);
+        data[..64].copy_from_slice(header_data.as_slice());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&2u16.to_le_bytes());
@@ -696,7 +760,8 @@ mod tests {
         data[ph_offset + 40..ph_offset + 48].copy_from_slice(&0x100usize.to_le_bytes());
         data[ph_offset + 48..ph_offset + 56].copy_from_slice(&8usize.to_le_bytes());
 
-        let elf_file = ElfFile::try_parse(&data).unwrap();
+        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let elf_file = ElfFile::try_parse(data_slice).unwrap();
         let result = loader.load(elf_file);
         assert!(matches!(result, Err(LoadElfError::TooManyTlsHeaders)));
     }
