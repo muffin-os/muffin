@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 use core::slice;
 
-use itertools::Itertools;
 use kernel_vfs::node::VfsNode;
 use spin::mutex::Mutex;
 use x86_64::VirtAddr;

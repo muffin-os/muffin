@@ -33,7 +33,7 @@ pub fn transport(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> PciTran
 pub struct HalImpl;
 
 unsafe impl Hal for HalImpl {
-    fn dma_alloc(pages: usize, _: BufferDirection) -> (usize, NonNull<u8>) {
+    fn dma_alloc(pages: usize, _: BufferDirection) -> (u64, NonNull<u8>) {
         let frames = PhysicalMemory::allocate_frames(pages).unwrap();
         let segment = VirtualMemoryHigherHalf.reserve(pages).unwrap();
         AddressSpace::kernel()
@@ -45,14 +45,14 @@ unsafe impl Hal for HalImpl {
             .unwrap();
         let segment = segment.leak();
         let addr = NonNull::new(segment.start.as_mut_ptr::<u8>()).unwrap();
-        (frames.start.start_address().as_u64().into_usize(), addr)
+        (frames.start.start_address().as_u64(), addr)
     }
 
-    unsafe fn dma_dealloc(paddr: usize, vaddr: NonNull<u8>, pages: usize) -> i32 {
+    unsafe fn dma_dealloc(paddr: u64, vaddr: NonNull<u8>, pages: usize) -> i32 {
         let frames = PhysFrameRangeInclusive::<Size4KiB> {
-            start: PhysFrame::containing_address(PhysAddr::new(paddr.into_u64())),
+            start: PhysFrame::containing_address(PhysAddr::new(paddr)),
             end: PhysFrame::containing_address(PhysAddr::new(
-                (paddr + (pages * Size4KiB::SIZE.into_usize()) - 1).into_u64(),
+                paddr + (pages * Size4KiB::SIZE.into_usize()) as u64 - 1,
             )),
         };
         let segment = Segment::new(
@@ -68,10 +68,10 @@ unsafe impl Hal for HalImpl {
         0
     }
 
-    unsafe fn mmio_phys_to_virt(paddr: usize, size: usize) -> NonNull<u8> {
+    unsafe fn mmio_phys_to_virt(paddr: u64, size: usize) -> NonNull<u8> {
         let frames = PhysFrameRangeInclusive::<Size4KiB> {
-            start: PhysFrame::containing_address(PhysAddr::new(paddr.into_u64())),
-            end: PhysFrame::containing_address(PhysAddr::new((paddr + size - 1).into_u64())),
+            start: PhysFrame::containing_address(PhysAddr::new(paddr)),
+            end: PhysFrame::containing_address(PhysAddr::new(paddr + size as u64 - 1)),
         };
 
         let segment = VirtualMemoryHigherHalf
@@ -88,13 +88,12 @@ unsafe impl Hal for HalImpl {
         NonNull::new(segment.start.as_mut_ptr::<u8>()).unwrap()
     }
 
-    unsafe fn share(buffer: NonNull<[u8]>, _: BufferDirection) -> usize {
+    unsafe fn share(buffer: NonNull<[u8]>, _: BufferDirection) -> u64 {
         AddressSpace::kernel()
             .translate(VirtAddr::from_ptr(buffer.as_ptr()))
             .unwrap()
             .as_u64()
-            .into_usize()
     }
 
-    unsafe fn unshare(_: usize, _: NonNull<[u8]>, _: BufferDirection) {}
+    unsafe fn unshare(_: u64, _: NonNull<[u8]>, _: BufferDirection) {}
 }
