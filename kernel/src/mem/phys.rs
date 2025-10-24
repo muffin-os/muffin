@@ -144,7 +144,7 @@ unsafe impl x86_64::structures::paging::FrameAllocator<Size4KiB> for PhysicalMem
 /// allocator.
 ///
 /// Returns the total amount of usable physical memory in bytes.
-pub(in crate::mem) fn init_stage1(entries: &'static [&'static Entry]) -> u64 {
+pub(in crate::mem) fn init_stage1(entries: &'static [&'static Entry]) -> usize {
     let usable_physical_memory = entries
         .iter()
         .filter(|e| e.entry_type == EntryType::USABLE)
@@ -155,7 +155,7 @@ pub(in crate::mem) fn init_stage1(entries: &'static [&'static Entry]) -> u64 {
     let stage1 = MultiStageAllocator::Stage1(PhysicalBumpAllocator::new(entries));
     PHYS_ALLOC.init_once(|| Mutex::new(stage1));
 
-    usable_physical_memory
+    usable_physical_memory as usize
 }
 
 /// Initialize the second stage of physical memory management: a bitmap allocator.

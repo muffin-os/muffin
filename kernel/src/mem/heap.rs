@@ -26,36 +26,32 @@ struct HeapSizes {
 impl HeapSizes {
     /// Calculate heap sizes based on available physical memory.
     ///
-    /// The initial heap needs to be large enough to hold the Vec<FrameState> for all frames,
-    /// where each frame (4KiB) requires 1 byte of tracking. This means we need approximately
-    /// 0.0244% of RAM for the initial heap (1 byte per 4KiB = 1/4096).
-    ///
     /// We use a conservative multiplier to ensure we have enough heap for other data structures:
     /// - Initial heap: RAM / 1024 (minimum 2 MiB, maximum 128 MiB to keep stage1 fast)
     ///   Must be 2MiB-aligned (for stage2 to start at a 2MiB boundary)
     /// - Total heap: RAM / 256 (minimum initial + 2 MiB, maximum 512 MiB)
     ///   The extension (total - initial) must also be 2MiB-aligned
-    fn from_physical_memory(usable_ram: u64) -> Self {
+    fn from_physical_memory(usable_ram_bytes: usize) -> Self {
         const MIB_2: usize = 2 * 1024 * 1024;
 
         // Calculate initial heap size: RAM / 1024
         // This gives us ~0.1% of RAM, which is more than enough for Vec<FrameState>
         let initial = {
-            let calculated = (usable_ram / 1024) as usize;
+            let calculated = usable_ram_bytes / 1024;
             // Clamp between 2 MiB and 128 MiB
             let clamped = calculated.clamp(2 * 1024 * 1024, 128 * 1024 * 1024);
             // Round up to next 2MiB boundary (required for stage2 to start at 2MiB boundary)
-            (clamped + MIB_2 - 1) / MIB_2 * MIB_2
+            clamped.div_ceil(MIB_2) * MIB_2
         };
 
         // Calculate total heap size: RAM / 256
         // This gives us ~0.4% of RAM for all kernel heap needs
         let total = {
-            let calculated = (usable_ram / 256) as usize;
+            let calculated = usable_ram_bytes / 256;
             // Clamp between (initial + 2 MiB) and 512 MiB
             let clamped = calculated.clamp(initial + MIB_2, 512 * 1024 * 1024);
             // Round up to next 2MiB boundary
-            (clamped + MIB_2 - 1) / MIB_2 * MIB_2
+            clamped.div_ceil(MIB_2) * MIB_2
         };
 
         Self { initial, total }
@@ -73,16 +69,16 @@ impl HeapSizes {
 #[global_allocator]
 static ALLOCATOR: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
 
-pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory: u64) {
+pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory_bytes: usize) {
     assert!(PhysicalMemory::is_initialized());
 
     // Calculate and store heap sizes based on available RAM
-    let heap_sizes = HeapSizes::from_physical_memory(usable_physical_memory);
+    let heap_sizes = HeapSizes::from_physical_memory(usable_physical_memory_bytes);
     info!(
         "heap sizes: initial={} MiB, total={} MiB (for {} MiB RAM)",
         heap_sizes.initial() / 1024 / 1024,
         heap_sizes.total() / 1024 / 1024,
-        usable_physical_memory / 1024 / 1024
+        usable_physical_memory_bytes / 1024 / 1024
     );
     HEAP_SIZES.init_once(|| heap_sizes);
 
