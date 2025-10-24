@@ -331,7 +331,7 @@ extern "C" fn trampoline(_arg: *mut c_void) {
 
     let sel = ctx.selectors();
 
-    let code_ptr = elf_file.entry(); // TODO: this needs to be computed when the elf file is relocatable
+    let code_ptr = elf_image.entry(); // TODO: this needs to be computed when the elf file is relocatable
     let _ = current_process
         .executable_file_data
         .write()

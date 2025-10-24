@@ -4,10 +4,10 @@ use core::fmt::{Debug, Display, Formatter};
 use thiserror::Error;
 use zerocopy::{Immutable, KnownLayout, TryFromBytes};
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct ElfFile<'a> {
     pub(crate) source: &'a [u8],
-    pub(crate) header: &'a ElfHeader,
+    pub(crate) header: ElfHeader,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
@@ -37,7 +37,7 @@ impl<'a> ElfFile<'a> {
         #[cfg(target_endian = "big")]
         const ENDIAN: u8 = 2;
 
-        let header = ElfHeader::try_ref_from_bytes(&source[..size_of::<ElfHeader>()])
+        let header = ElfHeader::try_read_from_bytes(&source[..size_of::<ElfHeader>()])
             .map_err(|_| ElfParseError::HeaderParseError)?;
 
         if header.ident.magic != [0x7F, 0x45, 0x4C, 0x46] {
@@ -70,38 +70,38 @@ impl<'a> ElfFile<'a> {
         self.header.entry
     }
 
-    pub fn program_headers(&self) -> impl Iterator<Item = &ProgramHeader> {
+    pub fn program_headers(&self) -> impl Iterator<Item = ProgramHeader> + '_ {
         self.headers(self.header.phoff, usize::from(self.header.phnum))
     }
 
     pub fn program_headers_by_type(
         &self,
         typ: ProgramHeaderType,
-    ) -> impl Iterator<Item = &ProgramHeader> {
+    ) -> impl Iterator<Item = ProgramHeader> + '_ {
         self.program_headers().filter(move |h| h.typ == typ)
     }
 
-    pub fn section_headers(&self) -> impl Iterator<Item = &SectionHeader> {
+    pub fn section_headers(&self) -> impl Iterator<Item = SectionHeader> + '_ {
         self.headers(self.header.shoff, usize::from(self.header.shnum))
     }
 
     pub fn section_headers_by_type(
         &self,
         typ: SectionHeaderType,
-    ) -> impl Iterator<Item = &SectionHeader> {
+    ) -> impl Iterator<Item = SectionHeader> + '_ {
         self.section_headers().filter(move |h| h.typ == typ)
     }
 
-    fn headers<T: TryFromBytes + KnownLayout + Immutable + 'a>(
+    fn headers<T: TryFromBytes + KnownLayout + Immutable + 'static>(
         &self,
         header_offset: usize,
         header_num: usize,
-    ) -> impl Iterator<Item = &T> {
+    ) -> impl Iterator<Item = T> + '_ {
         let size = size_of::<T>();
         let data = &self.source[header_offset..header_offset + (header_num * size)];
 
         data.chunks_exact(size)
-            .map(T::try_ref_from_bytes)
+            .map(T::try_read_from_bytes)
             .map(Result::unwrap)
     }
 
@@ -115,14 +115,17 @@ impl<'a> ElfFile<'a> {
         let shstrtab = self
             .section_headers()
             .nth(usize::from(self.header.shstrndx))?;
-        let shstrtab_data = self.section_data(shstrtab);
+        let shstrtab_data = self.section_data(&shstrtab);
         CStr::from_bytes_until_nul(&shstrtab_data[header.name as usize..])
             .ok()?
             .to_str()
             .ok()
     }
 
-    pub fn sections_by_name(&self, name: &str) -> impl Iterator<Item = &SectionHeader> {
+    pub fn sections_by_name<'b>(
+        &'b self,
+        name: &'b str,
+    ) -> impl Iterator<Item = SectionHeader> + 'b {
         self.section_headers()
             .filter(move |h| self.section_name(h) == Some(name))
     }
@@ -133,16 +136,19 @@ impl<'a> ElfFile<'a> {
     }
 
     #[must_use]
-    pub fn symtab_data(&'a self, header: &'a SectionHeader) -> SymtabSection<'a> {
+    pub fn symtab_data(&'a self, header: &SectionHeader) -> SymtabSection<'a> {
         let data = self.section_data(header);
-        SymtabSection { header, data }
+        SymtabSection {
+            header: *header,
+            data,
+        }
     }
 
     #[must_use]
     pub fn symbol_name(&self, symtab: &SymtabSection<'a>, symbol: &Symbol) -> Option<&str> {
         let strtab_index = symtab.header.link as usize;
         let strtab_hdr = self.section_headers().nth(strtab_index)?;
-        let strtab_data = self.section_data(strtab_hdr);
+        let strtab_data = self.section_data(&strtab_hdr);
         CStr::from_bytes_until_nul(&strtab_data[symbol.name as usize..])
             .ok()
             .and_then(|cstr| cstr.to_str().ok())
@@ -153,7 +159,7 @@ const _: () = {
     assert!(64 == size_of::<ElfHeader>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(C)]
 pub struct ElfHeader {
     pub ident: ElfIdent,
@@ -172,7 +178,7 @@ pub struct ElfHeader {
     pub shstrndx: u16,
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Clone)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(u16)]
 pub enum ElfType {
     None = 0x00,
@@ -186,7 +192,7 @@ const _: () = {
     assert!(16 == size_of::<ElfIdent>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(C)]
 pub struct ElfIdent {
     pub magic: [u8; 4],
@@ -202,7 +208,7 @@ const _: () = {
     assert!(56 == size_of::<ProgramHeader>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(C)]
 pub struct ProgramHeader {
     pub typ: ProgramHeaderType,
@@ -215,7 +221,7 @@ pub struct ProgramHeader {
     pub align: usize,
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Eq, PartialEq, Copy, Clone)]
 #[repr(transparent)]
 pub struct ProgramHeaderType(pub u16);
 
@@ -252,7 +258,7 @@ impl Display for ProgramHeaderType {
     }
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Eq, PartialEq, Copy, Clone)]
 #[repr(transparent)]
 pub struct ProgramHeaderFlags(pub u32);
 
@@ -309,7 +315,7 @@ const _: () = {
     assert!(64 == size_of::<SectionHeader>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(C)]
 pub struct SectionHeader {
     pub name: u32,
@@ -349,7 +355,7 @@ impl SectionHeaderType {
     pub const NUM: Self = Self(0x13);
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(transparent)]
 pub struct SectionHeaderFlags(pub u32);
 
@@ -372,20 +378,20 @@ impl SectionHeaderFlags {
 }
 
 pub struct SymtabSection<'a> {
-    header: &'a SectionHeader,
+    header: SectionHeader,
     data: &'a [u8],
 }
 
 impl SymtabSection<'_> {
-    pub fn symbols(&self) -> impl Iterator<Item = &Symbol> {
+    pub fn symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.data
             .chunks_exact(size_of::<Symbol>())
-            .map(Symbol::try_ref_from_bytes)
+            .map(Symbol::try_read_from_bytes)
             .map(Result::unwrap)
     }
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(C)]
 pub struct Symbol {
     pub name: u32,
@@ -399,6 +405,7 @@ pub struct Symbol {
 #[cfg(test)]
 mod tests {
     use zerocopy::TryFromBytes;
+
     use crate::file::{ElfHeader, ElfIdent, ElfType};
 
     #[test]
@@ -426,7 +433,34 @@ mod tests {
             0x05, 0x00, // section names section header index
         ];
 
-        let _header = ElfHeader::try_ref_from_bytes(&data).unwrap();
+        let header = ElfHeader::try_read_from_bytes(&data).unwrap();
+        assert_eq!(
+            header,
+            ElfHeader {
+                ident: ElfIdent {
+                    magic: [0x7f, 0x45, 0x4c, 0x46],
+                    class: 2,
+                    data: 1,
+                    version: 1,
+                    os_abi: 6,
+                    abi_version: 7,
+                    _padding: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                },
+                typ: ElfType::Exec,
+                machine: 0,
+                version: 1,
+                entry: 0xE1E2E3E4E5E6E7E8,
+                phoff: 0xB1B2B3B4B5B6B7B8,
+                shoff: 0xC1C2C3C4C5C6C7C8,
+                flags: 0xF1F2F3F4,
+                ehsize: 64,
+                phentsize: 64,
+                phnum: 0x1122,
+                shentsize: 64,
+                shnum: 0x3344,
+                shstrndx: 5,
+            }
+        );
     }
 
     #[cfg(not(miri))]
@@ -455,10 +489,10 @@ mod tests {
             0x05, 0x00, // section names section header index
         ];
 
-        let header = ElfHeader::try_ref_from_bytes(&data).unwrap();
+        let header = ElfHeader::try_read_from_bytes(&data).unwrap();
         assert_eq!(
             header,
-            &ElfHeader {
+            ElfHeader {
                 ident: ElfIdent {
                     magic: [0x7f, 0x45, 0x4c, 0x46],
                     class: 2,

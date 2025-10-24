@@ -86,7 +86,7 @@ where
             .program_headers_by_type(ProgramHeaderType::LOAD)
         {
             trace!("load header {hdr:x?}");
-            let pdata = image.elf_file.program_data(hdr);
+            let pdata = image.elf_file.program_data(&hdr);
 
             let location = Location::Fixed(VirtAddr::try_new(hdr.vaddr as u64)?);
 
@@ -137,7 +137,7 @@ where
         };
         trace!("tls header {tls:x?}");
 
-        let pdata = image.elf_file.program_data(tls);
+        let pdata = image.elf_file.program_data(&tls);
 
         let layout = Layout::from_size_align(tls.memsz, tls.align)
             .map_err(|_| LoadElfError::InvalidSizeOrAlign)?;
@@ -177,6 +177,10 @@ impl<M> ElfImage<'_, M>
 where
     M: MemoryApi,
 {
+    pub fn entry(&self) -> usize {
+        self.elf_file.entry()
+    }
+
     pub fn executable_allocations(&self) -> &[M::ExecutableAllocation] {
         &self.executable_allocations
     }
