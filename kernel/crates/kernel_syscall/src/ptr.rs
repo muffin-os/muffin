@@ -38,12 +38,7 @@ impl<T> UserspacePtr<T> {
         #[cfg(not(target_pointer_width = "64"))]
         compile_error!("only 64bit pointer width is supported");
 
-        // Use VirtAddr to check if the address is canonical and in lower half
-        let virt_addr = VirtAddr::try_new(ptr as u64).map_err(|_| NotUserspace(ptr))?;
-
-        // Check if it's in the lower half (userspace)
-        // Upper half starts at 0xFFFF_8000_0000_0000
-        if virt_addr.as_u64() >= 0xFFFF_8000_0000_0000 {
+        if is_upper_half(ptr)? {
             Err(NotUserspace(ptr))
         } else {
             Ok(Self {
@@ -59,11 +54,7 @@ impl<T> UserspacePtr<T> {
         let start = self.addr();
         let end = start.checked_add(size).ok_or(NotUserspace(start))?;
 
-        // Use VirtAddr to check if the end address is canonical and in lower half
-        let virt_addr = VirtAddr::try_new(end as u64).map_err(|_| NotUserspace(end))?;
-
-        // Check if it's in the lower half (userspace)
-        if virt_addr.as_u64() >= 0xFFFF_8000_0000_0000 {
+        if is_upper_half(end)? {
             Err(NotUserspace(end))
         } else {
             Ok(())
@@ -78,6 +69,24 @@ impl<T> UserspacePtr<T> {
     pub fn as_ptr(&self) -> *const T {
         self.ptr
     }
+}
+
+/// Checks if an address is in the upper half (kernel space).
+///
+/// Uses VirtAddr to validate that the address is canonical and then checks
+/// if it's in the upper half. On x86_64 with 4-level paging:
+/// - Lower half (userspace): 0x0000_0000_0000_0000 to 0x0000_7FFF_FFFF_FFFF
+/// - Upper half (kernel):    0xFFFF_8000_0000_0000 to 0xFFFF_FFFF_FFFF_FFFF
+///
+/// Returns an error if the address is not canonical.
+#[inline]
+fn is_upper_half(addr: usize) -> Result<bool, NotUserspace> {
+    // Use VirtAddr to check if the address is canonical
+    let virt_addr = VirtAddr::try_new(addr as u64).map_err(|_| NotUserspace(addr))?;
+
+    // Check if it's in the upper half (kernel space)
+    // Upper half starts at 0xFFFF_8000_0000_0000
+    Ok(virt_addr.as_u64() >= 0xFFFF_8000_0000_0000)
 }
 
 pub struct UserspaceMutPtr<T> {
