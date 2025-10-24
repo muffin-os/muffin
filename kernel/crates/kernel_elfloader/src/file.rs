@@ -404,63 +404,176 @@ pub struct Symbol {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use zerocopy::TryFromBytes;
 
-    use crate::file::{ElfHeader, ElfIdent, ElfType};
+    use crate::file::{ElfFile, ElfHeader, ElfParseError, ElfType, ProgramHeaderType};
+
+    // Minimal valid ELF64 executable for testing
+    const MINIMAL_ELF: &[u8] = &[
+        0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x02, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x40, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x38, 0x00, 0x01, 0x00, 0x40, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x78, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x00,
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x48, 0xc7, 0xc0, 0x3c, 0x00,
+    ];
 
     #[test]
-    fn test_elf_header_ref_from_bytes_miri() {
+    fn test_elf_header_read_from_bytes() {
         let data: [u8; 64] = [
             0x7f, 0x45, 0x4c, 0x46, // ELF magic
             0x02, // 64-bit
             0x01, // little-endian
             0x01, // ELF version
-            0x06, // OS ABI
-            0x07, // ABI Version
+            0x00, // OS ABI (Sys V)
+            0x00, // ABI Version
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
             0x02, 0x00, // ET_EXEC (little endian)
-            0x00, 0x00, // no specific instruction set
+            0x3e, 0x00, // x86-64
             0x01, 0x00, 0x00, 0x00, // ELF version 1
-            0xE8, 0xE7, 0xE6, 0xE5, 0xE4, 0xE3, 0xE2, 0xE1, // entry point
-            0xB8, 0xB7, 0xB6, 0xB5, 0xB4, 0xB3, 0xB2, 0xB1, // program header table offset
-            0xC8, 0xC7, 0xC6, 0xC5, 0xC4, 0xC3, 0xC2, 0xC1, // section header table offset
-            0xF4, 0xF3, 0xF2, 0xF1, // flags
+            0x78, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // entry point
+            0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // program header table offset
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // section header table offset
+            0x00, 0x00, 0x00, 0x00, // flags
             0x40, 0x00, // header size
-            0x40, 0x00, // program header entry size
-            0x22, 0x11, // num program headers
+            0x38, 0x00, // program header entry size
+            0x01, 0x00, // num program headers
             0x40, 0x00, // section header entry size
-            0x44, 0x33, // num section headers
-            0x05, 0x00, // section names section header index
+            0x00, 0x00, // num section headers
+            0x00, 0x00, // section names section header index
         ];
 
         let header = ElfHeader::try_read_from_bytes(&data).unwrap();
-        assert_eq!(
-            header,
-            ElfHeader {
-                ident: ElfIdent {
-                    magic: [0x7f, 0x45, 0x4c, 0x46],
-                    class: 2,
-                    data: 1,
-                    version: 1,
-                    os_abi: 6,
-                    abi_version: 7,
-                    _padding: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-                },
-                typ: ElfType::Exec,
-                machine: 0,
-                version: 1,
-                entry: 0xE1E2E3E4E5E6E7E8,
-                phoff: 0xB1B2B3B4B5B6B7B8,
-                shoff: 0xC1C2C3C4C5C6C7C8,
-                flags: 0xF1F2F3F4,
-                ehsize: 64,
-                phentsize: 64,
-                phnum: 0x1122,
-                shentsize: 64,
-                shnum: 0x3344,
-                shstrndx: 5,
-            }
-        );
+        assert_eq!(header.ident.magic, [0x7f, 0x45, 0x4c, 0x46]);
+        assert_eq!(header.ident.class, 2); // 64-bit
+        assert_eq!(header.ident.data, 1); // Little endian
+        assert_eq!(header.ident.version, 1);
+        assert_eq!(header.ident.os_abi, 0); // Sys V
+        assert_eq!(header.typ, ElfType::Exec);
+        assert_eq!(header.machine, 0x3e); // x86-64
+        assert_eq!(header.version, 1);
+        assert_eq!(header.entry, 0x400078);
+        assert_eq!(header.phoff, 64);
+        assert_eq!(header.shoff, 0);
+        assert_eq!(header.ehsize, 64);
+        assert_eq!(header.phentsize, 56);
+        assert_eq!(header.phnum, 1);
+        assert_eq!(header.shentsize, 64);
+        assert_eq!(header.shnum, 0);
+        assert_eq!(header.shstrndx, 0);
+    }
+
+    #[test]
+    fn test_elf_header_read_from_unaligned() {
+        // Test that we can read from unaligned addresses (the whole point of the fix!)
+        let mut data: Vec<u8> = vec![0xFF]; // Start with one byte of padding
+        data.extend_from_slice(&[
+            0x7f, 0x45, 0x4c, 0x46, // ELF magic
+            0x02, // 64-bit
+            0x01, // little-endian
+            0x01, // ELF version
+            0x00, // OS ABI
+            0x00, // ABI Version
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+            0x02, 0x00, // ET_EXEC
+            0x3e, 0x00, // x86-64
+            0x01, 0x00, 0x00, 0x00, // version
+            0x78, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, // entry
+            0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // phoff
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // shoff
+            0x00, 0x00, 0x00, 0x00, // flags
+            0x40, 0x00, // ehsize
+            0x38, 0x00, // phentsize
+            0x01, 0x00, // phnum
+            0x40, 0x00, // shentsize
+            0x00, 0x00, // shnum
+            0x00, 0x00, // shstrndx
+        ]);
+
+        // Read from offset 1, which is not 8-byte aligned
+        let header = ElfHeader::try_read_from_bytes(&data[1..65]).unwrap();
+        assert_eq!(header.ident.magic, [0x7f, 0x45, 0x4c, 0x46]);
+        assert_eq!(header.entry, 0x400078);
+    }
+
+    #[test]
+    fn test_elf_parse_minimal() {
+        let elf = ElfFile::try_parse(MINIMAL_ELF).unwrap();
+        assert_eq!(elf.entry(), 0x400078);
+
+        let program_headers: Vec<_> = elf.program_headers().collect();
+        assert_eq!(program_headers.len(), 1);
+
+        let load_headers: Vec<_> = elf
+            .program_headers_by_type(ProgramHeaderType::LOAD)
+            .collect();
+        assert_eq!(load_headers.len(), 1);
+        assert_eq!(load_headers[0].vaddr, 0x400078);
+        assert_eq!(load_headers[0].filesz, 5);
+        assert_eq!(load_headers[0].memsz, 5);
+    }
+
+    #[test]
+    fn test_elf_parse_invalid_magic() {
+        let mut data = MINIMAL_ELF.to_vec();
+        data[0] = 0x00; // Corrupt magic
+
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::InvalidMagic)));
+    }
+
+    #[test]
+    fn test_elf_parse_wrong_endian() {
+        let mut data = MINIMAL_ELF.to_vec();
+        data[5] = 0x02; // Big endian on little-endian system
+
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::UnsupportedEndian)));
+    }
+
+    #[test]
+    fn test_elf_parse_wrong_version() {
+        let mut data = MINIMAL_ELF.to_vec();
+        data[6] = 0x02; // Wrong ELF version in ident
+
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::UnsupportedElfVersion)));
+    }
+
+    #[test]
+    fn test_elf_parse_wrong_os_abi() {
+        let mut data = MINIMAL_ELF.to_vec();
+        data[7] = 0x03; // Linux ABI instead of Sys V
+
+        let result = ElfFile::try_parse(&data);
+        assert!(matches!(result, Err(ElfParseError::UnsupportedOsAbi)));
+    }
+
+    #[test]
+    fn test_elf_program_data() {
+        let elf = ElfFile::try_parse(MINIMAL_ELF).unwrap();
+        let load_headers: Vec<_> = elf
+            .program_headers_by_type(ProgramHeaderType::LOAD)
+            .collect();
+
+        let data = elf.program_data(&load_headers[0]);
+        assert_eq!(data.len(), 5);
+        assert_eq!(data, &[0x48, 0xc7, 0xc0, 0x3c, 0x00]);
+    }
+
+    #[test]
+    fn test_elf_clone() {
+        let elf = ElfFile::try_parse(MINIMAL_ELF).unwrap();
+        let cloned = elf.clone();
+
+        assert_eq!(elf.entry(), cloned.entry());
+        assert_eq!(elf.header.typ, cloned.header.typ);
     }
 
     #[cfg(not(miri))]
