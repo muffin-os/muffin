@@ -13,14 +13,10 @@ pub trait MemoryRegion {
 
 /// Trait for managing memory regions within a process.
 /// This provides an abstraction over the process's memory region tracking.
-/// 
-/// This trait should typically be implemented alongside MemoryAccess to allow
-/// converting mappings into tracked regions.
 pub trait MemoryRegionAccess {
     type Region: MemoryRegion;
 
     /// Creates a mapping and immediately tracks it as a memory region in the process.
-    /// This is a convenience method that combines create_mapping and add_memory_region.
     /// Returns the address of the created mapping.
     fn create_and_track_mapping(
         &self,

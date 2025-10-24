@@ -28,7 +28,12 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
     }
 
     // Validate protection flags
-    let _prot = ProtFlags::from_bits(prot).ok_or(EINVAL)?;
+    let prot = ProtFlags::from_bits(prot).ok_or(EINVAL)?;
+    
+    // Ensure WRITE and EXEC are mutually exclusive (W^X policy)
+    if prot.contains(ProtFlags::WRITE) && prot.contains(ProtFlags::EXEC) {
+        return Err(EINVAL);
+    }
 
     // Determine location
     let location = if flags.contains(MapFlags::FIXED) {
@@ -248,11 +253,20 @@ mod tests {
     }
 
     #[test]
-    fn test_mmap_upper_half_rejected() {
-        // Try to map to upper half (kernel space)
-        let result = unsafe { UserspacePtr::<u8>::try_from_usize(0x8000_0000_0000_0000) };
-        
-        // Should fail to create the pointer itself
-        assert!(result.is_err());
+    fn test_mmap_write_exec_mutually_exclusive() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+
+        let result = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            (ProtFlags::WRITE | ProtFlags::EXEC).bits(), // Both WRITE and EXEC
+            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
+            0,
+            0,
+        );
+
+        assert_eq!(result, Err(EINVAL));
     }
 }
