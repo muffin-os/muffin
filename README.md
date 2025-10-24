@@ -14,9 +14,8 @@ Muffin OS is a bare-metal operating system kernel that boots using the Limine bo
 - **VirtIO drivers** - Support for VirtIO block devices and GPU with PCI device discovery
 - **Virtual filesystem (VFS)** - Abstraction layer with ext2 filesystem support and devfs
 - **Memory management** - Physical and virtual memory allocators with custom address space management
-- **System calls** - POSIX-oriented syscall interface with support for file operations, threading primitives (pthread), memory management, and more
+- **POSIX system interface** - Eventually POSIX-compatible system interface with support for file operations, threading primitives (pthread), memory management, and more (work in progress)
 - **ACPI support** - Power management and hardware discovery via ACPI tables
-- **Advanced interrupt handling** - x2APIC support with HPET timer
 - **ELF loader** - Dynamic ELF binary loading for userspace programs
 - **Userspace foundation** - Init process and minimal C library (minilib) for userspace development
 - **Stack unwinding** - Kernel panic backtraces for debugging
