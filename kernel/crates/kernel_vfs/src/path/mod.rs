@@ -112,7 +112,7 @@ impl Path {
             // No separator found - single component relative path
             // Dot paths like "." and ".." are their own parent
             // But regular paths like "foo" have no parent
-            if self.inner == *"." || self.inner == *".." {
+            if &self.inner == "." || &self.inner == ".." {
                 Some(self)
             } else {
                 None

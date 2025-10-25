@@ -179,16 +179,14 @@ mod tests {
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
         assert_eq!(names, alloc::vec!["..", "foo"]);
 
-        // Single dot paths - these appear to be treated specially
+        // Single dot paths
         let path = Path::new("/.");
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        // Based on the test framework, this might return empty
-        assert!(names.is_empty() || names == alloc::vec!["."]);
+        assert_eq!(names, alloc::vec!["."]);
 
         let path = Path::new("/..");
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        // Based on the test framework, this might return empty
-        assert!(names.is_empty() || names == alloc::vec![".."]);
+        assert_eq!(names, alloc::vec![".."]);
     }
 
     #[test]
