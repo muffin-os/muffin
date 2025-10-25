@@ -398,102 +398,40 @@ pub struct Symbol {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
 
     use zerocopy::TryFromBytes;
 
+    use crate::aligned::{AlignedElfData, AlignedVec};
     use crate::file::{
         ElfFile, ElfHeader, ElfIdent, ElfParseError, ElfType, ProgramHeaderType, SectionHeaderType,
     };
 
-    // Aligned buffer for ELF header data to satisfy zerocopy alignment requirements
-    #[repr(align(8))]
-    struct AlignedElfData([u8; 64]);
-
-    impl AlignedElfData {
-        fn as_slice(&self) -> &[u8] {
-            &self.0
-        }
-
-        fn as_mut_slice(&mut self) -> &mut [u8] {
-            &mut self.0
-        }
-    }
-
-    impl core::ops::Index<usize> for AlignedElfData {
-        type Output = u8;
-        fn index(&self, index: usize) -> &Self::Output {
-            &self.0[index]
-        }
-    }
-
-    impl core::ops::IndexMut<usize> for AlignedElfData {
-        fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-            &mut self.0[index]
-        }
-    }
-
-    impl core::ops::Index<core::ops::Range<usize>> for AlignedElfData {
-        type Output = [u8];
-        fn index(&self, index: core::ops::Range<usize>) -> &Self::Output {
-            &self.0[index]
-        }
-    }
-
-    impl core::ops::IndexMut<core::ops::Range<usize>> for AlignedElfData {
-        fn index_mut(&mut self, index: core::ops::Range<usize>) -> &mut Self::Output {
-            &mut self.0[index]
-        }
-    }
-
     // Helper to create minimal valid ELF header for testing
     fn create_minimal_valid_elf() -> AlignedElfData {
-        let mut data = [0u8; 64];
-        data[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]); // ELF magic
-        data[4] = 2; // 64-bit
-        data[5] = 1; // little-endian
-        data[6] = 1; // ELF version
-        data[7] = 0; // OS ABI (System V)
-        data[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
-        data[20..24].copy_from_slice(&1u32.to_le_bytes()); // version
+        let mut data = AlignedElfData::new();
+        let buf = data.as_mut();
+        buf[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]); // ELF magic
+        buf[4] = 2; // 64-bit
+        buf[5] = 1; // little-endian
+        buf[6] = 1; // ELF version
+        buf[7] = 0; // OS ABI (System V)
+        buf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        buf[20..24].copy_from_slice(&1u32.to_le_bytes()); // version
         // shoff = 0 (no section headers)
-        data[40..48].copy_from_slice(&0usize.to_le_bytes());
-        data[52..54].copy_from_slice(&64u16.to_le_bytes()); // ehsize
-        data[54..56].copy_from_slice(&56u16.to_le_bytes()); // phentsize
-        data[56..58].copy_from_slice(&0u16.to_le_bytes()); // phnum = 0
-        data[58..60].copy_from_slice(&64u16.to_le_bytes()); // shentsize
-        data[60..62].copy_from_slice(&0u16.to_le_bytes()); // shnum = 0
-        data[62..64].copy_from_slice(&0u16.to_le_bytes()); // shstrndx = 0
-        AlignedElfData(data)
-    }
-
-    // Helper to create an aligned Vec for ELF data
-    // Uses proper memory layout to ensure 8-byte alignment required by zerocopy
-    fn create_aligned_vec(size: usize) -> Vec<u64> {
-        // Allocate as Vec<u64> to ensure 8-byte alignment, then reinterpret as bytes
-        let num_u64s = (size + 7) / 8; // Round up to nearest u64
-        vec![0u64; num_u64s]
-    }
-
-    // Helper to get byte slice from aligned vec
-    fn aligned_vec_as_bytes(vec: &[u64], size: usize) -> &[u8] {
-        let bytes = unsafe { core::slice::from_raw_parts(vec.as_ptr() as *const u8, size) };
-        bytes
-    }
-
-    // Helper to get mutable byte slice from aligned vec
-    fn aligned_vec_as_bytes_mut(vec: &mut [u64], size: usize) -> &mut [u8] {
-        let bytes = unsafe { core::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
-        bytes
+        buf[40..48].copy_from_slice(&0usize.to_le_bytes());
+        buf[52..54].copy_from_slice(&64u16.to_le_bytes()); // ehsize
+        buf[54..56].copy_from_slice(&56u16.to_le_bytes()); // phentsize
+        buf[56..58].copy_from_slice(&0u16.to_le_bytes()); // phnum = 0
+        buf[58..60].copy_from_slice(&64u16.to_le_bytes()); // shentsize
+        buf[60..62].copy_from_slice(&0u16.to_le_bytes()); // shnum = 0
+        buf[62..64].copy_from_slice(&0u16.to_le_bytes()); // shstrndx = 0
+        data
     }
 
     #[test]
     fn test_elf_header_ref_from_bytes() {
-        #[repr(align(8))]
-        struct AlignedData([u8; 64]);
-
-        let data = AlignedData([
+        let data = AlignedElfData::from_array([
             0x7f, 0x45, 0x4c, 0x46, // ELF magic
             0x02, // 64-bit
             0x01, // little-endian
@@ -516,7 +454,7 @@ mod tests {
             0x05, 0x00, // section names section header index
         ]);
 
-        let header = ElfHeader::try_ref_from_bytes(&data.0).unwrap();
+        let header = ElfHeader::try_ref_from_bytes(data.as_ref()).unwrap();
         assert_eq!(
             header,
             &ElfHeader {
@@ -549,7 +487,7 @@ mod tests {
     #[test]
     fn test_elf_file_parse_valid() {
         let data = create_minimal_valid_elf();
-        let result = ElfFile::try_parse(data.as_slice());
+        let result = ElfFile::try_parse(data.as_ref());
         if let Err(e) = &result {
             panic!("Failed to parse ELF: {:?}. Data: {:?}", e, &data[50..64]);
         }
@@ -562,7 +500,7 @@ mod tests {
     fn test_elf_file_parse_invalid_magic() {
         let mut data = create_minimal_valid_elf();
         data[0] = 0x00; // Corrupt magic
-        let result = ElfFile::try_parse(data.as_slice());
+        let result = ElfFile::try_parse(data.as_ref());
         assert!(matches!(result, Err(ElfParseError::InvalidMagic)));
     }
 
@@ -570,7 +508,7 @@ mod tests {
     fn test_elf_file_parse_unsupported_endian() {
         let mut data = create_minimal_valid_elf();
         data[5] = 2; // big-endian on little-endian system
-        let result = ElfFile::try_parse(data.as_slice());
+        let result = ElfFile::try_parse(data.as_ref());
         assert!(matches!(result, Err(ElfParseError::UnsupportedEndian)));
     }
 
@@ -578,7 +516,7 @@ mod tests {
     fn test_elf_file_parse_unsupported_version() {
         let mut data = create_minimal_valid_elf();
         data[6] = 2; // Invalid ELF version
-        let result = ElfFile::try_parse(data.as_slice());
+        let result = ElfFile::try_parse(data.as_ref());
         assert!(matches!(result, Err(ElfParseError::UnsupportedElfVersion)));
     }
 
@@ -586,7 +524,7 @@ mod tests {
     fn test_elf_file_parse_unsupported_os_abi() {
         let mut data = create_minimal_valid_elf();
         data[7] = 0x03; // Not System V
-        let result = ElfFile::try_parse(data.as_slice());
+        let result = ElfFile::try_parse(data.as_ref());
         assert!(matches!(result, Err(ElfParseError::UnsupportedOsAbi)));
     }
 
@@ -661,17 +599,16 @@ mod tests {
         let mut data = create_minimal_valid_elf();
         let entry_addr = 0x1000usize;
         data[24..32].copy_from_slice(&entry_addr.to_le_bytes());
-        let elf = ElfFile::try_parse(data.as_slice()).unwrap();
+        let elf = ElfFile::try_parse(data.as_ref()).unwrap();
         assert_eq!(elf.entry(), entry_addr);
     }
 
     #[test]
     fn test_elf_file_program_headers() {
-        let size = 64 + 56 * 2; // header + 2 program headers
-        let mut aligned_data = create_aligned_vec(size);
-        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
+        let mut aligned_data = AlignedVec::new(64 + 56 * 2); // header + 2 program headers
+        let data = aligned_data.as_bytes_mut();
         let header = create_minimal_valid_elf();
-        data[..64].copy_from_slice(header.as_slice());
+        data[..64].copy_from_slice(header.as_ref());
 
         // Set phoff and phnum
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
@@ -685,7 +622,7 @@ mod tests {
         let ph2_offset = 64 + 56;
         data[ph2_offset..ph2_offset + 4].copy_from_slice(&2u32.to_le_bytes());
 
-        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let data_slice = aligned_data.as_bytes();
         let elf = ElfFile::try_parse(data_slice).unwrap();
         let headers: Vec<_> = elf.program_headers().collect();
         assert_eq!(headers.len(), 2);
@@ -695,11 +632,10 @@ mod tests {
 
     #[test]
     fn test_elf_file_program_headers_by_type() {
-        let size = 64 + 56 * 3;
-        let mut aligned_data = create_aligned_vec(size);
-        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
+        let mut aligned_data = AlignedVec::new(64 + 56 * 3);
+        let data = aligned_data.as_bytes_mut();
         let header = create_minimal_valid_elf();
-        data[..64].copy_from_slice(header.as_slice());
+        data[..64].copy_from_slice(header.as_ref());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&3u16.to_le_bytes());
@@ -711,7 +647,7 @@ mod tests {
         // PT_LOAD
         data[176..180].copy_from_slice(&1u32.to_le_bytes());
 
-        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let data_slice = aligned_data.as_bytes();
         let elf = ElfFile::try_parse(data_slice).unwrap();
         let load_headers: Vec<_> = elf
             .program_headers_by_type(ProgramHeaderType::LOAD)
@@ -726,11 +662,10 @@ mod tests {
 
     #[test]
     fn test_elf_file_section_headers() {
-        let size = 64 + 64 * 2; // header + 2 section headers
-        let mut aligned_data = create_aligned_vec(size);
-        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
+        let mut aligned_data = AlignedVec::new(64 + 64 * 2); // header + 2 section headers
+        let data = aligned_data.as_bytes_mut();
         let header = create_minimal_valid_elf();
-        data[..64].copy_from_slice(header.as_slice());
+        data[..64].copy_from_slice(header.as_ref());
 
         // Set shoff and shnum
         data[40..48].copy_from_slice(&64usize.to_le_bytes());
@@ -744,7 +679,7 @@ mod tests {
         let sh2_offset = 64 + 64;
         data[sh2_offset + 4..sh2_offset + 8].copy_from_slice(&1u32.to_le_bytes());
 
-        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let data_slice = aligned_data.as_bytes();
         let elf = ElfFile::try_parse(data_slice).unwrap();
         let headers: Vec<_> = elf.section_headers().collect();
         assert_eq!(headers.len(), 2);
@@ -754,11 +689,10 @@ mod tests {
 
     #[test]
     fn test_elf_file_section_headers_by_type() {
-        let size = 64 + 64 * 3;
-        let mut aligned_data = create_aligned_vec(size);
-        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
+        let mut aligned_data = AlignedVec::new(64 + 64 * 3);
+        let data = aligned_data.as_bytes_mut();
         let header = create_minimal_valid_elf();
-        data[..64].copy_from_slice(header.as_slice());
+        data[..64].copy_from_slice(header.as_ref());
 
         data[40..48].copy_from_slice(&64usize.to_le_bytes());
         data[60..62].copy_from_slice(&3u16.to_le_bytes()); // shnum is at 60-62
@@ -770,7 +704,7 @@ mod tests {
         // SYMTAB
         data[192 + 4..192 + 8].copy_from_slice(&2u32.to_le_bytes());
 
-        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let data_slice = aligned_data.as_bytes();
         let elf = ElfFile::try_parse(data_slice).unwrap();
         let symtab_headers: Vec<_> = elf
             .section_headers_by_type(SectionHeaderType::SYMTAB)
@@ -786,11 +720,10 @@ mod tests {
     #[test]
     fn test_elf_file_program_data() {
         let segment_data = b"Test Data";
-        let size = 64 + 56 + segment_data.len();
-        let mut aligned_data = create_aligned_vec(size);
-        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
+        let mut aligned_data = AlignedVec::new(64 + 56 + segment_data.len());
+        let data = aligned_data.as_bytes_mut();
         let header = create_minimal_valid_elf();
-        data[..64].copy_from_slice(header.as_slice());
+        data[..64].copy_from_slice(header.as_ref());
 
         data[32..40].copy_from_slice(&64usize.to_le_bytes());
         data[56..58].copy_from_slice(&1u16.to_le_bytes());
@@ -803,7 +736,7 @@ mod tests {
         data[ph_offset + 8..ph_offset + 16].copy_from_slice(&segment_offset.to_le_bytes()); // offset
         data[ph_offset + 32..ph_offset + 40].copy_from_slice(&segment_data.len().to_le_bytes()); // filesz
 
-        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let data_slice = aligned_data.as_bytes();
         let elf = ElfFile::try_parse(data_slice).unwrap();
         let headers: Vec<_> = elf.program_headers().collect();
         let prog_data = elf.program_data(&headers[0]);
@@ -813,11 +746,10 @@ mod tests {
     #[test]
     fn test_elf_file_section_data() {
         let section_data = b"Section Content";
-        let size = 64 + 64 + section_data.len();
-        let mut aligned_data = create_aligned_vec(size);
-        let data = aligned_vec_as_bytes_mut(&mut aligned_data, size);
+        let mut aligned_data = AlignedVec::new(64 + 64 + section_data.len());
+        let data = aligned_data.as_bytes_mut();
         let header = create_minimal_valid_elf();
-        data[..64].copy_from_slice(header.as_slice());
+        data[..64].copy_from_slice(header.as_ref());
 
         data[40..48].copy_from_slice(&64usize.to_le_bytes());
         data[60..62].copy_from_slice(&1u16.to_le_bytes()); // shnum is at 60-62
@@ -831,7 +763,7 @@ mod tests {
         data[sh_offset + 24..sh_offset + 32].copy_from_slice(&section_offset.to_le_bytes()); // offset field
         data[sh_offset + 32..sh_offset + 40].copy_from_slice(&section_data.len().to_le_bytes()); // size field
 
-        let data_slice = aligned_vec_as_bytes(&aligned_data, size);
+        let data_slice = aligned_data.as_bytes();
         let elf = ElfFile::try_parse(data_slice).unwrap();
         let headers: Vec<_> = elf.section_headers().collect();
         let sec_data = elf.section_data(&headers[0]);
