@@ -4,8 +4,10 @@ use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
 use core::ffi::c_int;
 
+use kernel_abi::{SYS_EXIT, SYS_READ, SYS_WRITE};
+
 pub fn exit(code: i32) -> ! {
-    syscall1(1, code as usize);
+    syscall1(SYS_EXIT, code as usize);
     loop {
         unsafe {
             _mm_pause();
@@ -14,11 +16,11 @@ pub fn exit(code: i32) -> ! {
 }
 
 pub fn read(fd: c_int, buf: &mut [u8]) -> c_int {
-    syscall3(36, fd as usize, buf.as_mut_ptr() as usize, buf.len()) as i32
+    syscall3(SYS_READ, fd as usize, buf.as_mut_ptr() as usize, buf.len()) as i32
 }
 
 pub fn write(fd: c_int, buf: &[u8]) -> c_int {
-    syscall3(37, fd as usize, buf.as_ptr() as usize, buf.len()) as i32
+    syscall3(SYS_WRITE, fd as usize, buf.as_ptr() as usize, buf.len()) as i32
 }
 
 pub fn syscall0(n: usize) -> usize {
