@@ -210,24 +210,6 @@ impl Debug for Process {
     }
 }
 
-impl Drop for Process {
-    fn drop(&mut self) {
-        let my_ppid = *self.ppid.read();
-        let mut guard = process_tree().write();
-        guard
-            .processes
-            .remove(&self.pid)
-            .expect("process should be in process tree");
-        if let Some(children) = guard.children.remove(&self.pid) {
-            for child in children {
-                *child.ppid.write() = my_ppid;
-            }
-        }
-
-        // TODO: deallocate all physical frames that are not part of a shared mapping
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum CreateProcessError {
     #[error("failed to allocate stack")]
