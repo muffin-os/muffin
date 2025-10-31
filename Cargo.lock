@@ -652,6 +652,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel_slab"
+version = "0.1.0"
+
+[[package]]
 name = "kernel_syscall"
 version = "0.1.0"
 dependencies = [
