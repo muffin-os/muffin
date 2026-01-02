@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn test_deref() {
         let owned = OwnedPath::new("/foo/bar");
-        let path: &Path = &*owned;
+        let path: &Path = &owned;
         assert_eq!(&**path, "/foo/bar");
 
         // Should have access to Path methods

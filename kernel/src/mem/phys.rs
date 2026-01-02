@@ -28,7 +28,7 @@ pub struct OwnedPhysicalMemory {
 }
 
 impl OwnedPhysicalMemory {
-    pub unsafe fn from_physical_frame<S: PageSize>(frame: PhysFrame<S>) -> Self {
+    pub fn from_physical_frame<S: PageSize>(frame: PhysFrame<S>) -> Self {
         let start_address = frame.start_address();
         let start = unsafe {
             // Safety: safe because the start address is guaranteed to be valid

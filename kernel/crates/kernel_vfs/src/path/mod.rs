@@ -399,6 +399,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::useless_asref)]
     fn test_path_as_ref() {
         let path = Path::new("/foo/bar");
         let path_ref: &Path = path.as_ref();
