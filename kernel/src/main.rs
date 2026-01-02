@@ -5,7 +5,6 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::error::Error;
-use core::panic::PanicInfo;
 
 use ext2::Ext2Fs;
 use kernel::driver::KernelDeviceId;
@@ -17,9 +16,8 @@ use kernel::mcore;
 use kernel::mcore::mtask::process::Process;
 use kernel_device::block::{BlockBuf, BlockDevice};
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use log::{error, info};
+use log::info;
 use spin::RwLock;
-use x86_64::instructions::hlt;
 
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
@@ -87,15 +85,17 @@ impl<const N: usize> filesystem::BlockDevice for ArcLockedBlockDevice<N> {
 
 #[panic_handler]
 #[cfg(not(test))]
-fn rust_panic(info: &PanicInfo) -> ! {
+fn rust_panic(info: &core::panic::PanicInfo) -> ! {
     handle_panic(info);
     loop {
-        hlt();
+        x86_64::instructions::hlt();
     }
 }
 
 #[cfg(not(test))]
-fn handle_panic(info: &PanicInfo) {
+fn handle_panic(info: &core::panic::PanicInfo) {
+    use log::error;
+
     let location = info.location().unwrap();
     error!(
         "kernel panicked at {}:{}:{}:",
