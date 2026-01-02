@@ -1,7 +1,10 @@
+use jiff::{Timestamp, Unit};
 use log::{Level, Metadata, Record};
 
+use crate::hpet::hpet_maybe;
 use crate::mcore::context::ExecutionContext;
 use crate::serial_println;
+use crate::time::TimestampExt;
 
 pub(crate) fn init() {
     log::set_logger(&SerialLogger).unwrap();
@@ -19,18 +22,18 @@ impl log::Log for SerialLogger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            let color = match record.level() {
-                Level::Error => "\x1b[1;31m",
-                Level::Warn => "\x1b[1;33m",
-                Level::Info => "\x1b[1;94m",
-                Level::Debug => "\x1b[1;30m",
-                Level::Trace => "\x1b[1;90m",
-            };
+            let timestamp = if hpet_maybe().is_some() {
+                Timestamp::now()
+            } else {
+                Timestamp::new(0, 0).unwrap()
+            }
+            .round(Unit::Microsecond)
+            .unwrap();
 
             if let Some(ctx) = ExecutionContext::try_load() {
                 serial_println!(
-                    "{}{:5}\x1b[0m cpu{} pid{:3} [{}] {}",
-                    color,
+                    "{} - {:5} cpu{} pid{:3} [{}] {}",
+                    timestamp,
                     record.level(),
                     ctx.cpu_id(),
                     ctx.pid(),
@@ -39,8 +42,8 @@ impl log::Log for SerialLogger {
                 );
             } else {
                 serial_println!(
-                    "{}{:5}\x1b[0m boot [{}] {}",
-                    color,
+                    "{} - {:5} boot [{}] {}",
+                    timestamp,
                     record.level(),
                     record.target(),
                     record.args()
