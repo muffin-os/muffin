@@ -274,19 +274,22 @@ mod tests {
         let path = Path::new("/foo/bar/baz/qux");
         let mut iter = path.filenames();
 
-        assert_eq!(iter.nth(0), Some("foo"));
-        assert_eq!(iter.nth(0), Some("bar"));
-        assert_eq!(iter.nth(0), Some("baz"));
-        assert_eq!(iter.nth(0), Some("qux"));
-        assert_eq!(iter.nth(0), None);
+        assert_eq!(iter.next(), Some("foo"));
+        assert_eq!(iter.next(), Some("bar"));
+        assert_eq!(iter.next(), Some("baz"));
+        assert_eq!(iter.next(), Some("qux"));
+        assert_eq!(iter.next(), None);
     }
 
     #[test]
     fn test_filenames_last() {
-        assert_eq!(Path::new("/foo/bar/baz").filenames().last(), Some("baz"));
-        assert_eq!(Path::new("/foo").filenames().last(), Some("foo"));
-        assert_eq!(Path::new("").filenames().last(), None);
-        assert_eq!(Path::new("/").filenames().last(), None);
+        assert_eq!(
+            Path::new("/foo/bar/baz").filenames().next_back(),
+            Some("baz")
+        );
+        assert_eq!(Path::new("/foo").filenames().next_back(), Some("foo"));
+        assert_eq!(Path::new("").filenames().next_back(), None);
+        assert_eq!(Path::new("/").filenames().next_back(), None);
     }
 
     #[test]

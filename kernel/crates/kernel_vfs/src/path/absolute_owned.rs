@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn test_deref() {
         let abs_path = AbsoluteOwnedPath::new();
-        let owned: &OwnedPath = &*abs_path;
+        let owned: &OwnedPath = &abs_path;
         assert_eq!(owned.as_str(), "/");
     }
 

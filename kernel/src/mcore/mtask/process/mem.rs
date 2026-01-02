@@ -4,10 +4,9 @@ use core::slice;
 use kernel_vfs::node::VfsNode;
 use spin::mutex::Mutex;
 use x86_64::VirtAddr;
-use x86_64::structures::paging::PhysFrame;
-use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 
 use crate::UsizeExt;
+use crate::mem::phys::OwnedPhysicalMemory;
 use crate::mem::virt::OwnedSegment;
 
 pub struct MemoryRegions {
@@ -113,39 +112,27 @@ pub struct LazyMemoryRegion {
     size: usize,
     /// The physical frames that were mapped for this lazy
     /// memory region.
-    _physical_frames: Mutex<Vec<PhysFrame>>,
-}
-
-impl Drop for LazyMemoryRegion {
-    fn drop(&mut self) {
-        todo!("deallocate physical memory")
-    }
+    _physical_frames: Mutex<Vec<OwnedPhysicalMemory>>,
 }
 
 #[derive(Debug)]
 pub struct MappedMemoryRegion {
     segment: OwnedSegment<'static>,
     size: usize,
-    _physical_frames: PhysFrameRangeInclusive,
+    _physical_memory: OwnedPhysicalMemory,
 }
 
 impl MappedMemoryRegion {
     pub fn new(
         segment: OwnedSegment<'static>,
         size: usize,
-        physical_frames: PhysFrameRangeInclusive,
+        physical_memory: OwnedPhysicalMemory,
     ) -> Self {
         Self {
             segment,
             size,
-            _physical_frames: physical_frames,
+            _physical_memory: physical_memory,
         }
-    }
-}
-
-impl Drop for MappedMemoryRegion {
-    fn drop(&mut self) {
-        todo!("deallocate physical memory")
     }
 }
 
@@ -153,10 +140,4 @@ impl Drop for MappedMemoryRegion {
 pub struct FileBackedMemoryRegion {
     region: LazyMemoryRegion,
     _node: VfsNode,
-}
-
-impl Drop for FileBackedMemoryRegion {
-    fn drop(&mut self) {
-        todo!("deallocate physical memory")
-    }
 }
