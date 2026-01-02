@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::iter::from_fn;
-use core::mem::swap;
+use core::mem::{ManuallyDrop, swap};
+use core::ops::Deref;
 
 use conquer_once::spin::OnceCell;
 use kernel_physical_memory::{PhysicalFrameAllocator, PhysicalMemoryManager};
@@ -19,6 +20,57 @@ fn allocator() -> &'static Mutex<MultiStageAllocator> {
     PHYS_ALLOC
         .get()
         .expect("physical allocator not initialized")
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OwnedPhysicalMemory {
+    range: PhysFrameRangeInclusive<Size4KiB>,
+}
+
+impl OwnedPhysicalMemory {
+    pub unsafe fn from_physical_frame<S: PageSize>(frame: PhysFrame<S>) -> Self {
+        let start_address = frame.start_address();
+        let start = unsafe {
+            // Safety: safe because the start address is guaranteed to be valid
+            PhysFrame::<Size4KiB>::from_start_address_unchecked(start_address)
+        };
+        let end = PhysFrame::<Size4KiB>::containing_address(start_address + S::SIZE - 1);
+        Self {
+            range: PhysFrameRangeInclusive { start, end },
+        }
+    }
+
+    pub fn from_physical_frame_range<S: PageSize>(range: PhysFrameRangeInclusive<S>) -> Self {
+        let start_address = range.start.start_address();
+        let start = PhysFrame::<Size4KiB>::containing_address(start_address);
+        let end_address = range.end.start_address() + range.end.size() - 1;
+        let end = PhysFrame::<Size4KiB>::containing_address(end_address);
+        Self {
+            range: PhysFrameRangeInclusive { start, end },
+        }
+    }
+
+    pub fn is_single_frame(&self) -> bool {
+        self.range.start == self.range.end
+    }
+
+    pub fn leak(self) -> PhysFrameRangeInclusive<Size4KiB> {
+        ManuallyDrop::new(self).range
+    }
+}
+
+impl Deref for OwnedPhysicalMemory {
+    type Target = PhysFrameRangeInclusive<Size4KiB>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.range
+    }
+}
+
+impl Drop for OwnedPhysicalMemory {
+    fn drop(&mut self) {
+        PhysicalMemory::deallocate_frames(self.range);
+    }
 }
 
 /// Zero-sized facade to the global physical memory allocator.
@@ -87,11 +139,14 @@ impl PhysicalMemory {
     /// Panics if stage 1 allocator is still active (stage 1 doesn't support contiguous
     /// allocation). Stage 2 is initialized after the heap becomes available.
     #[must_use]
-    pub fn allocate_frames<S: PageSize>(n: usize) -> Option<PhysFrameRangeInclusive<S>>
+    pub fn allocate_frames<S: PageSize>(n: usize) -> Option<OwnedPhysicalMemory>
     where
         PhysicalMemoryManager: PhysicalFrameAllocator<S>,
     {
-        allocator().lock().allocate_frames(n)
+        allocator()
+            .lock()
+            .allocate_frames(n)
+            .map(OwnedPhysicalMemory::from_physical_frame_range)
     }
 
     /// Returns the frame to the free pool for future allocations.

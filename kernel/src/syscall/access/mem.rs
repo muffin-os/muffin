@@ -8,7 +8,7 @@ use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::UsizeExt;
 use crate::mcore::mtask::process::mem::{MappedMemoryRegion, MemoryRegion};
-use crate::mem::phys::PhysicalMemory;
+use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
 use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator};
 use crate::syscall::access::{KernelAccess, KernelMemoryRegionHandle};
 
@@ -75,7 +75,7 @@ pub struct KernelMapping {
     addr: VirtAddr,
     size: usize,
     segment: OwnedSegment<'static>,
-    physical_frames: x86_64::structures::paging::frame::PhysFrameRangeInclusive<Size4KiB>,
+    physical_frames: OwnedPhysicalMemory,
 }
 
 impl KernelMapping {

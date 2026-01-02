@@ -13,7 +13,7 @@ use x86_64::{PhysAddr, VirtAddr};
 
 use crate::driver::pci::VirtIoCam;
 use crate::mem::address_space::AddressSpace;
-use crate::mem::phys::PhysicalMemory;
+use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
 use crate::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use crate::{U64Ext, UsizeExt};
 
@@ -34,27 +34,38 @@ pub struct HalImpl;
 
 unsafe impl Hal for HalImpl {
     fn dma_alloc(pages: usize, _: BufferDirection) -> (u64, NonNull<u8>) {
-        let frames = PhysicalMemory::allocate_frames(pages).unwrap();
+        let frames = PhysicalMemory::allocate_frames::<Size4KiB>(pages).unwrap();
+        let start_address = frames.start.start_address().as_u64();
         let segment = VirtualMemoryHigherHalf.reserve(pages).unwrap();
         AddressSpace::kernel()
             .map_range::<Size4KiB>(
                 &*segment,
-                frames,
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                frames.leak(), // this has to be deallocated in dma_dealloc
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
             )
             .unwrap();
         let segment = segment.leak();
         let addr = NonNull::new(segment.start.as_mut_ptr::<u8>()).unwrap();
-        (frames.start.start_address().as_u64(), addr)
+        (start_address, addr)
     }
 
     unsafe fn dma_dealloc(paddr: u64, vaddr: NonNull<u8>, pages: usize) -> i32 {
-        let frames = PhysFrameRangeInclusive::<Size4KiB> {
-            start: PhysFrame::containing_address(PhysAddr::new(paddr)),
-            end: PhysFrame::containing_address(PhysAddr::new(
+        // strictly speaking this is not necessary, but since we allocate it through
+        // an [`OwnedPhysicalMemory`] object, we should also deallocate it. That way,
+        // for allocation and deallocation, everything goes through
+        // [`OwnedPhysicalMemory`] which maybe makes debugging easier.
+        //
+        // Alternatively, we could only create the [`PhysFrameRangeInclusive`] and
+        // then deallocate that directly.
+        let frames = {
+            let start = PhysFrame::containing_address(PhysAddr::new(paddr));
+            let end = PhysFrame::containing_address(PhysAddr::new(
                 paddr + (pages * Size4KiB::SIZE.into_usize()).into_u64() - 1,
-            )),
+            ));
+            let range = PhysFrameRangeInclusive::<Size4KiB> { start, end };
+            OwnedPhysicalMemory::from_physical_frame_range(range)
         };
+
         let segment = Segment::new(
             VirtAddr::from_ptr(vaddr.as_ptr()),
             pages.into_u64() * Size4KiB::SIZE,
@@ -62,8 +73,10 @@ unsafe impl Hal for HalImpl {
         unsafe {
             AddressSpace::kernel().unmap_range::<Size4KiB>(&segment, |_| {});
             assert!(VirtualMemoryHigherHalf.release(segment));
-            PhysicalMemory::deallocate_frames(frames);
         }
+
+        // we can not drop this any earlier, especially not until the respective virtual memory is unmapped
+        drop(frames);
 
         0
     }
