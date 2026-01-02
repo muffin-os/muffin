@@ -22,6 +22,10 @@ pub fn hpet() -> &'static RwLock<Hpet<'static>> {
     HPET.get().unwrap()
 }
 
+pub fn hpet_maybe() -> Option<&'static RwLock<Hpet<'static>>> {
+    HPET.try_get().ok()
+}
+
 #[allow(clippy::missing_panics_doc)]
 pub fn init() {
     let acpi_tables = acpi_tables();
