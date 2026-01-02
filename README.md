@@ -46,6 +46,9 @@ Rust toolchain is automatically configured via `rust-toolchain.toml` (nightly ch
 # Build and run in QEMU
 cargo run
 
+# Run and have pretty logs with lnav
+cargo run | lnav
+
 # Run without GUI
 cargo run -- --headless
 
