@@ -22,10 +22,12 @@ fn allocator() -> &'static Mutex<MultiStageAllocator> {
         .expect("physical allocator not initialized")
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct OwnedPhysicalMemory {
     range: PhysFrameRangeInclusive<Size4KiB>,
 }
+
+impl !Clone for OwnedPhysicalMemory {}
 
 impl OwnedPhysicalMemory {
     pub fn from_physical_frame<S: PageSize>(frame: PhysFrame<S>) -> Self {
