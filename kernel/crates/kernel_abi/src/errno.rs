@@ -8,7 +8,7 @@ pub struct Errno(c_int);
 
 impl Display for Errno {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", errno_name(self))
+        Display::fmt(errno_name(self), f)
     }
 }
 

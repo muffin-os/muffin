@@ -24,7 +24,7 @@ pub struct Path {
 
 impl Display for Path {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", &self.inner)
+        Display::fmt(&self.inner, f)
     }
 }
 

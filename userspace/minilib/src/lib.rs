@@ -7,9 +7,7 @@ use core::ffi::c_int;
 pub fn exit(code: i32) -> ! {
     syscall1(1, code as usize);
     loop {
-        unsafe {
-            _mm_pause();
-        }
+        _mm_pause();
     }
 }
 

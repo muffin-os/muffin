@@ -18,7 +18,7 @@ pub struct OwnedPath {
 
 impl Display for OwnedPath {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", &self.inner)
+        Display::fmt(&self.inner, f)
     }
 }
 

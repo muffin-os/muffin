@@ -20,7 +20,7 @@ impl Default for KernelDeviceId {
 
 impl Display for KernelDeviceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
+        Display::fmt(&self.0, f)
     }
 }
 
