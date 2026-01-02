@@ -32,7 +32,7 @@ impl log::Log for SerialLogger {
 
             if let Some(ctx) = ExecutionContext::try_load() {
                 serial_println!(
-                    "{} - {:5} cpu{} pid{:3} [{}] {}",
+                    "{} - {:5} cpu{} pid{} [{}] {}",
                     timestamp,
                     record.level(),
                     ctx.cpu_id(),
