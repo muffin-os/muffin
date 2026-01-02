@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn test_deref_to_path() {
         let abs_path: &AbsolutePath = "/foo/bar".try_into().unwrap();
-        let path: &Path = &**abs_path;
+        let path: &Path = abs_path;
         assert_eq!(&**path, "/foo/bar");
     }
 
