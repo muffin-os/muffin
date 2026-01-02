@@ -1,0 +1,43 @@
+{
+  "muffin_kernel_log": {
+    "title": "MuffinOS Kernel Serial Log",
+    "description": "Kernel logs via serial",
+    "url": "",
+    "ordered-by-time": false,
+    "regex": {
+      "std": {
+        "pattern": "(?<timestamp>.*?) - (?<level>\\w+)\\s+(?<cpu>\\w+)\\s+(?<pid>\\w+)?\\s*\\[(?<module>[^\\]]+)\\]\\s*(?<body>.*)$"
+      }
+    },
+    "level-field": "level",
+    "level": {
+      "trace": "TRACE",
+      "debug": "DEBUG",
+      "info": "INFO",
+      "warning": "WARN",
+      "error": "ERROR"
+    },
+    "body-field": "body",
+    "timestamp-field": "timestamp",
+    "timestamp-format": "^%Y-%m-%dT%H:%M:%S.%fZ",
+    "value": {
+      "cpu": {
+        "kind": "string",
+        "identifier": true
+      },
+      "pid": {
+        "kind": "string",
+        "identifier": true
+      },
+      "module": {
+        "kind": "string",
+        "identifier": true
+      }
+    },
+    "sample": [
+      {
+        "line": "2026-01-02T11:23:56.024233Z - INFO  cpu0 pid0 [kernel] started process pid=1"
+      }
+    ]
+  }
+}
