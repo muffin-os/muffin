@@ -7,7 +7,7 @@ pub struct TaskId(u64);
 
 impl Display for TaskId {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
+        Display::fmt(&self.0, f)
     }
 }
 

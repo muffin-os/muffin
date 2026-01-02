@@ -13,7 +13,7 @@ pub struct AbsolutePath {
 
 impl Display for AbsolutePath {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", &self.inner)
+        Display::fmt(&self.inner, f)
     }
 }
 
