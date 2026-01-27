@@ -71,7 +71,7 @@ log = "0.4"
 mkfs-ext2 = { git = "https://github.com/tsatke/mkfs" }
 mkfs-filesystem = { git = "https://github.com/tsatke/mkfs" }
 rustc-demangle = "0.1"
-sha3 = { version = "0.11.0-rc.3", default-features = false }
+sha3 = { version = "0.11.0-rc.6", default-features = false }
 spin = "0.10"
 thiserror = { version = "2.0", default-features = false }
 uart_16550 = "0.4"
