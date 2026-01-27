@@ -43,20 +43,26 @@ fn main() {
         // create an lldb debug file to make debugging easy
         let content = format!(
             r"target create {KERNEL_BINARY}
-
-# If the kernel is a position independent executable (PIE), you need to set the slide as the offset
-# at which the kernel is being loaded. For static executables, the slide is 0, in which case
-# we can omit this whole line.
-#
-# target modules load --file {KERNEL_BINARY} --slide 0xffffffff80000000
-
 gdb-remote localhost:1234
 b kernel_main
 b handle_panic
 continue"
         );
-        std::fs::write("debug.lldb", content).expect("unable to create debug file");
-        println!("debug file is ready, run `lldb -s debug.lldb` to start debugging");
+        std::fs::write("debug.lldb", content).expect("unable to create lldb debug file");
+
+        // create a gdb debug file to make debugging easy
+        let content = format!(
+            r"file {KERNEL_BINARY}
+        target remote localhost:1234
+        hbreak kernel_main
+        hbreak kernel::handle_panic
+        continue"
+        );
+        std::fs::write("debug.gdb", content).expect("unable to create gdb debug file");
+
+        println!(
+            "debug file is ready, run `lldb -s debug.lldb` or `gdb -x debug.gdb` to start debugging"
+        );
     }
 
     let mut cmd = std::process::Command::new("qemu-system-x86_64");
