@@ -32,6 +32,11 @@ jobs:
         with:
           toolchain: nightly
           components: clippy
+          
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y xorriso
 
       - name: Install required cargo
         run: cargo install clippy-sarif sarif-fmt
