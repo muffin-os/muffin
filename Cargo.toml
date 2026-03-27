@@ -64,7 +64,7 @@ itertools = { version = "0.14.0", default-features = false, features = [
   "use_alloc",
 ] }
 jiff = { version = "0.2", default-features = false, features = ["alloc"] }
-limine = "0.5"
+limine = "0.6"
 linked_list_allocator = "0.10"
 linkme = "0.3"
 log = "0.4"
