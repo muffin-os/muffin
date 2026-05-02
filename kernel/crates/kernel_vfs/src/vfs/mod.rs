@@ -10,8 +10,10 @@ use crate::node::VfsNode;
 use crate::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 
 mod error;
+mod mmap;
 pub mod node;
 mod stat;
+pub use mmap::*;
 pub use stat::*;
 
 #[cfg(test)]

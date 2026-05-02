@@ -1,0 +1,9 @@
+[package]
+name = "kernel_gfx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kernel_abi = { path = "../kernel_abi" }
+
+log.workspace = true

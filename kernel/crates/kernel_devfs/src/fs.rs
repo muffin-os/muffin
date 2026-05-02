@@ -6,7 +6,10 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use kernel_vfs::{CloseError, FsError, OpenError, ReadError, Stat, StatError, WriteError};
+use kernel_vfs::{
+    CloseError, FsError, FsyncError, MmapError, MmapRegion, OpenError, ReadError, Stat, StatError,
+    WriteError,
+};
 use thiserror::Error;
 
 use crate::node::{DevDirectoryNode, DevFileNode, DevNode, DevNodeKind};
@@ -173,6 +176,18 @@ impl FileSystem for DevFs {
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
         self.resolve_handle(handle)?.stat(stat)
+    }
+
+    fn mmap(&mut self, handle: FsHandle) -> Result<MmapRegion, MmapError> {
+        self.resolve_handle(handle)
+            .map_err(MmapError::FsError)?
+            .mmap()
+    }
+
+    fn fsync(&mut self, handle: FsHandle) -> Result<(), FsyncError> {
+        self.resolve_handle(handle)
+            .map_err(FsyncError::FsError)?
+            .fsync()
     }
 }
 

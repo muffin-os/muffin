@@ -7,7 +7,7 @@ use spin::RwLock;
 use crate::fs::{FileSystem, FsHandle};
 use crate::path::AbsoluteOwnedPath;
 use crate::vfs::stat::Stat;
-use crate::{FsError, ReadError, StatError, WriteError};
+use crate::{FsError, FsyncError, MmapError, MmapRegion, ReadError, StatError, WriteError};
 
 #[derive(Clone)]
 pub struct VfsNode {
@@ -95,6 +95,29 @@ impl VfsNode {
 
         let mut guard = fs.write();
         guard.stat(self.fs_handle, stat)
+    }
+
+    /// Returns a [`MmapRegion`] over this file's backing memory.
+    ///
+    /// # Errors
+    /// Returns [`MmapError::NotSupported`] if the underlying filesystem or
+    /// device file does not support `mmap`.
+    pub fn mmap(&self) -> Result<MmapRegion, MmapError> {
+        let fs = self.fs.upgrade().ok_or(FsError::FileSystemNotOpen)?;
+
+        let mut guard = fs.write();
+        guard.mmap(self.fs_handle)
+    }
+
+    /// Commits any pending writes for this file to the underlying device.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying device fails to commit.
+    pub fn fsync(&self) -> Result<(), FsyncError> {
+        let fs = self.fs.upgrade().ok_or(FsError::FileSystemNotOpen)?;
+
+        let mut guard = fs.write();
+        guard.fsync(self.fs_handle)
     }
 }
 
