@@ -369,7 +369,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -550,6 +550,7 @@ dependencies = [
  "kernel_devfs",
  "kernel_device",
  "kernel_elfloader",
+ "kernel_gfx",
  "kernel_memapi",
  "kernel_pci",
  "kernel_physical_memory",
@@ -612,6 +613,14 @@ dependencies = [
  "thiserror",
  "x86_64",
  "zerocopy 0.9.0-alpha.0",
+]
+
+[[package]]
+name = "kernel_gfx"
+version = "0.1.0"
+dependencies = [
+ "kernel_abi",
+ "log",
 ]
 
 [[package]]
@@ -974,7 +983,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

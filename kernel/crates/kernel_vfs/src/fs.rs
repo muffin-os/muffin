@@ -1,5 +1,8 @@
 use crate::path::AbsolutePath;
-use crate::{CloseError, OpenError, ReadError, Stat, StatError, WriteError};
+use crate::{
+    CloseError, FsyncError, MmapError, MmapRegion, OpenError, ReadError, Stat, StatError,
+    WriteError,
+};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FsHandle(u64);
@@ -41,4 +44,23 @@ pub trait FileSystem: Send + Sync {
     fn write(&mut self, handle: FsHandle, buf: &[u8], offset: usize) -> Result<usize, WriteError>;
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError>;
+
+    /// Returns a raw pointer + length for the file's backing memory, suitable
+    /// for direct in-kernel access (e.g. blitting pixels into a framebuffer).
+    ///
+    /// The default impl rejects with [`MmapError::NotSupported`].
+    ///
+    /// # Errors
+    /// Returns [`MmapError::NotSupported`] for filesystems that have no
+    /// stable backing memory, or any underlying error.
+    fn mmap(&mut self, _handle: FsHandle) -> Result<MmapRegion, MmapError> {
+        Err(MmapError::NotSupported)
+    }
+
+    /// Commits any pending writes for the given handle to the underlying
+    /// device.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying device fails to commit.
+    fn fsync(&mut self, _handle: FsHandle) -> Result<(), FsyncError>;
 }

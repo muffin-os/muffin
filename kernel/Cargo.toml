@@ -8,6 +8,7 @@ kernel_abi = { path = "crates/kernel_abi" }
 kernel_devfs = { path = "crates/kernel_devfs" }
 kernel_device = { path = "crates/kernel_device" }
 kernel_elfloader = { path = "crates/kernel_elfloader" }
+kernel_gfx = { path = "crates/kernel_gfx" }
 kernel_memapi = { path = "crates/kernel_memapi" }
 kernel_pci = { path = "crates/kernel_pci" }
 kernel_physical_memory = { path = "crates/kernel_physical_memory" }

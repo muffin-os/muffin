@@ -9,7 +9,9 @@ use ext2::{Ext2Fs, Inode, InodeAddress, Type};
 use filesystem::BlockDevice;
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
-use kernel_vfs::{CloseError, FsError, OpenError, ReadError, Stat, StatError, WriteError};
+use kernel_vfs::{
+    CloseError, FsError, FsyncError, OpenError, ReadError, Stat, StatError, WriteError,
+};
 use spin::RwLock;
 
 pub struct VirtualExt2Fs<T> {
@@ -112,6 +114,10 @@ where
             }
             _ => todo!(),
         }
+        Ok(())
+    }
+
+    fn fsync(&mut self, _handle: FsHandle) -> Result<(), FsyncError> {
         Ok(())
     }
 }
