@@ -9,8 +9,8 @@ macro_rules! push_context {
 			push rbx
 			push rcx
 			push rdx
-			push rbp
 			sub  rsp, 8
+            push rbp
 			push rsi
 			push rdi
 			push r8
@@ -79,7 +79,8 @@ macro_rules! set_task_switched {
 ///
 /// # Safety
 ///
-/// Disable interrupts before you call this. This will enable interrupts again.
+/// Disable interrupts before you call this. Interrupts remain disabled across
+/// this call; the caller is responsible for re-enabling.
 ///
 /// Switching to another context is unsafe, as it executes
 /// some other code without any drop or safety guarantees

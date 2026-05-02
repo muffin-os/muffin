@@ -16,7 +16,10 @@ fn create_tss() -> TaskStateSegment {
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = allocate_ist_stack(5);
     tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = allocate_ist_stack(5);
 
-    tss.privilege_stack_table[0] = allocate_ist_stack(64);
+    // Boot fallback for Ring 3 -> Ring 0 transitions before the first reschedule
+    // updates `privilege_stack_table[0]` to the running task's kernel stack. After
+    // tasks start running, this value is overwritten on every context switch.
+    tss.privilege_stack_table[0] = allocate_ist_stack(4);
     tss
 }
 
@@ -38,13 +41,17 @@ pub struct Selectors {
     pub user_data: SegmentSelector,
 }
 
-pub fn create_gdt_and_tss() -> (GlobalDescriptorTable, Selectors) {
+pub fn create_gdt_and_tss() -> (GlobalDescriptorTable, Selectors, *mut TaskStateSegment) {
     let mut gdt = GlobalDescriptorTable::new();
     let kernel_code = gdt.append(Descriptor::kernel_code_segment());
     let kernel_data = gdt.append(Descriptor::kernel_data_segment());
 
-    let tss = Box::leak(Box::new(create_tss()));
-    let tss = gdt.append(Descriptor::tss_segment(tss));
+    let tss_ptr: *mut TaskStateSegment = Box::into_raw(Box::new(create_tss()));
+    // Safety: tss_ptr is a freshly leaked allocation, so it is non-null and lives
+    // for 'static. Subsequent writes through tss_ptr (per-task RSP0 updates) are
+    // serialized on a single CPU's reschedule path.
+    let tss_static: &'static TaskStateSegment = unsafe { &*tss_ptr };
+    let tss = gdt.append(Descriptor::tss_segment(tss_static));
     let mut user_code = gdt.append(Descriptor::user_code_segment());
     user_code.set_rpl(PrivilegeLevel::Ring3);
     let mut user_data = gdt.append(Descriptor::user_data_segment());
@@ -58,5 +65,6 @@ pub fn create_gdt_and_tss() -> (GlobalDescriptorTable, Selectors) {
             user_code,
             user_data,
         },
+        tss_ptr,
     )
 }

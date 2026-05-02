@@ -17,7 +17,7 @@ use crate::UsizeExt;
 use crate::arch::gdt;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::mem::MemoryRegion;
-use crate::mcore::mtask::task::FxArea;
+use crate::mcore::mtask::task::{FxArea, ShouldTerminate};
 use crate::mem::memapi::LowerHalfMemoryApi;
 use crate::syscall::dispatch_syscall;
 
@@ -80,7 +80,7 @@ pub fn create_idt() -> InterruptDescriptorTable {
                 extern "x86-interrupt" fn(InterruptStackFrame),
             >(syscall_handler as *mut fn()))
             .set_privilege_level(PrivilegeLevel::Ring3)
-            .disable_interrupts(true);
+            .disable_interrupts(false);
     }
 
     idt
@@ -230,7 +230,7 @@ extern "x86-interrupt" fn page_fault_handler(
                     // FIXME: once we have signals, trigger a SIGSEGV here
 
                     // ...in which case we mark the task for termination...
-                    task.set_should_terminate(true);
+                    task.set_should_terminate(ShouldTerminate::Yes);
                     // ...and halt, waiting for the scheduler to terminate the task
                     interrupts::enable();
                     loop {
@@ -269,7 +269,7 @@ extern "x86-interrupt" fn page_fault_handler(
                         // TODO: refactor the whole page fault handler into a separate crate
 
                         // FIXME: once we have signals, trigger a SIGSEGV here
-                        task.set_should_terminate(true);
+                        task.set_should_terminate(ShouldTerminate::Yes);
                         interrupts::enable();
                         loop {
                             hlt();

@@ -2,9 +2,11 @@ use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 
 use spin::Mutex;
+use x86_64::VirtAddr;
 use x86_64::registers::model_specific::KernelGsBase;
 use x86_64::structures::gdt::GlobalDescriptorTable;
 use x86_64::structures::idt::InterruptDescriptorTable;
+use x86_64::structures::tss::TaskStateSegment;
 
 use crate::arch::gdt::Selectors;
 use crate::mcore::lapic::Lapic;
@@ -22,6 +24,7 @@ pub struct ExecutionContext {
     _gdt: &'static GlobalDescriptorTable,
     sel: Selectors,
     _idt: &'static InterruptDescriptorTable,
+    tss: *mut TaskStateSegment,
 
     scheduler: UnsafeCell<Scheduler>,
 }
@@ -32,6 +35,7 @@ impl ExecutionContext {
         gdt: &'static GlobalDescriptorTable,
         sel: Selectors,
         idt: &'static InterruptDescriptorTable,
+        tss: *mut TaskStateSegment,
         lapic: Lapic,
     ) -> Self {
         ExecutionContext {
@@ -41,7 +45,24 @@ impl ExecutionContext {
             _gdt: gdt,
             sel,
             _idt: idt,
+            tss,
             scheduler: UnsafeCell::new(Scheduler::new_cpu_local()),
+        }
+    }
+
+    /// Set the kernel stack pointer that the CPU will load into RSP on a Ring 3
+    /// to Ring 0 privilege transition (e.g. on `int 0x80` from userspace).
+    ///
+    /// Must be updated on every context switch so each userspace task enters
+    /// the kernel on its own per-task kernel stack rather than a shared one.
+    pub fn set_kernel_stack(&self, top: VirtAddr) {
+        // Safety: `tss` was obtained from a freshly leaked Box in
+        // `create_gdt_and_tss` and is therefore valid for 'static. The TSS is
+        // only ever written by this CPU's reschedule path (which holds the
+        // scheduler mutably and runs with interrupts disabled), so there are
+        // no concurrent accesses.
+        unsafe {
+            (*self.tss).privilege_stack_table[0] = top;
         }
     }
 

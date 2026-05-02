@@ -128,6 +128,13 @@ impl HigherHalfStack {
         self.rsp
     }
 
+    /// The address one past the highest mapped byte of the stack, i.e. the
+    /// value to load into RSP on a fresh entry. Use this for `TSS.RSP0`.
+    #[must_use]
+    pub fn top(&self) -> VirtAddr {
+        self.mapped_segment.start + self.mapped_segment.len
+    }
+
     /// Returns the segment of the guard page, which is the lowest page of the stack segment.
     #[must_use]
     pub fn guard_page(&self) -> Segment {

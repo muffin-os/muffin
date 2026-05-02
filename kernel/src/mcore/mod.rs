@@ -66,7 +66,7 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
     }
 
     // set up the GDT
-    let (gdt, sel) = create_gdt_and_tss();
+    let (gdt, sel, tss) = create_gdt_and_tss();
     let gdt = Box::leak(Box::new(gdt));
     gdt.load();
     unsafe {
@@ -85,7 +85,7 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
 
     // create the execution context for the CPU and store it
     {
-        let ctx = ExecutionContext::new(cpu, gdt, sel, idt, lapic);
+        let ctx = ExecutionContext::new(cpu, gdt, sel, idt, tss, lapic);
         let addr = VirtAddr::from_ptr(Box::leak(Box::new(ctx)));
         KernelGsBase::write(addr);
     }

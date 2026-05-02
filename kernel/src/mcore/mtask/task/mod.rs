@@ -156,7 +156,7 @@ impl Task {
             let _ = task.tls.write().take();
             let _ = task.ustack.write().take();
 
-            task.set_should_terminate(true);
+            task.set_should_terminate(ShouldTerminate::Yes);
         }
 
         loop {
@@ -207,12 +207,16 @@ impl Task {
         &self.process
     }
 
-    pub fn should_terminate(&self) -> bool {
-        self.should_terminate.load(Relaxed)
+    pub fn should_terminate(&self) -> ShouldTerminate {
+        if self.should_terminate.load(Relaxed) {
+            ShouldTerminate::Yes
+        } else {
+            ShouldTerminate::No
+        }
     }
 
-    pub fn set_should_terminate(&self, should_terminate: bool) {
-        self.should_terminate.store(should_terminate, Relaxed);
+    pub fn set_should_terminate(&self, should_terminate: ShouldTerminate) {
+        self.should_terminate.store(should_terminate.yes(), Relaxed);
     }
 
     pub fn state(&self) -> State {

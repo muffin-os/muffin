@@ -43,5 +43,5 @@ x86_64.workspace = true
 zerocopy.workspace = true
 
 [features]
-default = []
+default = [ "backtrace" ]
 backtrace = []
