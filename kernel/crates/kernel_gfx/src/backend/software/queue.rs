@@ -46,8 +46,10 @@ impl SoftQueue {
                 break;
             }
             let input: Vec<f32> = cmd.raw_data[start..end]
-                .chunks_exact(4)
-                .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_ne_bytes(*b))
                 .collect();
             let mut output = vec![0f32; cmd.output_count];
             (cmd.vertex_fn)(&input, &mut output);

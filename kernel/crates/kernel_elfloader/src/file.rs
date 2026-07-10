@@ -379,8 +379,10 @@ pub struct SymtabSection<'a> {
 impl SymtabSection<'_> {
     pub fn symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.data
-            .chunks_exact(size_of::<Symbol>())
-            .map(Symbol::try_ref_from_bytes)
+            .as_chunks::<{ size_of::<Symbol>() }>()
+            .0
+            .iter()
+            .map(|v| Symbol::try_ref_from_bytes(&v[..]))
             .map(Result::unwrap)
     }
 }
