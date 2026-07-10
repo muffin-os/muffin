@@ -1570,8 +1570,7 @@ dependencies = [
 [[package]]
 name = "x86_64"
 version = "0.15.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7841fa0098ceb15c567d93d3fae292c49e10a7662b4936d5f6a9728594555ba"
+source = "git+https://github.com/tpdenk/x86_64?branch=master#4bc97dadf4481e6d8ce858c0ca6413e351322c12"
 dependencies = [
  "bit_field",
  "bitflags 2.11.0",
