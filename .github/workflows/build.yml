@@ -6,6 +6,11 @@ on:
   push:
   #  pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      use_latest_nightly:
+        type: boolean
+        default: false
   schedule:
     - cron: 0 5,17 * * *
 
@@ -19,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Use latest nightly
+        if: ${{ inputs.use_latest_nightly }}
+        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
         with:
@@ -46,6 +54,9 @@ jobs:
         strategy: [ debug, release ]
     steps:
       - uses: actions/checkout@v4
+      - name: Use latest nightly
+        if: ${{ inputs.use_latest_nightly }}
+        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
         with:
@@ -78,6 +89,9 @@ jobs:
       matrix: ${{fromJson(needs.prepare-miri.outputs.matrix)}}
     steps:
       - uses: actions/checkout@v4
+      - name: Use latest nightly
+        if: ${{ inputs.use_latest_nightly }}
+        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
         with:
@@ -99,6 +113,9 @@ jobs:
       - miri
     steps:
       - uses: actions/checkout@v4
+      - name: Use latest nightly
+        if: ${{ inputs.use_latest_nightly }}
+        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
         with:

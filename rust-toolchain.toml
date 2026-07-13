@@ -1,5 +1,5 @@
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-07-11"
 components = ["rustfmt", "clippy", "llvm-tools-preview", "rust-src", "miri"]
 profile = "default"
 targets = ["x86_64-unknown-none"]
