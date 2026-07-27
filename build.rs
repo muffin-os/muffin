@@ -11,6 +11,7 @@ fn main() {
     println!("cargo:rerun-if-changed=limine.conf");
 
     let limine_dir = limine();
+    println!("cargo:rustc-env=LIMINE_DIR={}", limine_dir.display());
 
     let kernel = PathBuf::from(
         std::env::var_os("CARGO_BIN_FILE_KERNEL_kernel")

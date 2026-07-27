@@ -12,11 +12,13 @@ use x86_64::registers::model_specific::FsBase;
 
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
+use crate::mcore::mtask::scheduler::stopped::StoppedTasks;
 use crate::mcore::mtask::scheduler::switch::switch_impl;
 use crate::mcore::mtask::task::{ShouldTerminate, Task};
 
 pub mod cleanup;
 pub mod global;
+pub mod stopped;
 mod switch;
 
 #[derive(Debug)]
@@ -61,7 +63,7 @@ impl Scheduler {
             if terminate.yes() {
                 TaskCleanup::enqueue(zombie_task);
             } else {
-                GlobalTaskQueue::enqueue(zombie_task);
+                Self::route_runnable(zombie_task);
             }
         }
 
@@ -117,6 +119,30 @@ impl Scheduler {
                 *self.current_task.last_stack_ptr(),
                 cr3_value,
             );
+        }
+    }
+
+    /// Routes a non-terminating outgoing task either to the stopped-task
+    /// parking lot (when its process is stopped by a signal) or back to the
+    /// global run queue.
+    ///
+    /// On any contention the task goes back to the run queue. That is safe because
+    /// the stopped flag persists and the task re-parks on a later tick.
+    fn route_runnable(task: Pin<Box<Task>>) {
+        // Keep the signals read guard alive across the park insert. A
+        // concurrent SIGCONT resumes under the signals write guard,
+        // so it either sees the task parked or waits until parking finished.
+        // No lost wakeup.
+        let process = task.process().clone();
+        match process.signals().try_read() {
+            Some(guard) if guard.stopped() => {
+                let pid = process.pid();
+                if let Err(task) = StoppedTasks::try_park(pid, task) {
+                    drop(guard);
+                    GlobalTaskQueue::enqueue(task);
+                }
+            }
+            _ => GlobalTaskQueue::enqueue(task),
         }
     }
 

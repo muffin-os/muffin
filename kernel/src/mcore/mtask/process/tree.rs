@@ -22,6 +22,12 @@ pub struct ProcessTree {
     pub processes: BTreeMap<ProcessId, Arc<Process>>,
 }
 
+impl ProcessTree {
+    pub fn all(&self) -> impl Iterator<Item = &Arc<Process>> {
+        self.processes.values()
+    }
+}
+
 pub struct Children<'a> {
     guard: RwLockReadGuard<'a, ProcessTree>,
     pid: ProcessId,
