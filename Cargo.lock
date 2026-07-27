@@ -374,10 +374,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "exit-code-test"
+version = "0.1.0"
+dependencies = [
+ "minilib",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "file-read-test"
+version = "0.1.0"
+dependencies = [
+ "minilib",
+]
 
 [[package]]
 name = "file_structure"
@@ -803,16 +817,26 @@ version = "0.1.0"
 source = "git+https://github.com/tsatke/mkfs#24c1cfba44f360c8d4936f08cee49a34a5e4f916"
 
 [[package]]
+name = "mmap-test"
+version = "0.1.0"
+dependencies = [
+ "minilib",
+]
+
+[[package]]
 name = "muffinos"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "exit-code-test",
+ "file-read-test",
  "file_structure",
  "init",
  "kernel",
+ "mmap-test",
  "ovmf-prebuilt",
  "signals-test-init",
- "signals-test-kernel",
+ "test-kernel",
  "test-support",
 ]
 
@@ -1096,20 +1120,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "signals-test-kernel"
-version = "0.1.0"
-dependencies = [
- "kernel",
- "kernel_device",
- "kernel_vfs",
- "log",
- "mkfs-ext2",
- "mkfs-filesystem",
- "spin",
- "x86_64",
-]
-
-[[package]]
 name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1165,6 +1175,20 @@ dependencies = [
  "filetime",
  "libc",
  "xattr",
+]
+
+[[package]]
+name = "test-kernel"
+version = "0.1.0"
+dependencies = [
+ "kernel",
+ "kernel_device",
+ "kernel_vfs",
+ "log",
+ "mkfs-ext2",
+ "mkfs-filesystem",
+ "spin",
+ "x86_64",
 ]
 
 [[package]]

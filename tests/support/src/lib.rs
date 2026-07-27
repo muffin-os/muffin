@@ -11,6 +11,10 @@ use std::fs::{copy, create_dir_all, remove_file};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+pub mod harness;
+
+pub use harness::{HostEnv, KernelTest, Outcome, RunReport, SpawnedProcess, qemu_available};
+
 /// A single file to place on the ext2 disk image, keyed by its path
 /// relative to the disk root (e.g. `"bin/init"`).
 pub struct DiskFile {

@@ -14,8 +14,11 @@ kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
 init = { path = "userspace/init", artifact = "bin", target = "x86_64-unknown-none" }
 
 [dev-dependencies]
-signals-test-kernel = { path = "tests/kernels/signals/kernel", artifact = "bin", target = "x86_64-unknown-none" }
-signals-test-init = { path = "tests/kernels/signals/init", artifact = "bin", target = "x86_64-unknown-none" }
+signals-test-init = { path = "tests/bins/signals-init", artifact = "bin", target = "x86_64-unknown-none" }
+test-kernel = { path = "tests/kernel", artifact = "bin", target = "x86_64-unknown-none" }
+mmap-test = { path = "tests/bins/mmap", artifact = "bin", target = "x86_64-unknown-none" }
+file-read-test = { path = "tests/bins/file-read", artifact = "bin", target = "x86_64-unknown-none" }
+exit-code-test = { path = "tests/bins/exit-code", artifact = "bin", target = "x86_64-unknown-none" }
 test-support = { path = "tests/support" }
 
 [workspace]
@@ -35,8 +38,11 @@ members = [
   "userspace/file_structure",
   "userspace/init",
   "userspace/minilib",
-  "tests/kernels/signals/kernel",
-  "tests/kernels/signals/init",
+  "tests/kernel",
+  "tests/bins/signals-init",
+  "tests/bins/mmap",
+  "tests/bins/file-read",
+  "tests/bins/exit-code",
   "tests/support",
 ]
 default-members = [
