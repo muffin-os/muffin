@@ -7,10 +7,13 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::fmt::{Debug, Formatter};
 use core::ptr;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use conquer_once::spin::OnceCell;
+use kernel_abi::ProcessId;
 use kernel_elfloader::{ElfFile, ElfLoader};
 use kernel_memapi::{Allocation, Guarded, Location, MemoryApi, UserAccessible};
+use kernel_syscall::signal::SignalState;
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
@@ -29,23 +32,25 @@ use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlag
 use crate::mcore::mtask::process::mem::MemoryRegions;
 use crate::mcore::mtask::process::telemetry::Telemetry;
 use crate::mcore::mtask::process::tree::process_tree;
+use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::{HigherHalfStack, StackAllocationError, Task};
 use crate::mem::address_space::AddressSpace;
 use crate::mem::memapi::{Executable, LowerHalfAllocation, LowerHalfMemoryApi};
+use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
 pub mod fd;
-mod id;
-pub use id::*;
 pub mod mem;
 pub mod telemetry;
 
-use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
-use crate::mem::virt::VirtualMemoryAllocator;
-
-mod tree;
+pub(crate) mod tree;
 
 static ROOT_PROCESS: OnceCell<Arc<Process>> = OnceCell::uninit();
+
+pub fn new_process_id() -> ProcessId {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    ProcessId::from(COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 pub struct Process {
     pid: ProcessId,
@@ -64,13 +69,15 @@ pub struct Process {
 
     memory_regions: MemoryRegions,
 
+    signals: RwLock<SignalState>,
+
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
 }
 
 impl Process {
     pub fn root() -> &'static Arc<Process> {
         ROOT_PROCESS.get_or_init(|| {
-            let pid = ProcessId::new();
+            let pid = new_process_id();
             let root = Arc::new(Self {
                 pid,
                 name: "root".to_string(),
@@ -85,6 +92,7 @@ impl Process {
                 ))),
                 telemetry: Telemetry::default(),
                 memory_regions: MemoryRegions::new(),
+                signals: RwLock::new(SignalState::default()),
                 file_descriptors: RwLock::new(BTreeMap::new()),
             });
             process_tree().write().processes.insert(pid, root.clone());
@@ -97,7 +105,7 @@ impl Process {
         name: String,
         executable_path: Option<impl AsRef<AbsolutePath>>,
     ) -> Arc<Self> {
-        let pid = ProcessId::new();
+        let pid = new_process_id();
         let parent_pid = parent.pid;
         let address_space = AddressSpace::new();
 
@@ -115,6 +123,7 @@ impl Process {
             ))),
             telemetry: Telemetry::default(),
             memory_regions: MemoryRegions::new(),
+            signals: RwLock::new(SignalState::default()),
             file_descriptors: RwLock::new(BTreeMap::new()),
         };
 
@@ -196,6 +205,10 @@ impl Process {
 
     pub fn telemetry(&self) -> &Telemetry {
         &self.telemetry
+    }
+
+    pub fn signals(&self) -> &RwLock<SignalState> {
+        &self.signals
     }
 }
 

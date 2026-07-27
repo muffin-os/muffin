@@ -18,6 +18,7 @@ use crate::limine::MP_REQUEST;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::cleanup::TaskCleanup;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
+use crate::mcore::mtask::scheduler::stopped::StoppedTasks;
 use crate::sse;
 
 pub mod context;
@@ -43,6 +44,7 @@ pub fn init() {
     });
 
     GlobalTaskQueue::init();
+    StoppedTasks::init();
 
     // then call the `cpu_init` function on each CPU (no-op on bootstrap CPU)
     resp.cpus().iter().skip(1).for_each(|cpu| {

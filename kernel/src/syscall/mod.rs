@@ -2,14 +2,20 @@ use core::ops::Neg;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use access::KernelAccess;
-use kernel_abi::{EINVAL, Errno, syscall_name};
-use kernel_syscall::access::FileAccess;
+use kernel_abi::{
+    EINVAL, ESRCH, Errno, ProcessId, SigAction, SigMaskHow, SigSet, Signal, syscall_name,
+};
+use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
+use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::unistd::{sys_getcwd, sys_read, sys_write};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
-use log::{error, trace};
+use log::{debug, error, trace};
 use x86_64::instructions::hlt;
+
+use crate::mcore::context::ExecutionContext;
+use crate::mcore::mtask::task::Task;
 
 mod access;
 
@@ -34,6 +40,12 @@ pub fn dispatch_syscall(
         kernel_abi::SYS_OPEN => dispatch_sys_open(arg1, arg2, arg3, arg4),
         kernel_abi::SYS_READ => dispatch_sys_read(arg1, arg2, arg3),
         kernel_abi::SYS_WRITE => dispatch_sys_write(arg1, arg2, arg3),
+        kernel_abi::SYS_EXIT => dispatch_sys_exit(arg1),
+        kernel_abi::SYS_GETPID => dispatch_sys_getpid(),
+        kernel_abi::SYS_KILL => dispatch_sys_kill(arg1, arg2),
+        kernel_abi::SYS_SIGACTION => dispatch_sys_sigaction(arg1, arg2, arg3),
+        kernel_abi::SYS_SIGPROCMASK => dispatch_sys_sigprocmask(arg1, arg2, arg3),
+        kernel_abi::SYS_SIGPENDING => dispatch_sys_sigpending(arg1),
         _ => {
             error!("unimplemented syscall: {} ({n})", syscall_name(n));
             loop {
@@ -52,6 +64,116 @@ pub fn dispatch_syscall(
             Into::<isize>::into(e).neg()
         }
     }
+}
+
+fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
+    let ctx = ExecutionContext::load();
+    debug!("process {} exit with code {code}", ctx.pid());
+    Task::exit();
+    // Task::exit never returns, it parks the task until the scheduler reaps it.
+    Ok(0)
+}
+
+fn dispatch_sys_getpid() -> Result<usize, Errno> {
+    Ok(ExecutionContext::load().pid().as_u64() as usize)
+}
+
+fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    // POSIX pid encoding: > 0 targets that process, 0 the caller's process
+    // group (sys_kill substitutes the caller's pgid for the root id), -1
+    // broadcasts, < -1 targets the group -pid.
+    let target = match pid as isize {
+        1.. => SignalTarget::SpecificProcess(ProcessId::from(pid as u64)),
+        0 => SignalTarget::ProcessGroup(ProcessId::from(0_u64)),
+        -1 => SignalTarget::BroadcastAll,
+        v => SignalTarget::ProcessGroup(ProcessId::from(v.unsigned_abs() as u64)),
+    };
+
+    if signo as i32 == 0 {
+        // POSIX existence probe: no signal is sent, only the target is resolved.
+        let exists = match target {
+            SignalTarget::SpecificProcess(pid) => cx.process_by_id(pid).is_some(),
+            SignalTarget::ProcessGroup(pgid) => {
+                let effective = if pgid.is_root() {
+                    ExecutionContext::load().pid()
+                } else {
+                    pgid
+                };
+                cx.processes_in_group(effective).next().is_some()
+            }
+            SignalTarget::BroadcastAll => true,
+        };
+        return if exists { Ok(0) } else { Err(ESRCH) };
+    }
+
+    let signal = Signal::try_from(signo as i32)?;
+    sys_kill(&cx, target, signal)
+}
+
+fn dispatch_sys_sigaction(signo: usize, new: usize, old: usize) -> Result<usize, Errno> {
+    let signal = Signal::try_from(signo as i32)?;
+
+    let new_action = if new == 0 {
+        None
+    } else {
+        let ptr = unsafe { UserspacePtr::<SigAction>::try_from_usize(new)? };
+        ptr.validate_range(size_of::<SigAction>())?;
+        // Safety: range-validated lower-half pointer, read by value
+        Some(unsafe { ptr.as_ptr().read_unaligned() })
+    };
+
+    let process = ExecutionContext::load().current_process();
+    let old_action = process.signals().write().sigaction(signal, new_action)?;
+
+    if old != 0 {
+        let mut ptr = unsafe { UserspaceMutPtr::<SigAction>::try_from_usize(old)? };
+        ptr.validate_range(size_of::<SigAction>())?;
+        // Safety: range-validated lower-half pointer, written by value
+        unsafe { ptr.as_mut_ptr().write_unaligned(old_action) };
+    }
+    Ok(0)
+}
+
+fn dispatch_sys_sigprocmask(how: usize, set: usize, oldset: usize) -> Result<usize, Errno> {
+    let how = SigMaskHow::try_from(how)?;
+
+    let new_set = if set == 0 {
+        None
+    } else {
+        let ptr = unsafe { UserspacePtr::<SigSet>::try_from_usize(set)? };
+        ptr.validate_range(size_of::<SigSet>())?;
+        // Safety: range-validated lower-half pointer, read by value
+        Some(unsafe { ptr.as_ptr().read_unaligned() })
+    };
+
+    let process = ExecutionContext::load().current_process();
+    let old_mask = process.signals().write().sigprocmask(how, new_set)?;
+
+    if oldset != 0 {
+        let mut ptr = unsafe { UserspaceMutPtr::<SigSet>::try_from_usize(oldset)? };
+        ptr.validate_range(size_of::<SigSet>())?;
+        // Safety: range-validated lower-half pointer, written by value
+        unsafe { ptr.as_mut_ptr().write_unaligned(old_mask) };
+    }
+    Ok(0)
+}
+
+fn dispatch_sys_sigpending(out: usize) -> Result<usize, Errno> {
+    if out == 0 {
+        return Err(EINVAL);
+    }
+    let pending = ExecutionContext::load()
+        .current_process()
+        .signals()
+        .read()
+        .sigpending();
+    let mut ptr = unsafe { UserspaceMutPtr::<SigSet>::try_from_usize(out)? };
+    ptr.validate_range(size_of::<SigSet>())?;
+    // Safety: range-validated lower-half pointer, written by value
+    unsafe { ptr.as_mut_ptr().write_unaligned(pending) };
+    Ok(0)
 }
 
 unsafe fn slice_from_ptr_and_len<'a, T>(ptr: usize, len: usize) -> Result<&'a [T], Errno> {

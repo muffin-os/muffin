@@ -1,6 +1,7 @@
 use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 
+use kernel_abi::ProcessId;
 use spin::Mutex;
 use x86_64::VirtAddr;
 use x86_64::registers::model_specific::KernelGsBase;
@@ -10,7 +11,7 @@ use x86_64::structures::tss::TaskStateSegment;
 
 use crate::arch::gdt::Selectors;
 use crate::mcore::lapic::Lapic;
-use crate::mcore::mtask::process::{Process, ProcessId};
+use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::scheduler::Scheduler;
 use crate::mcore::mtask::task::Task;
 

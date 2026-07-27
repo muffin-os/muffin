@@ -54,4 +54,10 @@ n! {
     SYS_LSEEK = 39,
     SYS_CLOSE = 40,
     SYS_MMAP = 41,
+    SYS_KILL = 42,
+    SYS_SIGACTION = 43,
+    SYS_SIGPROCMASK = 44,
+    SYS_SIGPENDING = 45,
+    SYS_SIGRETURN = 46,
+    SYS_GETPID = 47,
 }

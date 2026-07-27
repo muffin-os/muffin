@@ -14,6 +14,7 @@ use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlag
 use crate::mcore::mtask::task::Task;
 
 mod mem;
+mod signal;
 
 pub struct KernelAccess<'a> {
     _task: &'a Task,
