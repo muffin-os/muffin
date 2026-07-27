@@ -4,9 +4,9 @@ extern crate alloc;
 
 use alloc::collections::BTreeSet;
 
-use log::debug;
 pub use segment::*;
 use thiserror::Error;
+use tracing::debug;
 use x86_64::VirtAddr;
 
 mod segment;

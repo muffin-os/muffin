@@ -5,16 +5,16 @@
 //! (including a `/spawn` manifest of absolute paths), boots the shared
 //! `test-kernel` under QEMU, and collects the serial transcript. The kernel
 //! spawns every manifest entry as its own process, so a single boot can fan
-//! out into several processes whose exit codes are read back from the kernel's
-//! own log lines.
+//! out into several processes whose outcomes the test kernel prints directly.
 //!
-//! The wire contract with `test-kernel` is four serial lines. Spawns are
+//! The wire contract with `test-kernel` is four serial lines the test kernel
+//! prints itself, so it is independent of the active log filter. Spawns are
 //! announced by `test-kernel: spawned {path} pid={N}` and closed by
 //! `test-kernel: spawn complete count={N}`. Process termination surfaces as
-//! either the kernel's `process {pid} exit with code {code}` debug line or the
-//! `terminating process on signal {NAME} (pid {pid})` info line. Every parser
-//! below tolerates a leading log prefix (timestamp, level, target) by anchoring
-//! on a substring inside the payload rather than matching from the start.
+//! `test-kernel: outcome pid={N} exit={code}` or
+//! `test-kernel: outcome pid={N} signal={NAME}`. Every parser below tolerates a
+//! leading log prefix (timestamp, level, target) by anchoring on a substring
+//! inside the payload rather than matching from the start.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -479,23 +479,18 @@ fn parse_spawn_complete(line: &str) -> Option<u64> {
         .ok()
 }
 
-/// Parses `process {pid} exit with code {code}` into `(pid, code)`.
+/// Parses `test-kernel: outcome pid={N} exit={code}` into `(pid, code)`.
 fn parse_exit(line: &str) -> Option<(u64, u64)> {
-    let anchor = " exit with code ";
-    let idx = line.find(anchor)?;
-    let head = anchor_after(&line[..idx], "process ")?;
-    let pid = head.trim().parse().ok()?;
-    let code = line[idx + anchor.len()..].trim().parse().ok()?;
-    Some((pid, code))
+    let rest = anchor_after(line, "test-kernel: outcome pid=")?;
+    let (pid, code) = rest.split_once(" exit=")?;
+    Some((pid.trim().parse().ok()?, code.trim().parse().ok()?))
 }
 
-/// Parses `terminating process on signal {NAME} (pid {pid})` into `(name, pid)`.
+/// Parses `test-kernel: outcome pid={N} signal={NAME}` into `(name, pid)`.
 fn parse_signal(line: &str) -> Option<(String, u64)> {
-    let rest = anchor_after(line, "terminating process on signal ")?;
-    let name = rest.split_whitespace().next()?.to_owned();
-    let pid_part = anchor_after(rest, "(pid ")?;
-    let pid = pid_part.trim_end_matches(')').trim().parse().ok()?;
-    Some((name, pid))
+    let rest = anchor_after(line, "test-kernel: outcome pid=")?;
+    let (pid, name) = rest.split_once(" signal=")?;
+    Some((name.trim().to_owned(), pid.trim().parse().ok()?))
 }
 
 /// Returns the text following `anchor`, or `None` if `anchor` is absent. Used to

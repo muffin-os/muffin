@@ -8,7 +8,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use kernel_abi::Signal;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use kernel_syscall::signal::AsyncAction;
-use log::{error, warn};
+use tracing::{error, warn};
 use x86_64::PrivilegeLevel;
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::Cr2;

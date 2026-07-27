@@ -47,7 +47,7 @@ impl AddressSpaceMapper {
         #[cfg(debug_assertions)]
         {
             if !flags.contains(PageTableFlags::PRESENT) {
-                ::log::warn!(
+                tracing::warn!(
                     "mapping {:p} to {:p} without PRESENT flag",
                     page.start_address(),
                     frame.start_address()

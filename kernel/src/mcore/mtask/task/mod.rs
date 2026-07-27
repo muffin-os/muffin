@@ -10,8 +10,8 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use cordyceps::Linked;
 use cordyceps::mpsc_queue::Links;
-use log::trace;
 use spin::RwLock;
+use tracing::trace;
 use x86_64::instructions::hlt;
 
 use crate::U64Ext;
@@ -145,7 +145,7 @@ impl Task {
 
     pub(crate) extern "C" fn exit() {
         let task = ExecutionContext::load().current_task();
-        trace!("exiting task {}", task.name());
+        trace!(name = %task.name(), "exiting task");
 
         unsafe {
             task.ustack.force_write_unlock();

@@ -4,7 +4,7 @@ use core::pin::Pin;
 use core::ptr;
 
 use conquer_once::spin::OnceCell;
-use log::{debug, info};
+use tracing::{debug, info};
 use x86_64::instructions::hlt;
 
 use crate::mcore::mtask::process::Process;
@@ -29,7 +29,7 @@ impl TaskCleanup {
 
         let cleanup_task = Task::create_new(Process::root(), Self::cleanup_tasks, ptr::null_mut())
             .expect("should be able to create cleanup task");
-        info!("cleanup task created with id {}", cleanup_task.id());
+        info!(id = %cleanup_task.id(), "cleanup task created");
         GlobalTaskQueue::enqueue(Box::pin(cleanup_task));
     }
 
@@ -45,7 +45,7 @@ impl TaskCleanup {
     pub(in crate::mcore) extern "C" fn cleanup_tasks(_: *mut c_void) {
         loop {
             while let Some(task) = TaskCleanup::dequeue() {
-                debug!("dropping task {}", task.id());
+                debug!(id = %task.id(), "dropping task");
             }
             hlt();
         }

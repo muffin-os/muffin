@@ -4,7 +4,7 @@ use core::arch::x86_64::{_fxrstor64, _fxsave64};
 use kernel_abi::{SigAction, SigSet, Signal};
 use kernel_syscall::UserspaceMutPtr;
 use kernel_syscall::signal::Disposition;
-use log::info;
+use tracing::info;
 use x86_64::VirtAddr;
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::{Cr0, Cr0Flags};
@@ -13,6 +13,7 @@ use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::arch::idt::SyscallRegisters;
 use crate::mcore::context::ExecutionContext;
+use crate::mcore::mtask::process::ExitOutcome;
 use crate::mcore::mtask::task::Task;
 
 /// Marker written into every signal frame so `sigreturn` can reject a frame the
@@ -257,7 +258,10 @@ pub fn terminate_current(signo: Signal) -> ! {
     if !interrupts::are_enabled() {
         interrupts::enable();
     }
-    let pid = ExecutionContext::load().pid();
+    let ctx = ExecutionContext::load();
+    let pid = ctx.pid();
+    ctx.current_process()
+        .set_exit_outcome(ExitOutcome::Signaled(signo));
     info!("terminating process on signal {} (pid {pid})", signo.name());
     Task::exit();
     loop {

@@ -6,10 +6,10 @@ use kernel_syscall::access::{
     Capability, Identity, PermissionAccess, ProcessAccess, ProcessesAccess, SignalAccess,
 };
 use kernel_syscall::signal::Disposition;
-use log::info;
+use tracing::info;
 
-use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::process::tree::process_tree;
+use crate::mcore::mtask::process::{ExitOutcome, Process};
 use crate::mcore::mtask::scheduler::stopped::StoppedTasks;
 use crate::syscall::access::KernelAccess;
 
@@ -77,6 +77,7 @@ impl SignalAccess for KernelAccess<'_> {
                     "terminating process on signal {} (pid {pid})",
                     info.signo.name()
                 );
+                process.set_exit_outcome(ExitOutcome::Signaled(info.signo));
             }
             Disposition::Ignore | Disposition::Handler(_) => {}
         }

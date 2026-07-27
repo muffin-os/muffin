@@ -2,9 +2,9 @@ use core::fmt::{Debug, Formatter};
 
 use conquer_once::spin::OnceCell;
 use limine::memory_map::EntryType;
-use log::{debug, info};
 use mapper::AddressSpaceMapper;
 use spin::RwLock;
+use tracing::{debug, info};
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::mapper::{
     FlagUpdateError, MapToError, MapperAllSizes, PageTableFrameMapping, TranslateResult,

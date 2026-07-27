@@ -10,6 +10,6 @@ kernel_device = { path = "../../kernel/crates/kernel_device" }
 
 mkfs-ext2.workspace = true
 mkfs-filesystem.workspace = true
-log.workspace = true
+tracing.workspace = true
 spin.workspace = true
 x86_64.workspace = true

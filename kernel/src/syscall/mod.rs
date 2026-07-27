@@ -11,11 +11,12 @@ use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::unistd::{sys_getcwd, sys_read, sys_write};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
-use log::{debug, error, trace};
+use tracing::{debug, error, trace};
 use x86_64::VirtAddr;
 use x86_64::instructions::hlt;
 
 use crate::mcore::context::ExecutionContext;
+use crate::mcore::mtask::process::ExitOutcome;
 use crate::mcore::mtask::task::Task;
 
 mod access;
@@ -70,6 +71,8 @@ pub fn dispatch_syscall(
 fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
     let ctx = ExecutionContext::load();
     debug!("process {} exit with code {code}", ctx.pid());
+    ctx.current_process()
+        .set_exit_outcome(ExitOutcome::Exited(code));
     Task::exit();
     // Task::exit never returns, it parks the task until the scheduler reaps it.
     Ok(0)

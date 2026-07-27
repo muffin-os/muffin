@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 kernel_memapi = { path = "../kernel_memapi" }
 
-log.workspace = true
 spin.workspace = true
 thiserror.workspace = true
 

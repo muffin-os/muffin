@@ -7,6 +7,5 @@ edition = "2024"
 kernel_device = { path = "../kernel_device" }
 kernel_vfs = { path = "../kernel_vfs" }
 
-log.workspace = true
 spin.workspace = true
 thiserror.workspace = true

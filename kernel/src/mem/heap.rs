@@ -1,8 +1,11 @@
+use core::alloc::{GlobalAlloc, Layout};
+use core::cell::UnsafeCell;
+use core::ptr::NonNull;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering::Relaxed;
 
 use conquer_once::spin::OnceCell;
-use log::info;
+use tracing::info;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::page::PageRangeInclusive;
 use x86_64::structures::paging::{Page, PageTableFlags, Size2MiB, Size4KiB};
@@ -66,8 +69,67 @@ impl HeapSizes {
     }
 }
 
+static MAIN_HEAP: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
+
+/// Size of the bootstrap heap used before the main heap is mapped.
+const BOOTSTRAP_HEAP_SIZE: usize = 16 * 1024;
+
+static BOOTSTRAP_HEAP: spin::Mutex<linked_list_allocator::Heap> =
+    spin::Mutex::new(linked_list_allocator::Heap::empty());
+
+/// Backing storage for the bootstrap heap.
+///
+/// The tracing global dispatch is registered before `mem::init`, and `Dispatch::new`
+/// performs one small `Arc` allocation. That allocation has to succeed before the
+/// main heap exists, so it is served from this static region.
+struct BootstrapBuffer(UnsafeCell<[u8; BOOTSTRAP_HEAP_SIZE]>);
+
+// Safety: access is serialized through the BOOTSTRAP_HEAP mutex.
+unsafe impl Sync for BootstrapBuffer {}
+
+static BOOTSTRAP_BUFFER: BootstrapBuffer =
+    BootstrapBuffer(UnsafeCell::new([0; BOOTSTRAP_HEAP_SIZE]));
+
 #[global_allocator]
-static ALLOCATOR: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
+static ALLOCATOR: KernelAllocator = KernelAllocator;
+
+struct KernelAllocator;
+
+impl KernelAllocator {
+    fn bootstrap_range() -> (usize, usize) {
+        let start = BOOTSTRAP_BUFFER.0.get().cast::<u8>() as usize;
+        (start, start + BOOTSTRAP_HEAP_SIZE)
+    }
+}
+
+unsafe impl GlobalAlloc for KernelAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if HEAP_INITIALIZED.load(Relaxed) {
+            return unsafe { MAIN_HEAP.alloc(layout) };
+        }
+
+        let mut heap = BOOTSTRAP_HEAP.lock();
+        if heap.size() == 0 {
+            // Safety: the buffer is a static region of exactly BOOTSTRAP_HEAP_SIZE bytes,
+            // initialized once under the mutex.
+            unsafe { heap.init(BOOTSTRAP_BUFFER.0.get().cast(), BOOTSTRAP_HEAP_SIZE) };
+        }
+        heap.allocate_first_fit(layout)
+            .map_or(core::ptr::null_mut(), NonNull::as_ptr)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let (start, end) = Self::bootstrap_range();
+        let addr = ptr as usize;
+        if addr >= start && addr < end {
+            if let Some(ptr) = NonNull::new(ptr) {
+                unsafe { BOOTSTRAP_HEAP.lock().deallocate(ptr, layout) };
+            }
+        } else {
+            unsafe { MAIN_HEAP.dealloc(ptr, layout) };
+        }
+    }
+}
 
 pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory_bytes: usize) {
     assert!(PhysicalMemory::is_initialized());
@@ -99,7 +161,7 @@ pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory_
         .expect("should be able to map heap");
 
     unsafe {
-        ALLOCATOR
+        MAIN_HEAP
             .lock()
             .init(HEAP_START.as_mut_ptr(), initial_heap_size);
     }
@@ -133,7 +195,7 @@ pub(in crate::mem) fn init_stage2() {
         .expect("should be able to map more heap");
 
     unsafe {
-        ALLOCATOR.lock().extend(total_heap_size - initial_heap_size);
+        MAIN_HEAP.lock().extend(total_heap_size - initial_heap_size);
     }
 }
 
@@ -146,19 +208,19 @@ impl Heap {
     }
 
     pub fn free() -> usize {
-        ALLOCATOR.lock().free()
+        MAIN_HEAP.lock().free()
     }
 
     pub fn used() -> usize {
-        ALLOCATOR.lock().used()
+        MAIN_HEAP.lock().used()
     }
 
     pub fn size() -> usize {
-        ALLOCATOR.lock().size()
+        MAIN_HEAP.lock().size()
     }
 
     pub fn bottom() -> VirtAddr {
-        VirtAddr::new(ALLOCATOR.lock().bottom() as u64)
+        VirtAddr::new(MAIN_HEAP.lock().bottom() as u64)
     }
 }
 

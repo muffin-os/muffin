@@ -17,9 +17,9 @@ use kernel_syscall::signal::SignalState;
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
-use log::debug;
 use spin::RwLock;
 use thiserror::Error;
+use tracing::debug;
 use x86_64::VirtAddr;
 use x86_64::registers::model_specific::FsBase;
 use x86_64::registers::rflags::RFlags;
@@ -52,6 +52,13 @@ pub fn new_process_id() -> ProcessId {
     ProcessId::from(COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
+/// How a process ended. Recorded once on the first terminating event.
+#[derive(Debug, Copy, Clone)]
+pub enum ExitOutcome {
+    Exited(usize),
+    Signaled(kernel_abi::Signal),
+}
+
 pub struct Process {
     pid: ProcessId,
     name: String,
@@ -72,6 +79,8 @@ pub struct Process {
     signals: RwLock<SignalState>,
 
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
+
+    exit_outcome: OnceCell<ExitOutcome>,
 }
 
 impl Process {
@@ -94,6 +103,7 @@ impl Process {
                 memory_regions: MemoryRegions::new(),
                 signals: RwLock::new(SignalState::default()),
                 file_descriptors: RwLock::new(BTreeMap::new()),
+                exit_outcome: OnceCell::uninit(),
             });
             process_tree().write().processes.insert(pid, root.clone());
             root
@@ -125,6 +135,7 @@ impl Process {
             memory_regions: MemoryRegions::new(),
             signals: RwLock::new(SignalState::default()),
             file_descriptors: RwLock::new(BTreeMap::new()),
+            exit_outcome: OnceCell::uninit(),
         };
 
         let res = Arc::new(process);
@@ -209,6 +220,16 @@ impl Process {
 
     pub fn signals(&self) -> &RwLock<SignalState> {
         &self.signals
+    }
+
+    /// Records the first terminating event. A process that exits while being
+    /// signaled keeps the first event, so a later outcome is dropped.
+    pub fn set_exit_outcome(&self, outcome: ExitOutcome) {
+        let _ = self.exit_outcome.try_init_once(|| outcome);
+    }
+
+    pub fn exit_outcome(&self) -> Option<ExitOutcome> {
+        self.exit_outcome.get().copied()
     }
 }
 

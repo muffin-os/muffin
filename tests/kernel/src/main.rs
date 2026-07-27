@@ -14,12 +14,12 @@ use kernel::file::ext2::VirtualExt2Fs;
 use kernel::file::vfs;
 use kernel::limine::BASE_REVISION;
 use kernel::mcore;
-use kernel::mcore::mtask::process::Process;
+use kernel::mcore::mtask::process::{ExitOutcome, Process};
 use kernel_device::block::{BlockBuf, BlockDevice};
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use log::info;
 use spin::RwLock;
+use tracing::info;
 
 /// Boots the real kernel, mounts the root ext2 filesystem, then spawns one
 /// process per line of the `/spawn` manifest baked into the disk image. Each
@@ -74,7 +74,7 @@ unsafe extern "C" fn main() -> ! {
         }
 
         let manifest = core::str::from_utf8(&buf).expect("/spawn manifest should be valid UTF-8");
-        let mut count = 0;
+        let mut pending: alloc::vec::Vec<Arc<Process>> = vec![];
         for line in manifest.lines() {
             if line.is_empty() {
                 continue;
@@ -82,10 +82,37 @@ unsafe extern "C" fn main() -> ! {
             let path = AbsolutePath::try_new(line).expect("manifest entry should be a valid path");
             let proc = Process::create_from_executable(Process::root(), path)
                 .expect("should be able to spawn manifest entry");
-            info!("test-kernel: spawned {line} pid={}", proc.pid());
-            count += 1;
+            kernel::serial_println!("test-kernel: spawned {} pid={}", line, proc.pid());
+            pending.push(proc);
         }
-        info!("test-kernel: spawn complete count={count}");
+        kernel::serial_println!("test-kernel: spawn complete count={}", pending.len());
+
+        // The other CPUs run the scheduler, so CPU 0 can poll here without
+        // stalling user tasks.
+        while !pending.is_empty() {
+            pending.retain(|proc| match proc.exit_outcome() {
+                Some(ExitOutcome::Exited(code)) => {
+                    kernel::serial_println!(
+                        "test-kernel: outcome pid={} exit={}",
+                        proc.pid(),
+                        code
+                    );
+                    false
+                }
+                Some(ExitOutcome::Signaled(signo)) => {
+                    kernel::serial_println!(
+                        "test-kernel: outcome pid={} signal={}",
+                        proc.pid(),
+                        signo.name()
+                    );
+                    false
+                }
+                None => true,
+            });
+            if !pending.is_empty() {
+                x86_64::instructions::hlt();
+            }
+        }
     }
 
     mcore::turn_idle()
@@ -132,7 +159,7 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 fn handle_panic(info: &core::panic::PanicInfo) {
-    use log::error;
+    use tracing::error;
 
     let location = info.location().unwrap();
     error!(

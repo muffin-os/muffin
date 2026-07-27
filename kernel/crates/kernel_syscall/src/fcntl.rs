@@ -4,7 +4,7 @@ use core::slice::from_raw_parts;
 
 use kernel_abi::{EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX};
 use kernel_vfs::path::{AbsolutePath, Path};
-use log::debug;
+use tracing::debug;
 
 use crate::access::{CwdAccess, FileAccess};
 use crate::ptr::UserspacePtr;
@@ -33,7 +33,7 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
         }
     };
 
-    debug!("path: {path:?}");
+    debug!(?path, "path");
 
     let info = cx.file_info(path.as_ref()).ok_or(ENOENT)?;
     let fd = cx.open(&info).map_err(|_| EINVAL)?; // TODO: check error

@@ -4,7 +4,7 @@
 extern crate alloc;
 
 use ::limine::firmware_type::FirmwareType;
-use ::log::info;
+use ::tracing::info;
 use conquer_once::spin::OnceCell;
 
 use crate::driver::pci;
@@ -21,7 +21,7 @@ pub mod limine;
 mod log;
 pub mod mcore;
 pub mod mem;
-mod serial;
+pub mod serial;
 pub mod sse;
 pub mod syscall;
 pub mod time;

@@ -6,7 +6,7 @@ use core::error::Error;
 use kernel_pci::PciAddress;
 use kernel_pci::config::{ConfigKey, ConfigurationAccess, PortCam, ReadConfig, WriteConfig};
 use linkme::distributed_slice;
-use log::{Level, debug, error, log_enabled, trace};
+use tracing::{debug, error, trace};
 use virtio_drivers::transport::pci::bus::DeviceFunction;
 
 #[distributed_slice]
@@ -31,10 +31,10 @@ pub struct PciDriverDescriptor {
 /// Panics if there are multiple specific or multiple generic drivers that would match
 /// the same device.
 pub fn init() {
-    if log_enabled!(Level::Trace) {
+    if tracing::enabled!(tracing::Level::TRACE) {
         PCI_DRIVERS
             .iter()
-            .for_each(|driver| trace!("have pci driver: {}", driver.name));
+            .for_each(|driver| trace!(name = %driver.name, "have pci driver"));
     }
 
     let cam = unsafe { PortCam::new() };
