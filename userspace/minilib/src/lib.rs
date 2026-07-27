@@ -4,7 +4,9 @@ use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
 use core::ffi::c_int;
 
-pub use kernel_abi::{DefaultAction, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal};
+pub use kernel_abi::{
+    DefaultAction, MapFlags, ProtFlags, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal,
+};
 
 pub fn exit(code: i32) -> ! {
     syscall1(1, code as usize);
@@ -120,4 +122,55 @@ pub fn syscall3(n: usize, arg1: usize, arg2: usize, arg3: usize) -> usize {
         );
     }
     result
+}
+
+pub fn syscall6(
+    n: usize,
+    arg1: usize,
+    arg2: usize,
+    arg3: usize,
+    arg4: usize,
+    arg5: usize,
+    arg6: usize,
+) -> usize {
+    let result;
+    unsafe {
+        // Safety: traps into the kernel via int 0x80. Only the declared ABI
+        // registers are read and the kernel preserves every register except rax.
+        asm!(
+            "int 0x80",
+            inlateout("rax") n => result,
+            in("rdi") arg1,
+            in("rsi") arg2,
+            in("rdx") arg3,
+            in("rcx") arg4,
+            in("r8") arg5,
+            in("r9") arg6,
+            options(nostack),
+        );
+    }
+    result
+}
+
+pub fn mmap(
+    addr: usize,
+    len: usize,
+    prot: ProtFlags,
+    flags: MapFlags,
+    fd: usize,
+    offset: usize,
+) -> isize {
+    syscall6(
+        41,
+        addr,
+        len,
+        prot.bits() as usize,
+        flags.bits() as usize,
+        fd,
+        offset,
+    ) as isize
+}
+
+pub fn open(path: &str) -> c_int {
+    syscall6(3, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) as c_int
 }
