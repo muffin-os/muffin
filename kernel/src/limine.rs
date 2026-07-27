@@ -1,8 +1,9 @@
 use limine::BaseRevision;
+use limine::paging::Mode;
 use limine::request::{
-    DateAtBootRequest, ExecutableAddressRequest, ExecutableFileRequest, HhdmRequest,
-    MemoryMapRequest, ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker,
-    RsdpRequest, StackSizeRequest,
+    DateAtBootRequest, ExecutableAddressRequest, ExecutableCmdlineRequest, ExecutableFileRequest,
+    FirmwareTypeRequest, HhdmRequest, MemoryMapRequest, ModuleRequest, MpRequest,
+    PagingModeRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest, StackSizeRequest,
 };
 
 #[used]
@@ -52,3 +53,16 @@ pub static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
 #[used]
 #[unsafe(link_section = ".requests")]
 pub static mut MP_REQUEST: MpRequest = MpRequest::new();
+
+#[used]
+#[unsafe(link_section = ".requests")]
+pub static PAGING_MODE_REQUEST: PagingModeRequest =
+    PagingModeRequest::new().with_mode(Mode::FOUR_LEVEL);
+
+#[used]
+#[unsafe(link_section = ".requests")]
+pub static FIRMWARE_TYPE_REQUEST: FirmwareTypeRequest = FirmwareTypeRequest::new();
+
+#[used]
+#[unsafe(link_section = ".requests")]
+pub static EXECUTABLE_CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();

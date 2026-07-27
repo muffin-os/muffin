@@ -7,7 +7,7 @@
 **Project Type:** Operating System Kernel (Bare Metal)
 **Primary Language:** Rust (Nightly)
 **Target Architecture:** x86_64-unknown-none
-**Bootloader:** Limine v9.x
+**Bootloader:** Limine v12.5.2
 **Build System:** Cargo with custom build.rs scripts
 **Repository Size:** Medium (~124 .rs files, 18 .toml files)
 
@@ -143,14 +143,14 @@ The kernel has intentional dead code warnings for unused fields (`physical_frame
 │   └── Cargo.toml
 ├── userspace/                  # file_structure, init, minilib
 ├── src/main.rs                 # QEMU runner
-├── build.rs                    # Clones Limine, creates ISO, downloads OVMF
+├── build.rs                    # Downloads Limine binaries, creates ISO, downloads OVMF
 ├── rust-toolchain.toml         # Nightly with components
 └── Cargo.toml                  # Workspace definition
 ```
 
 ### Key Files
 
-- **build.rs (root)** - Clones Limine, downloads OVMF (SSL errors occur here), creates ISO with xorriso, creates disk with mke2fs
+- **build.rs (root)** - Downloads Limine binaries, downloads OVMF (SSL errors occur here), creates ISO with xorriso, creates disk with mke2fs
 - **kernel/linker-x86_64.ld** - Custom linker script (causes test failures)
 - **Cargo.toml** - Workspace with muffinos runner, kernel, 10 kernel crates, 2 userspace crates
 
@@ -218,7 +218,7 @@ Options: `--headless` (no GUI), `--debug` (GDB on :1234), `--smp N` (N cores), `
 
 5. **Check formatting first.** It's the fastest validation step (~1-5 seconds).
 
-6. **The build process clones repositories.** The first build downloads Limine and OVMF, which takes extra time. These are cached in `target/` for subsequent builds.
+6. **The build process downloads dependencies.** The first build downloads Limine and OVMF, which takes extra time. These are cached in `target/` for subsequent builds.
 
 7. **Trust these instructions.** Only search for additional information if you encounter errors not documented here or need to understand code semantics.
 

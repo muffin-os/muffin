@@ -2,13 +2,12 @@ use core::fmt::{Debug, Formatter};
 
 use conquer_once::spin::OnceCell;
 use limine::memory_map::EntryType;
-use log::{debug, info, trace};
+use log::{debug, info};
 use mapper::AddressSpaceMapper;
 use spin::RwLock;
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::mapper::{
-    FlagUpdateError, MapToError, MappedFrame, MapperAllSizes, PageTableFrameMapping,
-    TranslateResult,
+    FlagUpdateError, MapToError, MapperAllSizes, PageTableFrameMapping, TranslateResult,
 };
 use x86_64::structures::paging::page::PageRangeInclusive;
 use x86_64::structures::paging::{
@@ -157,93 +156,48 @@ fn remap(
     start_vaddr: VirtAddr,
     len: usize,
 ) {
+    // Inclusive last address. Computed this way because the kernel region reaches the very top
+    // of the address space, where `start + len` would wrap to zero.
+    let last_addr = start_vaddr
+        .as_u64()
+        .wrapping_add(len.into_u64())
+        .wrapping_sub(1);
     let mut current_addr = start_vaddr;
 
-    while current_addr.as_u64() <= start_vaddr.as_u64() - 1 + len as u64 {
-        let result = current_pt.translate(current_addr);
+    while current_addr.as_u64() <= last_addr {
         let TranslateResult::Mapped {
             frame,
             offset,
             flags,
-        } = result
+        } = current_pt.translate(current_addr)
         else {
             break;
         };
 
         let flags = flags.intersection(
-            PageTableFlags::PRESENT
-                | PageTableFlags::WRITABLE
-                | PageTableFlags::NO_EXECUTE
-                | PageTableFlags::HUGE_PAGE,
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
         );
 
-        if offset != 0 {
-            // There are cases where limine maps huge pages across borders of memory regions
-            // in the HHDM for example, the last pages of a 'usable' section and the first
-            // pages of a 'bootloader reclaimable' section could be mapped to the same 2MiB or 1GiB
-            // huge frame. We need to handle this accordingly.
-
-            let mut flags = flags;
-            flags.remove(PageTableFlags::HUGE_PAGE);
-
-            let MappedFrame::Size2MiB(f) = frame else {
-                todo!("support huge pages crossing region borders");
-            };
-
-            trace!(
-                "breaking up cross-region huge page ({:p} offset {:x})",
-                f.start_address(),
-                offset
-            );
-
-            let mut off = 0;
-            while (current_addr + off).as_u64() < (start_vaddr.as_u64() + len.into_u64())
-                && (offset + off < frame.size())
-            {
-                let page = Page::<Size4KiB>::containing_address(current_addr + off);
-                let f1 = PhysFrame::containing_address(f.start_address() + offset + off);
-                unsafe {
-                    let _ = new_pt.map_to(page, f1, flags, &mut PhysicalMemory).unwrap();
-                }
-                off += page.size();
-            }
-        } else {
+        // A single source frame can be a 2MiB or 1GiB huge page that limine mapped across the
+        // border between two memory-map regions, so neighbouring regions share it. Remap only
+        // the part of the frame that lies within [start, last] and always at 4KiB granularity.
+        // An already-present page is treated as success: the HHDM is a fixed phys->virt offset,
+        // so any page a neighbouring region already mapped points at the correct frame.
+        let frame_base = frame.start_address();
+        let mut frame_off = offset;
+        while frame_off < frame.size() && current_addr.as_u64() <= last_addr {
+            let page = Page::<Size4KiB>::containing_address(current_addr);
+            let phys = PhysFrame::<Size4KiB>::containing_address(frame_base + frame_off);
             unsafe {
-                match frame {
-                    MappedFrame::Size4KiB(f) => {
-                        let _ = new_pt
-                            .map_to(
-                                Page::containing_address(current_addr),
-                                f,
-                                flags,
-                                &mut PhysicalMemory,
-                            )
-                            .unwrap();
-                    }
-                    MappedFrame::Size2MiB(f) => {
-                        let _ = new_pt
-                            .map_to(
-                                Page::containing_address(current_addr),
-                                f,
-                                flags,
-                                &mut PhysicalMemory,
-                            )
-                            .unwrap();
-                    }
-                    MappedFrame::Size1GiB(f) => {
-                        let _ = new_pt
-                            .map_to(
-                                Page::containing_address(current_addr),
-                                f,
-                                flags,
-                                &mut PhysicalMemory,
-                            )
-                            .unwrap();
-                    }
+                match new_pt.map_to(page, phys, flags, &mut PhysicalMemory) {
+                    Ok(flush) => flush.ignore(),
+                    Err(MapToError::PageAlreadyMapped(_)) => {}
+                    Err(e) => panic!("failed to remap HHDM page {page:?}: {e:?}"),
                 }
             }
+            frame_off += Size4KiB::SIZE;
+            current_addr += Size4KiB::SIZE;
         }
-        current_addr += frame.size() - offset;
     }
 }
 
