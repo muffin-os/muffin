@@ -557,6 +557,7 @@ dependencies = [
  "kernel_device",
  "kernel_elfloader",
  "kernel_gfx",
+ "kernel_log",
  "kernel_memapi",
  "kernel_pci",
  "kernel_physical_memory",
@@ -625,6 +626,13 @@ name = "kernel_gfx"
 version = "0.1.0"
 dependencies = [
  "kernel_abi",
+ "tracing",
+]
+
+[[package]]
+name = "kernel_log"
+version = "0.1.0"
+dependencies = [
  "tracing",
 ]
 

@@ -1,6 +1,7 @@
 use core::fmt::{Debug, Write};
 
 use conquer_once::spin::OnceCell;
+use kernel_log::Filter;
 use tracing::field::{Field, Visit};
 use tracing::level_filters::LevelFilter;
 use tracing::{Event, Level, Metadata, Subscriber, span};
@@ -10,9 +11,6 @@ use crate::hpet::hpet_maybe;
 use crate::limine::EXECUTABLE_CMDLINE_REQUEST;
 use crate::mcore::context::ExecutionContext;
 use crate::serial;
-
-const MAX_DIRECTIVES: usize = 16;
-const BUF_SIZE: usize = 256;
 
 static FILTER: OnceCell<Filter> = OnceCell::uninit();
 
@@ -40,139 +38,6 @@ fn filter() -> &'static Filter {
     FILTER.try_get().expect("log filter is not initialized")
 }
 
-/// A directive is a target prefix mapped to a level.
-///
-/// An empty span (`start == end`) is the global directive matching every target.
-#[derive(Copy, Clone)]
-struct Directive {
-    start: u16,
-    end: u16,
-    level: LevelFilter,
-}
-
-/// An env_logger style filter parsed once into a fixed buffer, no allocation.
-struct Filter {
-    buf: [u8; BUF_SIZE],
-    directives: [Directive; MAX_DIRECTIVES],
-    count: usize,
-    max: LevelFilter,
-}
-
-impl Filter {
-    fn parse(input: &str) -> Self {
-        let mut buf = [0u8; BUF_SIZE];
-        let len = input.len().min(BUF_SIZE);
-        buf[..len].copy_from_slice(&input.as_bytes()[..len]);
-
-        let mut directives = [Directive {
-            start: 0,
-            end: 0,
-            level: LevelFilter::OFF,
-        }; MAX_DIRECTIVES];
-        let mut count = 0;
-        let mut max = LevelFilter::OFF;
-
-        let mut pos = 0;
-        while pos < len && count < MAX_DIRECTIVES {
-            let seg_end = buf[pos..len]
-                .iter()
-                .position(|&c| c == b',')
-                .map_or(len, |i| pos + i);
-            if let Some(directive) = parse_directive(&buf, pos, seg_end) {
-                if directive.level > max {
-                    max = directive.level;
-                }
-                directives[count] = directive;
-                count += 1;
-            }
-            pos = seg_end + 1;
-        }
-
-        Self {
-            buf,
-            directives,
-            count,
-            max,
-        }
-    }
-
-    fn enabled(&self, target: &str, level: &Level) -> bool {
-        let mut best: Option<LevelFilter> = None;
-        let mut best_len = 0;
-        for directive in &self.directives[..self.count] {
-            let prefix = &self.buf[directive.start as usize..directive.end as usize];
-            if target.as_bytes().starts_with(prefix) && (best.is_none() || prefix.len() >= best_len)
-            {
-                best = Some(directive.level);
-                best_len = prefix.len();
-            }
-        }
-        best.is_some_and(|allowed| allowed >= *level)
-    }
-}
-
-fn parse_directive(buf: &[u8], start: usize, end: usize) -> Option<Directive> {
-    let (start, end) = trim(buf, start, end);
-    if start == end {
-        return None;
-    }
-
-    if let Some(eq) = buf[start..end]
-        .iter()
-        .position(|&c| c == b'=')
-        .map(|i| start + i)
-    {
-        let (ts, te) = trim(buf, start, eq);
-        let (ls, le) = trim(buf, eq + 1, end);
-        let level = parse_level(&buf[ls..le])?;
-        Some(Directive {
-            start: ts as u16,
-            end: te as u16,
-            level,
-        })
-    } else if let Some(level) = parse_level(&buf[start..end]) {
-        Some(Directive {
-            start: start as u16,
-            end: start as u16,
-            level,
-        })
-    } else {
-        Some(Directive {
-            start: start as u16,
-            end: end as u16,
-            level: LevelFilter::TRACE,
-        })
-    }
-}
-
-fn trim(buf: &[u8], mut start: usize, mut end: usize) -> (usize, usize) {
-    while start < end && buf[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    while end > start && buf[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    (start, end)
-}
-
-fn parse_level(s: &[u8]) -> Option<LevelFilter> {
-    if s.eq_ignore_ascii_case(b"off") {
-        Some(LevelFilter::OFF)
-    } else if s.eq_ignore_ascii_case(b"error") {
-        Some(LevelFilter::ERROR)
-    } else if s.eq_ignore_ascii_case(b"warn") {
-        Some(LevelFilter::WARN)
-    } else if s.eq_ignore_ascii_case(b"info") {
-        Some(LevelFilter::INFO)
-    } else if s.eq_ignore_ascii_case(b"debug") {
-        Some(LevelFilter::DEBUG)
-    } else if s.eq_ignore_ascii_case(b"trace") {
-        Some(LevelFilter::TRACE)
-    } else {
-        None
-    }
-}
-
 struct SerialSubscriber;
 
 impl Subscriber for SerialSubscriber {
@@ -181,7 +46,7 @@ impl Subscriber for SerialSubscriber {
     }
 
     fn max_level_hint(&self) -> Option<LevelFilter> {
-        Some(filter().max)
+        Some(filter().max())
     }
 
     // Spans are unused in this kernel, so span operations are deliberate no-ops.
