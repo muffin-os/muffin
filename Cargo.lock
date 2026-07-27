@@ -784,6 +784,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 [[package]]
 name = "minilib"
 version = "0.1.0"
+dependencies = [
+ "kernel_abi",
+]
 
 [[package]]
 name = "mkfs-ext2"
@@ -808,6 +811,9 @@ dependencies = [
  "init",
  "kernel",
  "ovmf-prebuilt",
+ "signals-test-init",
+ "signals-test-kernel",
+ "test-support",
 ]
 
 [[package]]
@@ -1083,6 +1089,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signals-test-init"
+version = "0.1.0"
+dependencies = [
+ "minilib",
+]
+
+[[package]]
+name = "signals-test-kernel"
+version = "0.1.0"
+dependencies = [
+ "kernel",
+ "kernel_device",
+ "kernel_vfs",
+ "log",
+ "mkfs-ext2",
+ "mkfs-filesystem",
+ "spin",
+ "x86_64",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1139,6 +1166,10 @@ dependencies = [
  "libc",
  "xattr",
 ]
+
+[[package]]
+name = "test-support"
+version = "0.1.0"
 
 [[package]]
 name = "thiserror"

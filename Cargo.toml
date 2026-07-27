@@ -13,6 +13,11 @@ kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
 
 init = { path = "userspace/init", artifact = "bin", target = "x86_64-unknown-none" }
 
+[dev-dependencies]
+signals-test-kernel = { path = "tests/kernels/signals/kernel", artifact = "bin", target = "x86_64-unknown-none" }
+signals-test-init = { path = "tests/kernels/signals/init", artifact = "bin", target = "x86_64-unknown-none" }
+test-support = { path = "tests/support" }
+
 [workspace]
 members = [
   "kernel",
@@ -30,6 +35,9 @@ members = [
   "userspace/file_structure",
   "userspace/init",
   "userspace/minilib",
+  "tests/kernels/signals/kernel",
+  "tests/kernels/signals/init",
+  "tests/support",
 ]
 default-members = [
   ".",
@@ -45,6 +53,7 @@ default-members = [
   "kernel/crates/kernel_vfs",
   "kernel/crates/kernel_virtual_memory",
   "userspace/file_structure",
+  "tests/support",
 ]
 
 [dependencies]

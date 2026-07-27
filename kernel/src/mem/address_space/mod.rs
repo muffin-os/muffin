@@ -369,6 +369,32 @@ impl AddressSpace {
         self.inner.read().is_active()
     }
 
+    /// Returns `true` only if every byte of `[addr, addr + len)` is mapped,
+    /// writable, and user accessible in this address space.
+    #[must_use]
+    pub fn is_user_writable(&self, addr: VirtAddr, len: usize) -> bool {
+        if len == 0 {
+            return true;
+        }
+        let Some(last) = addr.as_u64().checked_add(len as u64 - 1) else {
+            return false;
+        };
+        let Ok(end) = VirtAddr::try_new(last) else {
+            return false;
+        };
+
+        let required =
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+        let mapper = self.inner.read();
+
+        Page::<Size4KiB>::range_inclusive(
+            Page::containing_address(addr),
+            Page::containing_address(end),
+        )
+        .map(|page| mapper.translate_flags(page.start_address()))
+        .all(|flags| matches!(flags, Some(flags) if flags.contains(required)))
+    }
+
     /// # Errors
     /// Returns an error if the page is already mapped or flags are invalid.
     #[allow(dead_code)]

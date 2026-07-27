@@ -155,4 +155,11 @@ impl AddressSpaceMapper {
     pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         self.page_table.translate_addr(vaddr)
     }
+
+    pub fn translate_flags(&self, vaddr: VirtAddr) -> Option<PageTableFlags> {
+        match self.page_table.translate(vaddr) {
+            TranslateResult::Mapped { flags, .. } => Some(flags),
+            TranslateResult::NotMapped | TranslateResult::InvalidFrameAddress(_) => None,
+        }
+    }
 }

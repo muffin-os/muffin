@@ -117,10 +117,12 @@ continue"
     cmd.arg("-device");
     cmd.arg("virtio-blk-pci,drive=virtio-disk0");
 
+    // Prefer KVM, falling back to TCG so the runner still boots on hosts
+    // without /dev/kvm instead of failing to launch QEMU.
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     {
-        cmd.arg("-accel");
-        cmd.arg("kvm");
+        cmd.arg("-machine");
+        cmd.arg("accel=kvm:tcg");
     }
 
     cmd.arg("-device");

@@ -64,7 +64,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y xorriso
+          sudo apt install -y xorriso qemu-system-x86
       - name: Test
         run: |
           cargo test $(if [[ "${{ matrix.strategy }}" == "release" ]]; then echo "--release"; fi)

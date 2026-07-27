@@ -122,6 +122,20 @@ impl<T> UserspaceMutPtr<T> {
         }
     }
 
+    /// Validates that the pointer and size are within userspace bounds.
+    ///
+    /// This function checks that ptr + size doesn't overflow into kernel space (upper half).
+    pub fn validate_range(&self, size: usize) -> Result<(), NotUserspace> {
+        let start = self.addr();
+        let end = start.checked_add(size).ok_or(NotUserspace(start))?;
+
+        if is_upper_half(end)? {
+            Err(NotUserspace(end))
+        } else {
+            Ok(())
+        }
+    }
+
     #[must_use]
     pub fn addr(&self) -> usize {
         self.ptr as usize
