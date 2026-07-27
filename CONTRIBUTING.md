@@ -8,7 +8,7 @@ Welcome to Muffin OS! This guide will help you get started with contributing to 
 
 - **Language:** Rust (Nightly)
 - **Target:** x86_64-unknown-none
-- **Bootloader:** Limine v9.x
+- **Bootloader:** Limine v12.5.2
 - **Build System:** Cargo with custom build scripts
 
 ## Architecture
@@ -74,7 +74,7 @@ This creates:
 - Disk image (`disk.img`)
 
 The build process automatically:
-1. Clones the Limine bootloader (cached after first build)
+1. Downloads the Limine bootloader binaries (cached after first build)
 2. Downloads OVMF firmware for UEFI support
 3. Compiles the kernel for bare-metal x86-64
 4. Creates a bootable ISO with xorriso

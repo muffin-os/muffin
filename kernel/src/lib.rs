@@ -3,11 +3,12 @@
 #![feature(abi_x86_interrupt, negative_impls, vec_push_within_capacity)]
 extern crate alloc;
 
+use ::limine::firmware_type::FirmwareType;
 use ::log::info;
 use conquer_once::spin::OnceCell;
 
 use crate::driver::pci;
-use crate::limine::BOOT_TIME;
+use crate::limine::{BOOT_TIME, EXECUTABLE_CMDLINE_REQUEST, FIRMWARE_TYPE_REQUEST};
 
 mod acpi;
 mod apic;
@@ -37,6 +38,7 @@ pub fn init() {
     init_boot_time();
 
     log::init();
+    log_boot_environment();
     mem::init();
     acpi::init();
     apic::init();
@@ -47,6 +49,26 @@ pub fn init() {
     pci::init();
 
     info!("kernel initialized");
+}
+
+fn log_boot_environment() {
+    let firmware = FIRMWARE_TYPE_REQUEST
+        .get_response()
+        .map_or("unknown", |resp| match resp.firmware_type() {
+            FirmwareType::X86_BIOS => "x86 BIOS",
+            FirmwareType::UEFI_32 => "UEFI (32-bit)",
+            FirmwareType::UEFI_64 => "UEFI (64-bit)",
+            FirmwareType::SBI => "SBI",
+            _ => "unknown",
+        });
+
+    let cmdline = EXECUTABLE_CMDLINE_REQUEST
+        .get_response()
+        .and_then(|resp| resp.cmdline().to_str().ok())
+        .filter(|cmdline| !cmdline.is_empty())
+        .unwrap_or("(none)");
+
+    info!("boot firmware: {firmware}, cmdline: {cmdline}");
 }
 
 #[cfg(target_pointer_width = "64")]

@@ -212,26 +212,44 @@ fn build_iso(limine_checkout: impl AsRef<Path>, kernel_binary: impl AsRef<Path>)
 fn limine() -> PathBuf {
     let limine_dir = PathBuf::from("target/limine");
 
-    // check whether we've already checked it out
+    // check whether we've already downloaded it
     if exists(&limine_dir).expect("should be able to check if limine directory exists") {
         return limine_dir;
     }
 
-    // check out
-    let status = std::process::Command::new("git")
-        .arg("clone")
-        .arg("https://github.com/limine-bootloader/limine.git")
-        .arg("--branch=v9.x-binary")
-        .arg("--depth=1")
-        .arg(&limine_dir)
+    create_dir_all(&limine_dir).expect("should be able to create limine directory");
+
+    // Limine dropped the git binary branch after v11, so the pinned bootloader files now come
+    // from the prebuilt release tarball instead of a branch checkout.
+    let tarball = out_dir().join("limine-binary.tar.gz");
+    let status = Command::new("curl")
+        .arg("--fail")
+        .arg("--location")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--output")
+        .arg(&tarball)
+        .arg("https://github.com/limine-bootloader/limine/releases/download/v12.5.2/limine-binary.tar.gz")
         .stderr(Stdio::inherit())
-        .stdout(Stdio::inherit())
         .status()
-        .expect("git clone command should execute");
+        .expect("curl command should execute");
     assert!(status.success());
 
-    // build
-    let status = std::process::Command::new("make")
+    let status = Command::new("tar")
+        .arg("--extract")
+        .arg("--gzip")
+        .arg("--strip-components=1")
+        .arg("--directory")
+        .arg(&limine_dir)
+        .arg("--file")
+        .arg(&tarball)
+        .stderr(Stdio::inherit())
+        .status()
+        .expect("tar command should execute");
+    assert!(status.success());
+
+    // build the host tool used for the BIOS install step
+    let status = Command::new("make")
         .current_dir(&limine_dir)
         .stderr(Stdio::inherit())
         .stdout(Stdio::inherit())
