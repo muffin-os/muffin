@@ -11,8 +11,8 @@ use core::fmt::Debug;
 pub use file::*;
 use itertools::Itertools;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
-use log::trace;
 use thiserror::Error;
+use tracing::trace;
 use x86_64::VirtAddr;
 use x86_64::addr::VirtAddrNotValid;
 

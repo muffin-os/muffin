@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use log::{debug, trace};
+use tracing::{debug, trace};
 
 use super::{DrawCmd, SoftBackend, SoftRecorder};
 use crate::api::GfxQueue;
@@ -122,7 +122,7 @@ impl GfxQueue<SoftBackend> for SoftQueue {
         recorder_cmds(&mut rec);
         debug!("drawing...");
         for cmd in &rec.cmds {
-            trace!("drawing {cmd:?}");
+            trace!(?cmd, "drawing");
             self.rasterize(cmd);
         }
         debug!("done drawing");

@@ -8,21 +8,21 @@ static SERIAL1: Lazy<Mutex<SerialPort>> = Lazy::new(|| {
     Mutex::new(serial_port)
 });
 
+/// Runs `f` while holding the serial lock with interrupts disabled.
+///
+/// One lock acquisition covers a whole log record so that no deadlock can occur
+/// when we want to print something in an interrupt handler.
+pub(crate) fn with_serial<R>(f: impl FnOnce(&mut SerialPort) -> R) -> R {
+    use x86_64::instructions::interrupts;
+
+    interrupts::without_interrupts(|| f(&mut SERIAL1.lock()))
+}
+
 #[doc(hidden)]
 pub fn internal_print(args: core::fmt::Arguments) {
     use core::fmt::Write;
 
-    use x86_64::instructions::interrupts;
-
-    // disable interrupts while holding a lock on the WRITER
-    // so that no deadlock can occur when we want to print
-    // something in an interrupt handler
-    interrupts::without_interrupts(|| {
-        SERIAL1
-            .lock()
-            .write_fmt(args)
-            .expect("Printing to serial failed");
-    });
+    with_serial(|serial| serial.write_fmt(args).expect("Printing to serial failed"));
 }
 
 /// Prints to the host through the serial interface.

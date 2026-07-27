@@ -566,7 +566,6 @@ dependencies = [
  "limine",
  "linked_list_allocator",
  "linkme",
- "log",
  "mkfs-ext2",
  "mkfs-filesystem",
  "raw-cpuid 11.6.0",
@@ -574,6 +573,7 @@ dependencies = [
  "sha3",
  "spin",
  "thiserror",
+ "tracing",
  "uart_16550",
  "virtio-drivers",
  "volatile 0.6.1",
@@ -595,7 +595,6 @@ version = "0.1.0"
 dependencies = [
  "kernel_device",
  "kernel_vfs",
- "log",
  "spin",
  "thiserror",
 ]
@@ -615,8 +614,8 @@ version = "0.1.0"
 dependencies = [
  "itertools",
  "kernel_memapi",
- "log",
  "thiserror",
+ "tracing",
  "x86_64",
  "zerocopy 0.9.0-alpha.0",
 ]
@@ -626,14 +625,13 @@ name = "kernel_gfx"
 version = "0.1.0"
 dependencies = [
  "kernel_abi",
- "log",
+ "tracing",
 ]
 
 [[package]]
 name = "kernel_memapi"
 version = "0.1.0"
 dependencies = [
- "log",
  "x86_64",
 ]
 
@@ -642,7 +640,6 @@ name = "kernel_pci"
 version = "0.1.0"
 dependencies = [
  "kernel_memapi",
- "log",
  "spin",
  "thiserror",
  "x86_64",
@@ -662,9 +659,9 @@ version = "0.1.0"
 dependencies = [
  "kernel_abi",
  "kernel_vfs",
- "log",
  "spin",
  "thiserror",
+ "tracing",
  "x86_64",
 ]
 
@@ -681,8 +678,8 @@ dependencies = [
 name = "kernel_virtual_memory"
 version = "0.1.0"
 dependencies = [
- "log",
  "thiserror",
+ "tracing",
  "x86_64",
 ]
 
@@ -1184,10 +1181,10 @@ dependencies = [
  "kernel",
  "kernel_device",
  "kernel_vfs",
- "log",
  "mkfs-ext2",
  "mkfs-filesystem",
  "spin",
+ "tracing",
  "x86_64",
 ]
 

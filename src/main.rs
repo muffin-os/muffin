@@ -130,6 +130,38 @@ continue"
     cmd.arg("-vga");
     cmd.arg("none");
 
+    // The ISO is immutable at run time, so RUST_LOG rides the kernel cmdline
+    // via an SMBIOS-supplied Limine config.
+    if let Ok(value) = std::env::var("RUST_LOG")
+        && !value.is_empty()
+    {
+        let conf_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("limine.conf");
+        let conf = std::fs::read_to_string(&conf_path).expect("unable to read limine.conf");
+
+        let mut lines: Vec<String> = conf.lines().map(str::to_owned).collect();
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|l| l.trim_start().starts_with("cmdline:"))
+        {
+            line.push_str(&format!(" RUST_LOG={value}"));
+        } else if let Some(idx) = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("kernel_path:"))
+        {
+            lines.insert(idx + 1, format!("    cmdline: RUST_LOG={value}"));
+        } else {
+            panic!("limine.conf has neither a cmdline nor a kernel_path entry to carry RUST_LOG");
+        }
+
+        // Limine drops the last byte of the config if the trailing newline is missing.
+        let modified = format!("limine:config:{}\n", lines.join("\n"));
+        let smbios_path = std::env::temp_dir().join("muffin-limine.conf");
+        std::fs::write(&smbios_path, modified).expect("unable to write SMBIOS limine config");
+
+        cmd.arg("-smbios");
+        cmd.arg(format!("type=11,path={}", smbios_path.display()));
+    }
+
     let status = cmd.status().unwrap();
     assert!(status.success());
 }

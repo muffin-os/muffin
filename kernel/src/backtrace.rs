@@ -33,7 +33,7 @@ pub fn init() {
 
         use addr2line::gimli::Dwarf;
         use elf::ElfBytes;
-        use log::debug;
+        use tracing::debug;
         use x86_64::VirtAddr;
 
         use crate::U64Ext;

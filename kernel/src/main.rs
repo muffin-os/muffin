@@ -26,8 +26,8 @@ use kernel_gfx::backend::software::{
 };
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use log::info;
 use spin::RwLock;
+use tracing::info;
 
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
@@ -55,7 +55,7 @@ unsafe extern "C" fn main() -> ! {
         let init_path = AbsolutePath::try_new("/bin/init").unwrap();
         let _ = vfs().read().open(init_path).expect("should have /bin/init");
         let proc = Process::create_from_executable(Process::root(), init_path).unwrap();
-        info!("started process pid={}", proc.pid());
+        info!(pid = %proc.pid(), "started process");
     }
 
     render_demo_frame();
@@ -228,7 +228,7 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
 
 #[cfg(not(test))]
 fn handle_panic(info: &core::panic::PanicInfo) {
-    use log::error;
+    use tracing::error;
 
     let location = info.location().unwrap();
     error!(
