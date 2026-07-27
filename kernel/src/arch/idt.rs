@@ -5,7 +5,9 @@ use core::fmt::{Debug, Formatter};
 use core::mem::transmute;
 use core::sync::atomic::Ordering::Relaxed;
 
+use kernel_abi::Signal;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
+use kernel_syscall::signal::AsyncAction;
 use log::{error, warn};
 use x86_64::PrivilegeLevel;
 use x86_64::instructions::{hlt, interrupts};
@@ -14,7 +16,7 @@ use x86_64::registers::debug::{Dr6, Dr7};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
 use crate::UsizeExt;
-use crate::arch::gdt;
+use crate::arch::{gdt, signal};
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::mem::MemoryRegion;
 use crate::mcore::mtask::task::{FxArea, ShouldTerminate};
@@ -51,7 +53,10 @@ pub fn create_idt() -> InterruptDescriptorTable {
             .set_handler_fn(double_fault_handler)
             .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
         idt.page_fault
-            .set_handler_fn(page_fault_handler)
+            .set_handler_fn(transmute::<
+                *mut fn(),
+                extern "x86-interrupt" fn(InterruptStackFrame, PageFaultErrorCode),
+            >(page_fault_wrapper as *mut fn()))
             .set_stack_index(gdt::PAGE_FAULT_IST_INDEX);
     }
 
@@ -125,7 +130,7 @@ wrap!(syscall_handler_impl => syscall_handler);
 
 #[repr(align(8), C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct SyscallRegisters {
+pub(crate) struct SyscallRegisters {
     pub r11: usize,
     pub r10: usize,
     pub r9: usize,
@@ -138,11 +143,17 @@ pub struct SyscallRegisters {
 }
 
 pub extern "sysv64" fn syscall_handler_impl(
-    _stack_frame: &mut InterruptStackFrame,
+    stack_frame: &mut InterruptStackFrame,
     regs: &mut SyscallRegisters,
 ) {
     // The registers order follow the System V ABI convention
     let n = regs.rax;
+
+    if n == kernel_abi::SYS_SIGRETURN {
+        signal::sys_sigreturn(stack_frame, regs);
+        return;
+    }
+
     let arg1 = regs.rdi;
     let arg2 = regs.rsi;
     let arg3 = regs.rdx;
@@ -153,11 +164,40 @@ pub extern "sysv64" fn syscall_handler_impl(
     let result = dispatch_syscall(n, arg1, arg2, arg3, arg4, arg5, arg6);
 
     regs.rax = result as usize; // save result
+    signal::deliver_pending(stack_frame, regs);
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFrame) {
     unsafe {
         end_of_interrupt();
+    }
+
+    // A task interrupted in kernel mode may hold kernel locks, so only act on a
+    // user mode frame. try_write is mandatory here: interrupts are disabled and a
+    // same CPU task may hold the lock mid syscall, so blocking would deadlock.
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3
+        && let Some(ctx) = ExecutionContext::try_load()
+        && let Some(mut sig) = ctx.current_process().signals().try_write()
+    {
+        match sig.poll_async_action() {
+            Some(AsyncAction::Terminate(_)) => {
+                // Free the user allocations here, exactly like Task::exit does.
+                // The interrupted frame is Ring3, so the task holds no kernel
+                // locks, and its address space is still the active one, which
+                // the unmap path requires. Skipping this would make TaskCleanup
+                // drop the allocations from the root address space and trip the
+                // mapper's is_active assertion.
+                let task = ctx.current_task();
+                let _ = task.fx_area().write().take();
+                let _ = task.tls().write().take();
+                let _ = task.ustack().write().take();
+                task.set_should_terminate(ShouldTerminate::Yes);
+            }
+            Some(AsyncAction::Stop(_)) => {
+                // The stopped flag is now set, so the reschedule below parks it.
+            }
+            None => {}
+        }
     }
 
     let ctx = ExecutionContext::load();
@@ -202,93 +242,148 @@ extern "x86-interrupt" fn invalid_tss_handler(stack_frame: InterruptStackFrame, 
     panic!("EXCEPTION: INVALID TSS:\nerror code: {error_code:#X}\n{stack_frame:#?}");
 }
 
-extern "x86-interrupt" fn page_fault_handler(
-    stack_frame: InterruptStackFrame,
-    error_code: PageFaultErrorCode,
+enum RegionOutcome {
+    Handled,
+    Invalid,
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(naked)]
+pub unsafe extern "sysv64" fn page_fault_wrapper() {
+    core::arch::naked_asm!(
+        "push rax",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "sub rsp, 8", // align the stack to 16 bytes for the SysV call
+        "lea rdi, [rsp + 88]", // Arg #1: &InterruptStackFrame (8 pad + 72 regs + 8 err)
+        "lea rsi, [rsp + 8]",  // Arg #2: &SyscallRegisters
+        "mov rdx, [rsp + 80]", // Arg #3: error code
+        "call {}",
+        "add rsp, 8",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+        "add rsp, 8", // drop the error code
+        "iretq",
+        sym page_fault_handler_impl
+    );
+}
+
+extern "sysv64" fn page_fault_handler_impl(
+    frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
+    error_code: u64,
 ) {
+    let error_code = PageFaultErrorCode::from_bits_truncate(error_code);
     let accessed_address = Cr2::read().ok();
+    let from_user = frame.code_segment.rpl() == PrivilegeLevel::Ring3;
 
     // if we know the address...
-    if let Some(addr) = accessed_address {
-        // ...and we have initialized multitasking...
-        if let Some(ctx) = ExecutionContext::try_load() {
-            let task = ctx.current_task();
-            let process = task.process();
-            process.telemetry().page_faults.fetch_add(1, Relaxed);
+    if let Some(addr) = accessed_address
+        && let Some(ctx) = ExecutionContext::try_load()
+    {
+        let task = ctx.current_task();
+        let process = task.process();
+        process.telemetry().page_faults.fetch_add(1, Relaxed);
 
-            // ...and the current task has stack...
-            if let Some(stack) = task.kstack() {
-                // ...then the accessed address must not be within the guard page of the stack,
-                // otherwise we have a stack overflow...
-                if stack.guard_page().contains(addr) {
-                    error!(
-                        "KERNEL STACK OVERFLOW DETECTED in process '{}' task '{}', terminating...",
-                        task.process().name(),
-                        task.name(),
-                    );
+        // ...and the current task has stack, then the accessed address must not be within the
+        // guard page of the stack, otherwise we have a stack overflow...
+        if let Some(stack) = task.kstack()
+            && stack.guard_page().contains(addr)
+        {
+            error!(
+                "KERNEL STACK OVERFLOW DETECTED in process '{}' task '{}', terminating...",
+                task.process().name(),
+                task.name(),
+            );
 
-                    // FIXME: once we have signals, trigger a SIGSEGV here
-
-                    // ...in which case we mark the task for termination...
-                    task.set_should_terminate(ShouldTerminate::Yes);
-                    // ...and halt, waiting for the scheduler to terminate the task
-                    interrupts::enable();
-                    loop {
-                        hlt();
-                    }
-                }
-            }
-
-            // ...but if it's not a stack issue, maybe it is a lazy mapping?
-            let regions = process.memory_regions();
-            if let Some(()) = regions.with_memory_region_for_address(addr, |region| {
-                debug_assert!(
-                    region.addr() <= addr,
-                    "region addr must be less than or equal to the addr we are looking for"
-                );
-                debug_assert!(
-                    region.addr() + region.size().into_u64() > addr,
-                    "region addr + it's size must be larger than the addr we are looking for"
-                );
-
-                // we found a region that matches the accessed address
-                match region {
-                    MemoryRegion::Lazy(_lazy_memory_region) => {
-                        // TODO: allocate new physical page, map it and add it to the lazy memory
-                        // region
-                    }
-                    MemoryRegion::Mapped(_mapped_memory_region) => {
-                        error!(
-                            "invalid memory access in process '{}' task '{}', terminating...",
-                            process.name(),
-                            task.name()
-                        );
-
-                        // TODO: refactor task/process termination into a separate method
-
-                        // TODO: refactor the whole page fault handler into a separate crate
-
-                        // FIXME: once we have signals, trigger a SIGSEGV here
-                        task.set_should_terminate(ShouldTerminate::Yes);
-                        interrupts::enable();
-                        loop {
-                            hlt();
-                        }
-                    }
-                    MemoryRegion::FileBacked(_file_backed_memory_region) => {
-                        // TODO: invoke an access on the nested lazy memory region, then read from
-                        // the node and write data accordingly
-                    }
-                }
-            }) {
-                // Region was found and handled
+            if from_user {
+                signal::deliver_fault(frame, regs, Signal::Segfault);
                 return;
             }
+
+            // ...in which case we mark the task for termination and halt, waiting for the
+            // scheduler to terminate the task
+            task.set_should_terminate(ShouldTerminate::Yes);
+            interrupts::enable();
+            loop {
+                hlt();
+            }
+        }
+
+        // ...but if it's not a stack issue, maybe it is a lazy mapping?
+        let regions = process.memory_regions();
+        let outcome = regions.with_memory_region_for_address(addr, |region| {
+            debug_assert!(
+                region.addr() <= addr,
+                "region addr must be less than or equal to the addr we are looking for"
+            );
+            debug_assert!(
+                region.addr() + region.size().into_u64() > addr,
+                "region addr + it's size must be larger than the addr we are looking for"
+            );
+
+            // we found a region that matches the accessed address
+            match region {
+                MemoryRegion::Lazy(_lazy_memory_region) => {
+                    // TODO: allocate new physical page, map it and add it to the lazy memory
+                    // region
+                    RegionOutcome::Handled
+                }
+                MemoryRegion::Mapped(_mapped_memory_region) => {
+                    error!(
+                        "invalid memory access in process '{}' task '{}', terminating...",
+                        process.name(),
+                        task.name()
+                    );
+                    RegionOutcome::Invalid
+                }
+                MemoryRegion::FileBacked(_file_backed_memory_region) => {
+                    // TODO: invoke an access on the nested lazy memory region, then read from
+                    // the node and write data accordingly
+                    RegionOutcome::Handled
+                }
+            }
+        });
+
+        match outcome {
+            Some(RegionOutcome::Handled) => return,
+            Some(RegionOutcome::Invalid) => {
+                if from_user {
+                    signal::deliver_fault(frame, regs, Signal::Segfault);
+                    return;
+                }
+                task.set_should_terminate(ShouldTerminate::Yes);
+                interrupts::enable();
+                loop {
+                    hlt();
+                }
+            }
+            None => {}
         }
     }
 
+    // A wild user pointer must become a SIGSEGV, never a kernel panic.
+    if from_user {
+        error!("unhandled user page fault at {accessed_address:?}, delivering SIGSEGV");
+        signal::deliver_fault(frame, regs, Signal::Segfault);
+        return;
+    }
+
     panic!(
-        "EXCEPTION: PAGE FAULT:\naccessed address: {accessed_address:?}\nerror code: {error_code:#?}\n{stack_frame:#?}"
+        "EXCEPTION: PAGE FAULT:\naccessed address: {accessed_address:?}\nerror code: {error_code:#?}\n{frame:#?}"
     );
 }
 
