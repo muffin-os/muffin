@@ -74,3 +74,17 @@ pub enum StatError {
         FsError,
     ),
 }
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
+pub enum IoctlError {
+    #[error("{0}")]
+    FsError(
+        #[from]
+        #[source]
+        FsError,
+    ),
+    #[error("file does not support this ioctl request")]
+    NotSupported,
+    #[error("invalid ioctl argument")]
+    InvalidArgument,
+}

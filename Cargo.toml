@@ -13,11 +13,15 @@ kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
 
 init = { path = "userspace/init", artifact = "bin", target = "x86_64-unknown-none" }
 
+fbdemo = { path = "userspace/fbdemo", artifact = "bin", target = "x86_64-unknown-none" }
+
 [dev-dependencies]
 signals-test-init = { path = "tests/bins/signals-init", artifact = "bin", target = "x86_64-unknown-none" }
 test-kernel = { path = "tests/kernel", artifact = "bin", target = "x86_64-unknown-none" }
 mmap-test = { path = "tests/bins/mmap", artifact = "bin", target = "x86_64-unknown-none" }
 file-read-test = { path = "tests/bins/file-read", artifact = "bin", target = "x86_64-unknown-none" }
+fb-ioctl-test = { path = "tests/bins/fb-ioctl", artifact = "bin", target = "x86_64-unknown-none" }
+fb-mmap-test = { path = "tests/bins/fb-mmap", artifact = "bin", target = "x86_64-unknown-none" }
 exit-code-test = { path = "tests/bins/exit-code", artifact = "bin", target = "x86_64-unknown-none" }
 test-support = { path = "tests/support" }
 
@@ -28,7 +32,6 @@ members = [
   "kernel/crates/kernel_devfs",
   "kernel/crates/kernel_device",
   "kernel/crates/kernel_elfloader",
-  "kernel/crates/kernel_gfx",
   "kernel/crates/kernel_log",
   "kernel/crates/kernel_memapi",
   "kernel/crates/kernel_pci",
@@ -36,14 +39,18 @@ members = [
   "kernel/crates/kernel_syscall",
   "kernel/crates/kernel_vfs",
   "kernel/crates/kernel_virtual_memory",
+  "userspace/fbdemo",
   "userspace/file_structure",
   "userspace/init",
+  "userspace/libs/gfx",
   "userspace/minilib",
   "tests/kernel",
-  "tests/bins/signals-init",
-  "tests/bins/mmap",
-  "tests/bins/file-read",
   "tests/bins/exit-code",
+  "tests/bins/fb-ioctl",
+  "tests/bins/fb-mmap",
+  "tests/bins/file-read",
+  "tests/bins/mmap",
+  "tests/bins/signals-init",
   "tests/support",
 ]
 default-members = [
@@ -52,7 +59,7 @@ default-members = [
   "kernel/crates/kernel_devfs",
   "kernel/crates/kernel_device",
   "kernel/crates/kernel_elfloader",
-  "kernel/crates/kernel_gfx",
+  "userspace/libs/gfx",
   "kernel/crates/kernel_log",
   "kernel/crates/kernel_memapi",
   "kernel/crates/kernel_pci",

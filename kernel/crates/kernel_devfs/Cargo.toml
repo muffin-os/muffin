@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 kernel_device = { path = "../kernel_device" }
+kernel_abi = { path = "../kernel_abi" }
 kernel_vfs = { path = "../kernel_vfs" }
 
 spin.workspace = true

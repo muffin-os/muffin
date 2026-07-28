@@ -68,6 +68,12 @@ pub enum MemoryRegion {
     ///
     /// - [`FileBackedMemoryRegion`]
     FileBacked(FileBackedMemoryRegion),
+    /// A memory region backed by a device file's physical frames, mapped
+    /// as a shared mapping. It owns the virtual reservation and keeps the
+    /// device file open.
+    ///
+    /// - [`SharedMemoryRegion`]
+    Shared(SharedMemoryRegion),
 }
 
 impl MemoryRegion {
@@ -78,6 +84,7 @@ impl MemoryRegion {
             MemoryRegion::FileBacked(file_backed_memory_region) => {
                 file_backed_memory_region.region.segment.start
             }
+            MemoryRegion::Shared(shared_memory_region) => shared_memory_region.segment.start,
         }
     }
 
@@ -88,6 +95,7 @@ impl MemoryRegion {
             MemoryRegion::FileBacked(file_backed_memory_region) => {
                 file_backed_memory_region.region.size
             }
+            MemoryRegion::Shared(shared_memory_region) => shared_memory_region.size,
         }
     }
 
@@ -140,4 +148,28 @@ impl MappedMemoryRegion {
 pub struct FileBackedMemoryRegion {
     region: LazyMemoryRegion,
     _node: VfsNode,
+}
+
+/// Owns the virtual reservation for a device-backed shared mapping and keeps
+/// the backing device file open.
+///
+/// It deliberately holds no [`OwnedPhysicalMemory`]. The device owns those
+/// frames, so dropping this region must release only the virtual range and
+/// never the frames. Deallocating them would hand live device memory back to
+/// the frame allocator and corrupt the device.
+#[derive(Debug)]
+pub struct SharedMemoryRegion {
+    segment: OwnedSegment<'static>,
+    size: usize,
+    _node: VfsNode,
+}
+
+impl SharedMemoryRegion {
+    pub fn new(segment: OwnedSegment<'static>, size: usize, node: VfsNode) -> Self {
+        Self {
+            segment,
+            size,
+            _node: node,
+        }
+    }
 }

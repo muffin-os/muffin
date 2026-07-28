@@ -3,13 +3,14 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use access::KernelAccess;
 use kernel_abi::{
-    EFAULT, EINVAL, ESRCH, Errno, ProcessId, SigAction, SigMaskHow, SigSet, Signal, syscall_name,
+    EFAULT, EINVAL, ESRCH, Errno, IoctlRequest, ProcessId, SigAction, SigMaskHow, SigSet, Signal,
+    syscall_name,
 };
 use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
-use kernel_syscall::unistd::{sys_getcwd, sys_read, sys_write};
+use kernel_syscall::unistd::{sys_fsync, sys_getcwd, sys_ioctl, sys_read, sys_write};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use tracing::{debug, error};
 use x86_64::VirtAddr;
@@ -43,6 +44,8 @@ pub fn dispatch_syscall(
         kernel_abi::SYS_SIGACTION => dispatch_sys_sigaction(arg1, arg2, arg3),
         kernel_abi::SYS_SIGPROCMASK => dispatch_sys_sigprocmask(arg1, arg2, arg3),
         kernel_abi::SYS_SIGPENDING => dispatch_sys_sigpending(arg1),
+        kernel_abi::SYS_IOCTL => dispatch_sys_ioctl(arg1, arg2, arg3),
+        kernel_abi::SYS_FSYNC => dispatch_sys_fsync(arg1),
         _ => {
             error!("unimplemented syscall: {} ({n})", syscall_name(n));
             loop {
@@ -258,4 +261,29 @@ fn dispatch_sys_write(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errn
 
     let slice = unsafe { slice_from_ptr_and_len(buf, nbyte) }?;
     sys_write(&cx, fd, slice)
+}
+
+fn dispatch_sys_ioctl(fd: usize, request: usize, argp: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    let fd = <KernelAccess as FileAccess>::Fd::from(fd);
+
+    let request = IoctlRequest::try_from(request)?;
+    match request.arg_size() {
+        0 => sys_ioctl(&cx, fd, request, &mut []),
+        size => {
+            let arg = unsafe { slice_from_ptr_and_len_mut(argp, size) }?;
+            sys_ioctl(&cx, fd, request, arg)
+        }
+    }
+}
+
+fn dispatch_sys_fsync(fd: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    let fd = <KernelAccess as FileAccess>::Fd::from(fd);
+
+    sys_fsync(&cx, fd)
 }

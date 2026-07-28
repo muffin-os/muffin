@@ -333,3 +333,14 @@ fn gouraud_triangle_blends_per_vertex_colors() {
         "pixel (6,6) near blue vertex: r={r} g={g} b={b}"
     );
 }
+
+#[test]
+fn present_into_copies_rows_and_preserves_stride_padding() {
+    let q = SoftQueue::new(3, 2);
+    let mut target = [0xDEAD_BEEFu32; 8];
+    q.present_into(&mut target, 4);
+    for (i, &px) in target.iter().enumerate() {
+        let expected = if i == 3 || i == 7 { 0xDEAD_BEEF } else { 0 };
+        assert_eq!(px, expected, "pixel at index {i} mismatch");
+    }
+}

@@ -88,6 +88,7 @@ pub struct KernelTest {
     files: Vec<DiskFile>,
     spawn: Vec<String>,
     deadline: Duration,
+    qemu_args: Vec<String>,
 }
 
 impl KernelTest {
@@ -99,6 +100,7 @@ impl KernelTest {
             files: vec![],
             spawn: vec![],
             deadline: DEFAULT_DEADLINE,
+            qemu_args: vec![],
         }
     }
 
@@ -132,6 +134,18 @@ impl KernelTest {
     #[must_use]
     pub fn deadline(mut self, d: Duration) -> Self {
         self.deadline = d;
+        self
+    }
+
+    /// Appends extra QEMU arguments to the hardcoded baseline, for example a
+    /// virtio-gpu device pinned to a fixed resolution.
+    #[must_use]
+    pub fn qemu_args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.qemu_args.extend(args.into_iter().map(Into::into));
         self
     }
 
@@ -209,6 +223,7 @@ impl KernelTest {
             ))
             .arg("-device")
             .arg("virtio-blk-pci,drive=virtio-disk0")
+            .args(&self.qemu_args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

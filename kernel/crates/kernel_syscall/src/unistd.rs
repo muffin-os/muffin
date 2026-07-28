@@ -1,6 +1,6 @@
 use core::slice::from_raw_parts_mut;
 
-use kernel_abi::{EINVAL, ERANGE, Errno};
+use kernel_abi::{EINVAL, ERANGE, Errno, IoctlRequest};
 use tracing::{Level, instrument};
 
 use crate::access::{CwdAccess, FileAccess};
@@ -44,6 +44,19 @@ pub fn sys_read<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd, buf: &mut [u8]) -> Resu
 #[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
 pub fn sys_write<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd, buf: &[u8]) -> Result<usize, Errno> {
     cx.write(fildes, buf).map_err(|_| EINVAL)
+}
+
+pub fn sys_ioctl<Cx: FileAccess>(
+    cx: &Cx,
+    fildes: Cx::Fd,
+    request: IoctlRequest,
+    arg: &mut [u8],
+) -> Result<usize, Errno> {
+    cx.ioctl(fildes, request, arg)
+}
+
+pub fn sys_fsync<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd) -> Result<usize, Errno> {
+    cx.fsync(fildes).map(|()| 0)
 }
 
 #[cfg(test)]

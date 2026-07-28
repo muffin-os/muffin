@@ -30,6 +30,26 @@ impl SoftQueue {
         &self.framebuffer
     }
 
+    /// Copies the framebuffer into `target` row by row. `stride` is measured in
+    /// u32 pixels, not bytes, so a caller holding a byte pitch passes `pitch / 4`.
+    pub fn present_into(&self, target: &mut [u32], stride: usize) {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        assert!(
+            stride >= width,
+            "stride {stride} smaller than width {width}"
+        );
+        assert!(
+            target.len() >= stride * (height - 1) + width,
+            "target len {} too small for {width}x{height} at stride {stride}",
+            target.len()
+        );
+        for y in 0..height {
+            let src = &self.framebuffer[y * width..y * width + width];
+            target[y * stride..y * stride + width].copy_from_slice(src);
+        }
+    }
+
     fn rasterize(&mut self, cmd: &DrawCmd) {
         let stride = cmd.vertex_stride;
         if stride == 0 || cmd.output_count < 2 {

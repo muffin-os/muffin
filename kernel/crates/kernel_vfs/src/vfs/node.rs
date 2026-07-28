@@ -2,12 +2,15 @@ use alloc::sync::{Arc, Weak};
 use core::fmt::{Debug, Formatter};
 use core::ops::Deref;
 
+use kernel_abi::IoctlRequest;
 use spin::RwLock;
 
 use crate::fs::{FileSystem, FsHandle};
 use crate::path::AbsoluteOwnedPath;
 use crate::vfs::stat::Stat;
-use crate::{FsError, FsyncError, MmapError, MmapRegion, ReadError, StatError, WriteError};
+use crate::{
+    FsError, FsyncError, IoctlError, MmapError, MmapRegion, ReadError, StatError, WriteError,
+};
 
 #[derive(Clone)]
 pub struct VfsNode {
@@ -107,6 +110,18 @@ impl VfsNode {
 
         let mut guard = fs.write();
         guard.mmap(self.fs_handle)
+    }
+
+    /// Performs a device-specific control operation on this file.
+    ///
+    /// # Errors
+    /// Returns [`IoctlError::NotSupported`] if the underlying filesystem or
+    /// device file does not support the request.
+    pub fn ioctl(&self, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, IoctlError> {
+        let fs = self.fs.upgrade().ok_or(FsError::FileSystemNotOpen)?;
+
+        let mut guard = fs.write();
+        guard.ioctl(self.fs_handle, request, arg)
     }
 
     /// Commits any pending writes for this file to the underlying device.

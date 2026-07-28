@@ -3,10 +3,13 @@
 use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
 use core::ffi::c_int;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub use kernel_abi::{
-    DefaultAction, MapFlags, ProtFlags, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal,
+    DefaultAction, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, SaFlags, SigAction, SigHandler,
+    SigMaskHow, SigSet, Signal,
 };
+use linked_list_allocator::LockedHeap;
 
 pub fn exit(code: i32) -> ! {
     syscall1(1, code as usize);
@@ -21,6 +24,19 @@ pub fn read(fd: c_int, buf: &mut [u8]) -> c_int {
 
 pub fn write(fd: c_int, buf: &[u8]) -> c_int {
     syscall3(37, fd as usize, buf.as_ptr() as usize, buf.len()) as i32
+}
+
+pub fn ioctl<T>(fd: c_int, request: IoctlRequest, arg: &mut T) -> c_int {
+    syscall3(
+        48,
+        fd as usize,
+        request.number(),
+        core::ptr::from_mut(arg) as usize,
+    ) as c_int
+}
+
+pub fn fsync(fd: c_int) -> c_int {
+    syscall1(49, fd as usize) as c_int
 }
 
 #[unsafe(naked)]
@@ -173,4 +189,54 @@ pub fn mmap(
 
 pub fn open(path: &str) -> c_int {
     syscall6(3, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) as c_int
+}
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+static HEAP_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Sets up the process heap so the global allocator can serve allocations.
+///
+/// Userspace has no `malloc` syscall, so a program that wants a heap must carve
+/// its own pool out of anonymous memory and hand it to the allocator. The
+/// kernel maps anonymous memory eagerly, hence the caller picks `size` to match
+/// its real working set instead of over-reserving. Any allocation attempted
+/// before this returns `true` hits the empty heap and trips the default
+/// alloc-error handler (a panic).
+///
+/// One-shot: the second successful-or-not call after initialization returns
+/// `false`. A failed `mmap` leaves the guard unclaimed so a smaller retry is
+/// still possible.
+pub fn heap_init(size: usize) -> bool {
+    if HEAP_INITIALIZED.load(Ordering::Acquire) {
+        return false;
+    }
+
+    let addr = mmap(
+        0,
+        size,
+        ProtFlags::READ | ProtFlags::WRITE,
+        MapFlags::ANONYMOUS | MapFlags::PRIVATE,
+        0,
+        0,
+    );
+    if addr <= 0 {
+        return false;
+    }
+
+    // Claim the guard only after a successful mmap so a mmap failure above can
+    // be retried. Losing the race means another caller already initialized.
+    if HEAP_INITIALIZED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+
+    // SAFETY: mmap just returned this region exclusively to us. It stays mapped
+    // for the whole process lifetime because there is no munmap syscall, so the
+    // heap's `'static` requirement holds. The guard above makes init run once.
+    unsafe { ALLOCATOR.lock().init(addr as *mut u8, size) };
+    true
 }
