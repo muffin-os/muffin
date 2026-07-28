@@ -9,8 +9,8 @@ use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDes
 use gfx::backend::software::{SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftShaderDef};
 use kernel_abi::gfx::BufferDesc;
 use minilib::{
-    FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, exit, fsync, heap_init, ioctl, mmap, open,
-    write,
+    CLOCK_MONOTONIC, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Timespec, clock_gettime,
+    exit, fsync, heap_init, ioctl, mmap, open, write,
 };
 
 fn puts(msg: &str) {
@@ -30,6 +30,36 @@ fn put_u32(n: u32) {
         }
     }
     write(1, &buf[i..]);
+}
+
+fn put_u64(n: u64) {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    let mut value = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    write(1, &buf[i..]);
+}
+
+// monotonic timestamp in microseconds; on failure the zeroed timespec yields 0
+fn now_us() -> u64 {
+    let mut tp = Timespec::default();
+    clock_gettime(CLOCK_MONOTONIC, &mut tp);
+    (tp.tv_sec as u64) * 1_000_000 + (tp.tv_nsec as u64) / 1000
+}
+
+fn report(label: &str, start_us: u64, end_us: u64) {
+    puts("fbdemo: ");
+    puts(label);
+    puts(" ");
+    put_u64(end_us.saturating_sub(start_us));
+    puts("us\n");
 }
 
 /// Unwraps a gfx pipeline result, reporting `FAIL gfx` and exiting on any error
@@ -62,19 +92,25 @@ fn color_frag(interp: &[f32]) -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() {
+    let t = now_us();
     let fd = open("/dev/fb0");
+    report("open", t, now_us());
     if fd < 0 {
         puts("fbdemo: FAIL open\n");
         exit(1);
     }
 
     let mut info = FbScreenInfo::default();
-    if ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info) != 0 {
+    let t = now_us();
+    let ioctl_rc = ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info);
+    report("ioctl", t, now_us());
+    if ioctl_rc != 0 {
         puts("fbdemo: FAIL ioctl\n");
         exit(1);
     }
 
     let len = info.pitch as usize * info.height as usize;
+    let t = now_us();
     let addr = mmap(
         0,
         len,
@@ -83,6 +119,7 @@ pub extern "C" fn _start() {
         fd as usize,
         0,
     );
+    report("mmap", t, now_us());
     if addr <= 0 {
         puts("fbdemo: FAIL mmap\n");
         exit(1);
@@ -91,17 +128,25 @@ pub extern "C" fn _start() {
     // gfx renders into a heap-backed SoftQueue framebuffer before presenting, so
     // the pool must fit that back buffer (width*height*4 ≈ len) plus rasterizer
     // churn; the extra megabyte is slack for the transient allocations.
-    if !heap_init(len + (1 << 20)) {
+    let t = now_us();
+    let heap_ok = heap_init(len + (1 << 20));
+    report("heap_init", t, now_us());
+    if !heap_ok {
         puts("fbdemo: FAIL heap\n");
         exit(1);
     }
 
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let t = now_us();
     let vert = or_fail_gfx(backend.compile_shader(&SoftShaderDef::Vertex {
         func: color_vert,
         output_count: 5,
     }));
+    report("compile_vertex", t, now_us());
+    let t = now_us();
     let frag = or_fail_gfx(backend.compile_shader(&SoftShaderDef::Fragment(color_frag)));
+    report("compile_fragment", t, now_us());
+    let t = now_us();
     let pso = or_fail_gfx(backend.compile_pipeline(&PipelineDesc {
         vertex_shader: &vert,
         pixel_shader: &frag,
@@ -109,6 +154,7 @@ pub extern "C" fn _start() {
         depth: false,
         vertex_stride: 20,
     }));
+    report("compile_pipeline", t, now_us());
 
     // three vertices: red apex top, green bottom-left, blue bottom-right
     #[rustfmt::skip]
@@ -119,18 +165,17 @@ pub extern "C" fn _start() {
     ];
     let bytes: Vec<u8> = verts.iter().flat_map(|f| f.to_ne_bytes()).collect();
 
+    let t = now_us();
     let mut vbuf = or_fail_gfx(backend.alloc_buffer(&BufferDesc {
         size: 60,
         is_dynamic: false,
     }));
     vbuf.data.copy_from_slice(&bytes);
+    report("alloc_buffer", t, now_us());
 
+    let t = now_us();
     let mut q = SoftQueue::new(info.width, info.height);
-    or_fail_gfx(q.submit(|rec| {
-        rec.bind_pipeline(&pso);
-        rec.bind_vertex_buffer(&vbuf);
-        rec.draw(3);
-    }));
+    report("queue_new", t, now_us());
 
     let stride = info.pitch as usize / 4;
     let width = info.width as usize;
@@ -140,11 +185,33 @@ pub extern "C" fn _start() {
     let fb_u32 = unsafe {
         core::slice::from_raw_parts_mut(addr as usize as *mut u32, stride * (height - 1) + width)
     };
-    q.present_into(fb_u32, stride);
 
-    if fsync(fd) != 0 {
-        puts("fbdemo: FAIL fsync\n");
-        exit(1);
+    // render several frames to expose warm-up effects across submit/present/fsync
+    for frame in 0..5u32 {
+        let t0 = now_us();
+        or_fail_gfx(q.submit(|rec| {
+            rec.bind_pipeline(&pso);
+            rec.bind_vertex_buffer(&vbuf);
+            rec.draw(3);
+        }));
+        let t1 = now_us();
+        q.present_into(fb_u32, stride);
+        let t2 = now_us();
+        let fsync_rc = fsync(fd);
+        let t3 = now_us();
+        if fsync_rc != 0 {
+            puts("fbdemo: FAIL fsync\n");
+            exit(1);
+        }
+        puts("fbdemo: frame ");
+        put_u32(frame);
+        puts(" submit ");
+        put_u64(t1.saturating_sub(t0));
+        puts("us present ");
+        put_u64(t2.saturating_sub(t1));
+        puts("us fsync ");
+        put_u64(t3.saturating_sub(t2));
+        puts("us\n");
     }
 
     puts("fbdemo: frame drawn ");
