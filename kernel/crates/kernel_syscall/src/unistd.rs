@@ -1,10 +1,12 @@
 use core::slice::from_raw_parts_mut;
 
 use kernel_abi::{EINVAL, ERANGE, Errno};
+use tracing::{Level, instrument};
 
 use crate::access::{CwdAccess, FileAccess};
 use crate::ptr::UserspaceMutPtr;
 
+#[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_getcwd<Cx: CwdAccess>(
     cx: &Cx,
     buf: UserspaceMutPtr<u8>,
@@ -34,10 +36,12 @@ pub fn sys_getcwd<Cx: CwdAccess>(
     Ok(buf.addr())
 }
 
+#[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
 pub fn sys_read<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
     cx.read(fildes, buf).map_err(|_| EINVAL)
 }
 
+#[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
 pub fn sys_write<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd, buf: &[u8]) -> Result<usize, Errno> {
     cx.write(fildes, buf).map_err(|_| EINVAL)
 }

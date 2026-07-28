@@ -1,3 +1,4 @@
+use core::fmt::{Debug, Formatter};
 use core::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
 
 use kernel_abi::{EINVAL, Errno};
@@ -7,6 +8,12 @@ use x86_64::VirtAddr;
 #[derive(Copy, Clone)]
 pub struct UserspacePtr<T> {
     ptr: *const T,
+}
+
+impl<T> Debug for UserspacePtr<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:#x}", self.addr())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -91,6 +98,12 @@ fn is_upper_half(addr: usize) -> Result<bool, NotUserspace> {
 
 pub struct UserspaceMutPtr<T> {
     ptr: *mut T,
+}
+
+impl<T> Debug for UserspaceMutPtr<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:#x}", self.ptr as usize)
+    }
 }
 
 impl<T> TryFrom<*mut T> for UserspaceMutPtr<T> {

@@ -2,6 +2,7 @@ use kernel_abi::{
     DefaultAction, EINVAL, EPERM, ESRCH, Errno, ProcessId, STOP_SIGNALS_MASK, SaFlags, SigAction,
     SigInfo, SigInfoField, SigMaskHow, SigSet, Signal, default_action,
 };
+use tracing::{Level, instrument};
 
 use crate::access::{
     Capability, Identity, PermissionAccess, ProcessAccess, ProcessesAccess, SignalAccess,
@@ -14,6 +15,7 @@ pub enum SignalTarget {
     ProcessGroup(ProcessId),
 }
 
+#[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_kill<Cx: SignalAccess + PermissionAccess + ProcessesAccess>(
     cx: &Cx,
     target: SignalTarget,

@@ -6,7 +6,7 @@ pub trait FileInfo {}
 
 pub trait FileAccess {
     type FileInfo: FileInfo;
-    type Fd: From<c_int> + Into<c_int>;
+    type Fd: From<c_int> + Into<c_int> + core::fmt::Debug;
     type OpenError;
     type ReadError;
     type WriteError;

@@ -5,6 +5,7 @@ use kernel_vfs::Vfs;
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use spin::RwLock;
+use tracing::{Level, instrument};
 
 use crate::file::devfs::devfs;
 
@@ -18,6 +19,7 @@ pub fn vfs() -> &'static RwLock<Vfs> {
     &VFS
 }
 
+#[instrument(level = Level::DEBUG)]
 pub fn init() {
     devfs::init();
 

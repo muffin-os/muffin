@@ -1,8 +1,10 @@
 use kernel_abi::{EINVAL, ENOMEM, Errno, MapFlags, ProtFlags};
+use tracing::{Level, instrument};
 
 use crate::UserspacePtr;
 use crate::access::{AllocationStrategy, Location, MemoryRegionAccess};
 
+#[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_mmap<Cx: MemoryRegionAccess>(
     cx: &Cx,
     addr: UserspacePtr<u8>,

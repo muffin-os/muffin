@@ -1,13 +1,19 @@
 #![no_std]
 
-//! An env_logger style `RUST_LOG` filter parsed into a fixed buffer.
+//! An env_logger style `RUST_LOG` filter and an alloc-free tracing
+//! subscriber.
 //!
-//! Directives are comma separated `target=level` pairs or bare levels. Parsing
-//! is no-alloc and stores everything in fixed size arrays so it works before a
-//! heap exists.
+//! Filter directives are comma separated `target=level` pairs or bare
+//! levels. Parsing is no-alloc and stores everything in fixed size arrays so
+//! it works before a heap exists. The subscriber (installed via [`init`]) is
+//! statically sized as well and renders through an [`Environment`] provided
+//! by the kernel.
 
 use tracing::Level;
 use tracing::level_filters::LevelFilter;
+
+mod subscriber;
+pub use subscriber::{Environment, init};
 
 const MAX_DIRECTIVES: usize = 16;
 const BUF_SIZE: usize = 256;
@@ -174,7 +180,7 @@ mod tests {
     fn target_level_pair() {
         let f = Filter::parse("kernel::mem=trace,info");
         assert!(
-            f.enabled("kernel::mem", &Level::TRACE),
+            f.enabled("kernel::mem", &Level::DEBUG),
             "TRACE enabled under kernel::mem"
         );
         assert!(
@@ -191,7 +197,7 @@ mod tests {
     fn longest_prefix_wins() {
         let f = Filter::parse("kernel=warn,kernel::mem=trace");
         assert!(
-            f.enabled("kernel::mem", &Level::TRACE),
+            f.enabled("kernel::mem", &Level::DEBUG),
             "longer prefix kernel::mem chooses TRACE"
         );
         assert!(
@@ -213,7 +219,7 @@ mod tests {
     fn bare_target_traces_only_itself() {
         let f = Filter::parse("kernel");
         assert!(
-            f.enabled("kernel::mem", &Level::TRACE),
+            f.enabled("kernel::mem", &Level::DEBUG),
             "bare target enables TRACE for matching targets"
         );
         assert!(
@@ -276,7 +282,7 @@ mod tests {
             "the first sixteen directives still apply"
         );
         assert!(
-            !f.enabled("ah", &Level::TRACE),
+            !f.enabled("ah", &Level::DEBUG),
             "the seventeenth directive is ignored"
         );
     }
@@ -298,7 +304,7 @@ mod tests {
             "uppercase INFO parses to the info level"
         );
         assert!(
-            f.enabled("Kernel::Mem", &Level::TRACE),
+            f.enabled("Kernel::Mem", &Level::DEBUG),
             "mixed case target and level parse"
         );
     }
