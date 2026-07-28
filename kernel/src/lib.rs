@@ -4,8 +4,8 @@
 extern crate alloc;
 
 use ::limine::firmware_type::FirmwareType;
-use ::tracing::info;
 use conquer_once::spin::OnceCell;
+use tracing::{Level, info, span};
 
 use crate::driver::pci;
 use crate::limine::{BOOT_TIME, EXECUTABLE_CMDLINE_REQUEST, FIRMWARE_TYPE_REQUEST};
@@ -43,10 +43,13 @@ pub fn init() {
     acpi::init();
     apic::init();
     hpet::init();
-    backtrace::init();
-    mcore::init();
-    file::init();
-    pci::init();
+
+    span!(Level::DEBUG, "kinit2").in_scope(|| {
+        backtrace::init();
+        mcore::init();
+        file::init();
+        pci::init();
+    });
 
     info!("kernel initialized");
 }

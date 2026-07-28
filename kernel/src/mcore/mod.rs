@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use core::sync::atomic::Ordering::{Acquire, Release};
 
-use tracing::{info, trace};
+use tracing::{Level, info, instrument, trace};
 use x86_64::instructions::segmentation::{CS, DS, SS};
 use x86_64::instructions::tables::load_tss;
 use x86_64::instructions::{hlt, interrupts};
@@ -26,6 +26,7 @@ mod lapic;
 pub mod mtask;
 
 #[allow(clippy::missing_panics_doc)]
+#[instrument(level = Level::DEBUG)]
 pub fn init() {
     let resp = unsafe {
         #[allow(static_mut_refs)] // we need this to set the `extra` field in the CPU structs

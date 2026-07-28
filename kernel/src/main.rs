@@ -27,7 +27,7 @@ use kernel_gfx::backend::software::{
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
 use spin::RwLock;
-use tracing::info;
+use tracing::{Level, info, span};
 
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
@@ -35,8 +35,7 @@ unsafe extern "C" fn main() -> ! {
 
     kernel::init();
 
-    {
-        info!("mounting root filesystem");
+    span!(Level::INFO, "mounting root filesystem").in_scope(|| {
         let root_block_device = BlockDevices::by_id(0).expect("should have block device with id 0");
         let root_block_device = ArcLockedBlockDevice(root_block_device);
         vfs()
@@ -48,14 +47,17 @@ unsafe extern "C" fn main() -> ! {
                 ),
             )
             .expect("should be able to mount ext2fs at /");
-    }
+    });
 
     {
-        info!("starting init process...");
-        let init_path = AbsolutePath::try_new("/bin/init").unwrap();
-        let _ = vfs().read().open(init_path).expect("should have /bin/init");
-        let proc = Process::create_from_executable(Process::root(), init_path).unwrap();
-        info!(pid = %proc.pid(), "started process");
+        let launch_span = span!(Level::INFO, "launch /bin/init");
+        let pid = launch_span.in_scope(|| {
+            let init_path = AbsolutePath::try_new("/bin/init").unwrap();
+            let _ = vfs().read().open(init_path).expect("should have /bin/init");
+            let proc = Process::create_from_executable(Process::root(), init_path).unwrap();
+            proc.pid()
+        });
+        launch_span.record("pid", pid.as_u64());
     }
 
     render_demo_frame();

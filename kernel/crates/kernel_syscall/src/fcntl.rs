@@ -4,11 +4,12 @@ use core::slice::from_raw_parts;
 
 use kernel_abi::{EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX};
 use kernel_vfs::path::{AbsolutePath, Path};
-use tracing::debug;
+use tracing::{Level, debug, instrument};
 
 use crate::access::{CwdAccess, FileAccess};
 use crate::ptr::UserspacePtr;
 
+#[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_open<Cx: CwdAccess + FileAccess>(
     cx: &Cx,
     path: UserspacePtr<u8>,

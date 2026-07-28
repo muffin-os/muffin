@@ -130,38 +130,78 @@ continue"
     cmd.arg("-vga");
     cmd.arg("none");
 
-    // The ISO is immutable at run time, so RUST_LOG rides the kernel cmdline
-    // via an SMBIOS-supplied Limine config.
-    if let Ok(value) = std::env::var("RUST_LOG")
-        && !value.is_empty()
-    {
-        let conf_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("limine.conf");
-        let conf = std::fs::read_to_string(&conf_path).expect("unable to read limine.conf");
+    cmd.stdout(std::process::Stdio::piped());
 
-        let mut lines: Vec<String> = conf.lines().map(str::to_owned).collect();
-        if let Some(line) = lines
-            .iter_mut()
-            .find(|l| l.trim_start().starts_with("cmdline:"))
-        {
-            line.push_str(&format!(" RUST_LOG={value}"));
-        } else if let Some(idx) = lines
-            .iter()
-            .position(|l| l.trim_start().starts_with("kernel_path:"))
-        {
-            lines.insert(idx + 1, format!("    cmdline: RUST_LOG={value}"));
-        } else {
-            panic!("limine.conf has neither a cmdline nor a kernel_path entry to carry RUST_LOG");
-        }
+    let mut child = cmd.spawn().expect("unable to start qemu");
 
-        // Limine drops the last byte of the config if the trailing newline is missing.
-        let modified = format!("limine:config:{}\n", lines.join("\n"));
-        let smbios_path = std::env::temp_dir().join("muffin-limine.conf");
-        std::fs::write(&smbios_path, modified).expect("unable to write SMBIOS limine config");
-
-        cmd.arg("-smbios");
-        cmd.arg(format!("type=11,path={}", smbios_path.display()));
+    if args.debug {
+        println!("qemu is waiting for a debugger to attach on localhost:1234...");
+    } else {
+        println!("booting...");
     }
 
-    let status = cmd.status().unwrap();
+    let stdout = child.stdout.take().expect("qemu stdout is piped");
+    forward_kernel_output(stdout, std::io::stdout().lock());
+
+    let status = child.wait().expect("unable to wait for qemu");
     assert!(status.success());
+}
+
+/// Every kernel serial record starts with this dim timestamp prefix.
+/// Firmware and bootloader output never contains it.
+const KERNEL_RECORD_MARKER: &[u8] = b"\x1b[2m[";
+
+/// Bytes buffered while waiting for the first kernel record before giving up
+/// and passing everything through.
+const GATE_LIMIT: usize = 64 * 1024;
+
+/// Copies the QEMU serial stream to `to`, dropping everything before the
+/// first kernel log record.
+///
+/// OVMF mirrors the UEFI console to the serial port, so firmware and Limine
+/// messages precede the kernel's output and cannot be silenced through
+/// limine.conf. If the kernel never produces a record, the suppressed bytes
+/// are flushed on QEMU exit (or once [`GATE_LIMIT`] is exceeded) so boot
+/// failures stay diagnosable.
+fn forward_kernel_output(mut from: impl std::io::Read, mut to: impl std::io::Write) {
+    let mut chunk = [0_u8; 4096];
+    let mut pending: Vec<u8> = vec![];
+    let mut forwarding = false;
+
+    loop {
+        let n = match from.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        if forwarding {
+            to.write_all(&chunk[..n])
+                .expect("unable to write serial output");
+            let _ = to.flush();
+            continue;
+        }
+
+        pending.extend_from_slice(&chunk[..n]);
+        let start = pending
+            .windows(KERNEL_RECORD_MARKER.len())
+            .position(|window| window == KERNEL_RECORD_MARKER);
+        if let Some(start) = start {
+            forwarding = true;
+            to.write_all(&pending[start..])
+                .expect("unable to write serial output");
+            let _ = to.flush();
+            pending = vec![];
+        } else if pending.len() > GATE_LIMIT {
+            forwarding = true;
+            to.write_all(&pending)
+                .expect("unable to write serial output");
+            let _ = to.flush();
+            pending = vec![];
+        }
+    }
+
+    if !forwarding {
+        // The kernel never came up. Show what the firmware had to say.
+        let _ = to.write_all(&pending);
+        let _ = to.flush();
+    }
 }

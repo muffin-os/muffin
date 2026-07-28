@@ -633,6 +633,8 @@ dependencies = [
 name = "kernel_log"
 version = "0.1.0"
 dependencies = [
+ "conquer-once",
+ "spin",
  "tracing",
 ]
 

@@ -11,7 +11,7 @@ use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::unistd::{sys_getcwd, sys_read, sys_write};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
-use tracing::{debug, error, trace};
+use tracing::{debug, error};
 use x86_64::VirtAddr;
 use x86_64::instructions::hlt;
 
@@ -31,11 +31,6 @@ pub fn dispatch_syscall(
     arg5: usize,
     arg6: usize,
 ) -> isize {
-    trace!(
-        "syscall: {} ({n}) {arg1} {arg2} {arg3} {arg4} {arg5} {arg6}",
-        syscall_name(n)
-    );
-
     let result = match n {
         kernel_abi::SYS_GETCWD => dispatch_sys_getcwd(arg1, arg2),
         kernel_abi::SYS_MMAP => dispatch_sys_mmap(arg1, arg2, arg3, arg4, arg5, arg6),
@@ -57,10 +52,7 @@ pub fn dispatch_syscall(
     };
 
     match result {
-        Ok(ret) => {
-            trace!("syscall {} ({n}) returned {ret}", syscall_name(n));
-            ret as isize
-        }
+        Ok(ret) => ret as isize,
         Err(e) => {
             error!("syscall {} ({n}) failed with error: {e:?}", syscall_name(n));
             Into::<isize>::into(e).neg()

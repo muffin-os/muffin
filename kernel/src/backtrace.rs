@@ -9,6 +9,7 @@ use addr2line::{Context, gimli};
 use conquer_once::spin::OnceCell;
 use elf::ParseError;
 use thiserror::Error;
+use tracing::{Level, instrument};
 
 use crate::UsizeExt;
 
@@ -25,6 +26,7 @@ unsafe impl Send for BacktraceContext {}
 /// # Panics
 /// This function panics if the kernel elf file cannot be found or if something goes wrong
 /// during parsing.
+#[instrument(level = Level::DEBUG)]
 pub fn init() {
     // TODO: make this work in release builds as well
     #[cfg(all(debug_assertions, feature = "backtrace"))]

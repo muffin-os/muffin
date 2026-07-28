@@ -6,7 +6,7 @@ use core::error::Error;
 use kernel_pci::PciAddress;
 use kernel_pci::config::{ConfigKey, ConfigurationAccess, PortCam, ReadConfig, WriteConfig};
 use linkme::distributed_slice;
-use tracing::{debug, error, trace};
+use tracing::{Level, debug, error, instrument, trace};
 use virtio_drivers::transport::pci::bus::DeviceFunction;
 
 #[distributed_slice]
@@ -30,8 +30,9 @@ pub struct PciDriverDescriptor {
 ///
 /// Panics if there are multiple specific or multiple generic drivers that would match
 /// the same device.
+#[instrument(level = Level::DEBUG)]
 pub fn init() {
-    if tracing::enabled!(tracing::Level::TRACE) {
+    if tracing::enabled!(tracing::Level::DEBUG) {
         PCI_DRIVERS
             .iter()
             .for_each(|driver| trace!(name = %driver.name, "have pci driver"));

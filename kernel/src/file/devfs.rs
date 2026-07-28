@@ -3,6 +3,7 @@ use core::fmt::Write;
 use conquer_once::spin::OnceCell;
 use kernel_devfs::{ArcLockedDevFs, Null, Serial};
 use kernel_vfs::path::AbsolutePath;
+use tracing::{Level, instrument};
 
 use crate::serial_print;
 
@@ -13,6 +14,7 @@ pub fn devfs() -> &'static ArcLockedDevFs {
     DEVFS.get().expect("devfs should be initialized")
 }
 
+#[instrument(level = Level::DEBUG)]
 pub fn init() {
     let devfs = ArcLockedDevFs::new();
     {
