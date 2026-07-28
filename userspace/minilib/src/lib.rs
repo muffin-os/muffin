@@ -6,8 +6,8 @@ use core::ffi::c_int;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub use kernel_abi::{
-    DefaultAction, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, SaFlags, SigAction, SigHandler,
-    SigMaskHow, SigSet, Signal,
+    CLOCK_MONOTONIC, DefaultAction, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, SaFlags,
+    SigAction, SigHandler, SigMaskHow, SigSet, Signal, Timespec,
 };
 use linked_list_allocator::LockedHeap;
 
@@ -37,6 +37,10 @@ pub fn ioctl<T>(fd: c_int, request: IoctlRequest, arg: &mut T) -> c_int {
 
 pub fn fsync(fd: c_int) -> c_int {
     syscall1(49, fd as usize) as c_int
+}
+
+pub fn clock_gettime(clockid: usize, tp: &mut Timespec) -> c_int {
+    syscall2(50, clockid, tp as *mut Timespec as usize) as c_int
 }
 
 #[unsafe(naked)]
