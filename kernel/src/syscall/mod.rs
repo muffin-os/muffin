@@ -4,7 +4,7 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 use access::KernelAccess;
 use kernel_abi::{
     EFAULT, EINVAL, ESRCH, Errno, IoctlRequest, ProcessId, SigAction, SigMaskHow, SigSet, Signal,
-    syscall_name,
+    Timespec, syscall_name,
 };
 use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
@@ -16,6 +16,7 @@ use tracing::{debug, error};
 use x86_64::VirtAddr;
 use x86_64::instructions::hlt;
 
+use crate::hpet::hpet;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::ExitOutcome;
 use crate::mcore::mtask::task::Task;
@@ -46,6 +47,7 @@ pub fn dispatch_syscall(
         kernel_abi::SYS_SIGPENDING => dispatch_sys_sigpending(arg1),
         kernel_abi::SYS_IOCTL => dispatch_sys_ioctl(arg1, arg2, arg3),
         kernel_abi::SYS_FSYNC => dispatch_sys_fsync(arg1),
+        kernel_abi::SYS_CLOCK_GETTIME => dispatch_sys_clock_gettime(arg1, arg2),
         _ => {
             error!("unimplemented syscall: {} ({n})", syscall_name(n));
             loop {
@@ -286,4 +288,34 @@ fn dispatch_sys_fsync(fd: usize) -> Result<usize, Errno> {
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     sys_fsync(&cx, fd)
+}
+
+/// POSIX clock_gettime backed by the HPET main counter
+///
+/// hpet() panics only before HPET init, but syscalls only run long after init, so it cannot panic here
+fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno> {
+    let (ticks, period_fs) = {
+        let h = hpet().read();
+        (h.main_counter_value(), h.period_femtoseconds())
+    };
+    // femtoseconds per tick divided by 1e6 femtoseconds per ns yields ns since boot
+    let ns = ticks as u128 * period_fs as u128 / 1_000_000;
+
+    let secs_since_boot = ns / 1_000_000_000;
+    // tv_nsec is always below 1e9 so the cast cannot truncate
+    let tv_nsec = (ns % 1_000_000_000) as i64;
+
+    let total_secs = match clockid {
+        kernel_abi::CLOCK_MONOTONIC => secs_since_boot,
+        kernel_abi::CLOCK_REALTIME => {
+            let boot = *crate::BOOT_TIME_SECONDS.get().ok_or(EINVAL)?;
+            boot as u128 + secs_since_boot
+        }
+        _ => return Err(EINVAL),
+    };
+
+    // seconds since epoch stay within i64 for centuries, but convert fallibly to avoid truncation
+    let tv_sec = i64::try_from(total_secs).map_err(|_| EINVAL)?;
+    write_user::<Timespec>(tp, Timespec { tv_sec, tv_nsec })?;
+    Ok(0)
 }

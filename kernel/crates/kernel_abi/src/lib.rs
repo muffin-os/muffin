@@ -9,6 +9,7 @@ mod mman;
 mod signal;
 mod sys_types;
 mod syscall;
+mod time;
 
 pub mod gfx;
 
@@ -20,3 +21,4 @@ pub use mman::*;
 pub use signal::*;
 pub use sys_types::*;
 pub use syscall::*;
+pub use time::*;

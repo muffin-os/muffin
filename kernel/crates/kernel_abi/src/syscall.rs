@@ -62,4 +62,5 @@ n! {
     SYS_GETPID = 47,
     SYS_IOCTL = 48,
     SYS_FSYNC = 49,
+    SYS_CLOCK_GETTIME = 50,
 }
