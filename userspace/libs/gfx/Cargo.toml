@@ -1,9 +1,9 @@
 [package]
-name = "kernel_gfx"
+name = "gfx"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kernel_abi = { path = "../kernel_abi" }
+kernel_abi = { path = "../../../kernel/crates/kernel_abi" }
 
 tracing.workspace = true

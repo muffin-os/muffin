@@ -1,4 +1,4 @@
-use kernel_abi::{EINVAL, ENOMEM, Errno, MapFlags, ProtFlags};
+use kernel_abi::{EBADF, EINVAL, ENOMEM, Errno, MapFlags, ProtFlags};
 use tracing::{Level, instrument};
 
 use crate::UserspacePtr;
@@ -11,59 +11,69 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
     len: usize,
     prot: i32,
     flags: i32,
-    _fd: i32,
-    _offset: usize,
+    fd: i32,
+    offset: usize,
 ) -> Result<usize, Errno> {
-    // Validate size is non-zero
     if len == 0 {
         return Err(EINVAL);
     }
 
     let flags = MapFlags::from_bits(flags).ok_or(EINVAL)?;
 
-    // For now, only support anonymous private mappings
-    if !flags.contains(MapFlags::ANONYMOUS) {
-        return Err(EINVAL);
-    }
-    if !flags.contains(MapFlags::PRIVATE) {
-        return Err(EINVAL);
-    }
-
-    // Validate protection flags
     let prot = ProtFlags::from_bits(prot).ok_or(EINVAL)?;
 
-    // Ensure WRITE and EXEC are mutually exclusive (W^X policy)
+    // ensure WRITE and EXEC are mutually exclusive (W^X policy)
     if prot.contains(ProtFlags::WRITE) && prot.contains(ProtFlags::EXEC) {
         return Err(EINVAL);
     }
 
-    // Determine location
-    let location = if flags.contains(MapFlags::FIXED) {
-        // When MAP_FIXED is set, addr must not be null
-        if addr.as_ptr().is_null() {
+    if flags.contains(MapFlags::ANONYMOUS) {
+        if !flags.contains(MapFlags::PRIVATE) {
             return Err(EINVAL);
         }
-        // Validate that addr and addr+len are in lower half
-        addr.validate_range(len)?;
-        Location::Fixed(addr)
+
+        let location = if flags.contains(MapFlags::FIXED) {
+            // when MAP_FIXED is set, addr must not be null
+            if addr.as_ptr().is_null() {
+                return Err(EINVAL);
+            }
+            // validate that addr and addr+len are in lower half
+            addr.validate_range(len)?;
+            Location::Fixed(addr)
+        } else {
+            // when MAP_FIXED is not set, addr is just a hint and is ignored
+            Location::Anywhere
+        };
+
+        let mapped_addr = cx
+            .create_and_track_mapping(location, len, AllocationStrategy::Eager)
+            .map_err(|e| match e {
+                crate::access::CreateMappingError::LocationAlreadyMapped => EINVAL,
+                crate::access::CreateMappingError::OutOfMemory => ENOMEM,
+            })?;
+
+        Ok(mapped_addr.addr())
     } else {
-        // When MAP_FIXED is not set, addr is just a hint and is ignored
-        Location::Anywhere
-    };
+        // A non-anonymous mapping is backed by an open file descriptor and
+        // must be shared so writes reach the device frames.
+        if !flags.contains(MapFlags::SHARED) {
+            return Err(EINVAL);
+        }
+        if fd < 0 {
+            return Err(EBADF);
+        }
+        if offset != 0 {
+            return Err(EINVAL);
+        }
+        // MAP_FIXED is not supported for file-backed mappings; the kernel
+        // chooses the address.
+        if flags.contains(MapFlags::FIXED) {
+            return Err(EINVAL);
+        }
 
-    // We'll use eager allocation for now (as specified in requirements)
-    let allocation_strategy = AllocationStrategy::Eager;
-
-    // Create the mapping and add it to the process's memory regions
-    // The context is responsible for converting the mapping to a region
-    let mapped_addr = cx
-        .create_and_track_mapping(location, len, allocation_strategy)
-        .map_err(|e| match e {
-            crate::access::CreateMappingError::LocationAlreadyMapped => EINVAL,
-            crate::access::CreateMappingError::OutOfMemory => ENOMEM,
-        })?;
-
-    Ok(mapped_addr.addr())
+        let mapped_addr = cx.map_shared_file(fd, len)?;
+        Ok(mapped_addr.addr())
+    }
 }
 
 #[cfg(test)]
@@ -71,7 +81,7 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec::Vec;
 
-    use kernel_abi::{EINVAL, MapFlags, ProtFlags};
+    use kernel_abi::{EINVAL, ENODEV, MapFlags, ProtFlags};
     use spin::mutex::Mutex;
 
     use crate::UserspacePtr;
@@ -263,5 +273,71 @@ mod tests {
         );
 
         assert_eq!(result, Err(EINVAL));
+    }
+
+    #[test]
+    fn mmap_non_anonymous_requires_shared() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+
+        let result = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            ProtFlags::READ.bits(),
+            MapFlags::PRIVATE.bits(), // neither ANONYMOUS nor SHARED
+            3,
+            0,
+        );
+
+        assert_eq!(
+            result,
+            Err(EINVAL),
+            "non-anonymous mapping without MAP_SHARED must be rejected"
+        );
+    }
+
+    #[test]
+    fn mmap_shared_fd_unsupported() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+
+        let result = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            ProtFlags::READ.bits(),
+            MapFlags::SHARED.bits(),
+            3,
+            0,
+        );
+
+        assert_eq!(
+            result,
+            Err(ENODEV),
+            "shared fd mapping must hit the default map_shared_file rejecting with ENODEV"
+        );
+    }
+
+    #[test]
+    fn mmap_shared_offset_rejected() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+
+        let result = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            ProtFlags::READ.bits(),
+            MapFlags::SHARED.bits(),
+            3,
+            4096, // non-zero offset is unsupported
+        );
+
+        assert_eq!(
+            result,
+            Err(EINVAL),
+            "shared fd mapping with a non-zero offset must be rejected"
+        );
     }
 }

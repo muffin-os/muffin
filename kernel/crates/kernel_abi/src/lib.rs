@@ -3,6 +3,7 @@
 
 mod errno;
 mod fcntl;
+mod ioctl;
 mod limits;
 mod mman;
 mod signal;
@@ -13,6 +14,7 @@ pub mod gfx;
 
 pub use errno::*;
 pub use fcntl::*;
+pub use ioctl::*;
 pub use limits::*;
 pub use mman::*;
 pub use signal::*;

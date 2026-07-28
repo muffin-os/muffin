@@ -1,5 +1,6 @@
 use core::ffi::c_int;
 
+use kernel_abi::{EINVAL, ENOTTY, Errno, IoctlRequest};
 use kernel_vfs::path::AbsolutePath;
 
 pub trait FileInfo {}
@@ -21,6 +22,24 @@ pub trait FileAccess {
     fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Self::WriteError>;
 
     fn close(&self, fd: Self::Fd) -> Result<(), Self::CloseError>;
+
+    /// Performs a device-specific control operation on an open file.
+    ///
+    /// # Errors
+    /// Returns `ENOTTY` when the file does not implement the request.
+    fn ioctl(&self, fd: Self::Fd, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, Errno> {
+        let _ = (fd, request, arg);
+        Err(ENOTTY)
+    }
+
+    /// Flushes an open file's pending writes to its backing device.
+    ///
+    /// # Errors
+    /// Returns `EINVAL` when the file does not support fsync.
+    fn fsync(&self, fd: Self::Fd) -> Result<(), Errno> {
+        let _ = fd;
+        Err(EINVAL)
+    }
 }
 
 #[cfg(test)]

@@ -60,4 +60,6 @@ n! {
     SYS_SIGPENDING = 45,
     SYS_SIGRETURN = 46,
     SYS_GETPID = 47,
+    SYS_IOCTL = 48,
+    SYS_FSYNC = 49,
 }

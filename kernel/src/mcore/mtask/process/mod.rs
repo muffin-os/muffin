@@ -127,9 +127,13 @@ impl Process {
             executable_file_data: RwLock::new(None),
             current_working_directory: RwLock::new(parent.current_working_directory.read().clone()),
             address_space: Some(address_space),
+            // Dynamic (Location::Anywhere) reservations start at 4 GiB so they
+            // can never grow into the fixed ET_EXEC link region around 0x20_0000,
+            // where the ELF loader must reserve exact addresses. The range ends
+            // at the top of the canonical lower half.
             lower_half_memory: Arc::new(RwLock::new(VirtualMemoryManager::new(
-                VirtAddr::new(0xF000),
-                0x0000_7FFF_FFFF_0FFF,
+                VirtAddr::new(0x1_0000_0000),
+                0x7F00_0000_0000,
             ))),
             telemetry: Telemetry::default(),
             memory_regions: MemoryRegions::new(),

@@ -1,7 +1,9 @@
+use kernel_abi::IoctlRequest;
+
 use crate::path::AbsolutePath;
 use crate::{
-    CloseError, FsyncError, MmapError, MmapRegion, OpenError, ReadError, Stat, StatError,
-    WriteError,
+    CloseError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError, Stat,
+    StatError, WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -55,6 +57,22 @@ pub trait FileSystem: Send + Sync {
     /// stable backing memory, or any underlying error.
     fn mmap(&mut self, _handle: FsHandle) -> Result<MmapRegion, MmapError> {
         Err(MmapError::NotSupported)
+    }
+
+    /// Performs a device-specific control operation on the file.
+    ///
+    /// The default impl rejects with [`IoctlError::NotSupported`].
+    ///
+    /// # Errors
+    /// Returns [`IoctlError::NotSupported`] when the file does not implement
+    /// the request.
+    fn ioctl(
+        &mut self,
+        _handle: FsHandle,
+        _request: IoctlRequest,
+        _arg: &mut [u8],
+    ) -> Result<usize, IoctlError> {
+        Err(IoctlError::NotSupported)
     }
 
     /// Commits any pending writes for the given handle to the underlying

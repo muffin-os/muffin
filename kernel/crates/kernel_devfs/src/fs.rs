@@ -4,11 +4,12 @@ use alloc::string::{String, ToString};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
+use kernel_abi::IoctlRequest;
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsolutePath, ROOT};
 use kernel_vfs::{
-    CloseError, FsError, FsyncError, MmapError, MmapRegion, OpenError, ReadError, Stat, StatError,
-    WriteError,
+    CloseError, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError, Stat,
+    StatError, WriteError,
 };
 use thiserror::Error;
 
@@ -182,6 +183,17 @@ impl FileSystem for DevFs {
         self.resolve_handle(handle)
             .map_err(MmapError::FsError)?
             .mmap()
+    }
+
+    fn ioctl(
+        &mut self,
+        handle: FsHandle,
+        request: IoctlRequest,
+        arg: &mut [u8],
+    ) -> Result<usize, IoctlError> {
+        self.resolve_handle(handle)
+            .map_err(IoctlError::FsError)?
+            .ioctl(request, arg)
     }
 
     fn fsync(&mut self, handle: FsHandle) -> Result<(), FsyncError> {

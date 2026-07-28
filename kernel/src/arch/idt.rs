@@ -355,6 +355,16 @@ extern "sysv64" fn page_fault_handler_impl(
                     // the node and write data accordingly
                     RegionOutcome::Handled
                 }
+                MemoryRegion::Shared(_shared_memory_region) => {
+                    // A shared device mapping is fully mapped eagerly, so a
+                    // fault inside it is an invalid access.
+                    error!(
+                        "invalid access to shared memory region in process '{}' task '{}', terminating...",
+                        process.name(),
+                        task.name()
+                    );
+                    RegionOutcome::Invalid
+                }
             }
         });
 

@@ -5,13 +5,16 @@ use core::fmt::{Debug, Formatter};
 use core::ptr::NonNull;
 use core::slice;
 
+use kernel_abi::{FbScreenInfo, IoctlRequest};
 use kernel_devfs::DevFile;
 use kernel_device::Device;
 use kernel_device::raw::RawDevice;
 use kernel_pci::PciAddress;
 use kernel_pci::config::ConfigurationAccess;
 use kernel_vfs::path::AbsolutePath;
-use kernel_vfs::{FsyncError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError};
+use kernel_vfs::{
+    FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError,
+};
 use linkme::distributed_slice;
 use spin::Mutex;
 use spin::rwlock::RwLock;
@@ -73,6 +76,8 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
                     gpu: gpu_arc.clone(),
                     ptr: NonNull::new(fb_addr as *mut u8).unwrap(),
                     len: logical_len,
+                    width,
+                    height,
                 })
             })
             .expect("should be able to register /dev/fb0");
@@ -97,6 +102,8 @@ struct FbDevFile {
     gpu: Arc<Mutex<VirtIOGpu<HalImpl, PciTransport>>>,
     ptr: NonNull<u8>,
     len: usize,
+    width: u32,
+    height: u32,
 }
 
 // SAFETY: `ptr` aliases a framebuffer that lives for the kernel's lifetime;
@@ -147,6 +154,24 @@ impl DevFile for FbDevFile {
     fn fsync(&mut self) -> Result<(), FsyncError> {
         self.gpu.lock().flush().map_err(|_| FsyncError::Failed)?;
         Ok(())
+    }
+
+    fn ioctl(&mut self, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, IoctlError> {
+        match request {
+            IoctlRequest::FbGetScreenInfo => {
+                let Ok(arg) = <&mut [u8; FbScreenInfo::SIZE]>::try_from(arg) else {
+                    return Err(IoctlError::InvalidArgument);
+                };
+                let info = FbScreenInfo {
+                    width: self.width,
+                    height: self.height,
+                    pitch: self.width * 4,
+                    bpp: 32,
+                };
+                *arg = info.to_bytes();
+                Ok(0)
+            }
+        }
     }
 }
 

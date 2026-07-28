@@ -1,4 +1,7 @@
-use kernel_vfs::{FsyncError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError};
+use kernel_abi::IoctlRequest;
+use kernel_vfs::{
+    FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError,
+};
 
 mod block;
 pub use block::*;
@@ -31,5 +34,15 @@ pub trait DevFile: Send + Sync {
     /// Returns an error when the underlying device fails to commit.
     fn fsync(&mut self) -> Result<(), FsyncError> {
         Ok(())
+    }
+
+    /// Performs a device-specific control operation.
+    /// Default impl rejects with [`IoctlError::NotSupported`].
+    ///
+    /// # Errors
+    /// Returns [`IoctlError::NotSupported`] when the device does not
+    /// implement the request.
+    fn ioctl(&mut self, _request: IoctlRequest, _arg: &mut [u8]) -> Result<usize, IoctlError> {
+        Err(IoctlError::NotSupported)
     }
 }

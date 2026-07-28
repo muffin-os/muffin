@@ -387,6 +387,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
+name = "fb-ioctl-test"
+version = "0.1.0"
+dependencies = [
+ "minilib",
+]
+
+[[package]]
+name = "fb-mmap-test"
+version = "0.1.0"
+dependencies = [
+ "minilib",
+]
+
+[[package]]
+name = "fbdemo"
+version = "0.1.0"
+dependencies = [
+ "gfx",
+ "kernel_abi",
+ "minilib",
+]
+
+[[package]]
 name = "file-read-test"
 version = "0.1.0"
 dependencies = [
@@ -437,6 +460,14 @@ dependencies = [
  "cfg-if",
  "libc",
  "wasi",
+]
+
+[[package]]
+name = "gfx"
+version = "0.1.0"
+dependencies = [
+ "kernel_abi",
+ "tracing",
 ]
 
 [[package]]
@@ -556,7 +587,6 @@ dependencies = [
  "kernel_devfs",
  "kernel_device",
  "kernel_elfloader",
- "kernel_gfx",
  "kernel_log",
  "kernel_memapi",
  "kernel_pci",
@@ -594,6 +624,7 @@ dependencies = [
 name = "kernel_devfs"
 version = "0.1.0"
 dependencies = [
+ "kernel_abi",
  "kernel_device",
  "kernel_vfs",
  "spin",
@@ -619,14 +650,6 @@ dependencies = [
  "tracing",
  "x86_64",
  "zerocopy 0.9.0-alpha.0",
-]
-
-[[package]]
-name = "kernel_gfx"
-version = "0.1.0"
-dependencies = [
- "kernel_abi",
- "tracing",
 ]
 
 [[package]]
@@ -679,6 +702,7 @@ dependencies = [
 name = "kernel_vfs"
 version = "0.1.0"
 dependencies = [
+ "kernel_abi",
  "mkfs-filesystem",
  "spin",
  "thiserror",
@@ -807,6 +831,7 @@ name = "minilib"
 version = "0.1.0"
 dependencies = [
  "kernel_abi",
+ "linked_list_allocator",
 ]
 
 [[package]]
@@ -836,6 +861,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "exit-code-test",
+ "fb-ioctl-test",
+ "fb-mmap-test",
+ "fbdemo",
  "file-read-test",
  "file_structure",
  "init",

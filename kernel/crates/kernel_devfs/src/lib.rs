@@ -12,11 +12,12 @@ mod fs;
 mod node;
 
 pub use fs::*;
+use kernel_abi::IoctlRequest;
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CloseError, FsyncError, MmapError, MmapRegion, OpenError, ReadError, Stat, StatError,
-    WriteError,
+    CloseError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError, Stat,
+    StatError, WriteError,
 };
 
 #[derive(Clone)]
@@ -74,6 +75,15 @@ impl FileSystem for ArcLockedDevFs {
 
     fn mmap(&mut self, handle: FsHandle) -> Result<MmapRegion, MmapError> {
         self.inner.write().mmap(handle)
+    }
+
+    fn ioctl(
+        &mut self,
+        handle: FsHandle,
+        request: IoctlRequest,
+        arg: &mut [u8],
+    ) -> Result<usize, IoctlError> {
+        self.inner.write().ioctl(handle, request, arg)
     }
 
     fn fsync(&mut self, handle: FsHandle) -> Result<(), FsyncError> {
