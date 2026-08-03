@@ -1,0 +1,35 @@
+# The pinned toolchain is nightly-only. Without this no Rust toolchain resolves.
+common --@rules_rust//rust/toolchain/channel=nightly
+
+build --@rules_rust//rust/settings:rustfmt.toml=//:rustfmt.toml
+
+# QEMU integration tests need the host qemu-system-x86_64 and /dev/kvm.
+test --test_output=errors
+test --test_env=PATH
+
+# Without an explicit choice, rules_cc bakes whichever linker it detects into the
+# host toolchain's unconditional link_flags, falling back to gold, which rustc
+# warns is deprecated and buggy with Rust. bfd ships with binutils, so it is
+# present wherever the host C toolchain works. macOS links with ld64 and rejects
+# the flag, hence the linux scoping.
+#
+# Both lines are load-bearing. --linkopt covers the target configuration and
+# --host_linkopt the exec configuration, where rules_rust builds its own tooling.
+# Dropping either brings the warning back for half the graph.
+common --enable_platform_specific_config
+build:linux --linkopt=-fuse-ld=bfd
+build:linux --host_linkopt=-fuse-ld=bfd
+
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+build:clippy --@rules_rust//rust/settings:clippy_flag=-Dclippy::all
+
+build:rustfmt --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
+build:rustfmt --output_groups=+rustfmt_checks
+
+# cargo miri needs the user's rustup install and crates.io.
+test:miri --test_env=HOME
+test:miri --test_env=RUSTUP_HOME
+test:miri --test_env=CARGO_HOME
+
+try-import %workspace%/user.bazelrc

@@ -1,7 +1,0 @@
-[package]
-name = "file-read-test"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-minilib = { path = "../../../userspace/minilib" }

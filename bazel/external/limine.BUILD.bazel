@@ -1,0 +1,32 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+# The upstream Makefile compiles limine.c alone. The bios-install payload arrives
+# through a quote-include of limine-bios-hdd.h next to it, so that header has to
+# be a declared input or the compile cannot find it.
+cc_binary(
+    name = "limine",
+    srcs = [
+        "limine-bios-hdd.h",
+        "limine.c",
+    ],
+    copts = ["-std=c99"],
+)
+
+filegroup(
+    name = "bios_files",
+    srcs = [
+        "limine-bios-cd.bin",
+        "limine-bios.sys",
+        "limine-uefi-cd.bin",
+    ],
+)
+
+filegroup(
+    name = "efi_files",
+    srcs = [
+        "BOOTIA32.EFI",
+        "BOOTX64.EFI",
+    ],
+)

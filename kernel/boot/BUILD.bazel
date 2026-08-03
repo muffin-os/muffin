@@ -1,0 +1,71 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("//bazel:kernel_crates.bzl", "KERNEL_CRATES", "crate_label", "kernel_crate_label")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["linker-x86_64.ld"])
+
+_EXTERNAL_CRATES = [
+    "acpi",
+    "addr2line",
+    "bitfield",
+    "bitflags",
+    "conquer-once",
+    "cordyceps",
+    "elf",
+    "itertools",
+    "jiff",
+    "limine",
+    "linked_list_allocator",
+    "linkme",
+    "mkfs-ext2",
+    "mkfs-filesystem",
+    "raw-cpuid",
+    "rustc-demangle",
+    "sha3",
+    "spin",
+    "thiserror",
+    "tracing",
+    "uart_16550",
+    "virtio-drivers",
+    "volatile",
+    "x2apic",
+    "x86_64",
+]
+
+rust_library(
+    name = "lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    crate_features = ["backtrace"],
+    crate_name = "kernel",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    deps = [kernel_crate_label(name) for name in KERNEL_CRATES] +
+           [crate_label(name) for name in _EXTERNAL_CRATES],
+)
+
+# Carries no -Copt-level override on purpose. A larger kernel image makes the
+# DWARF parse in backtrace::init overflow the 16 MiB kernel heap during boot.
+rust_binary(
+    name = "boot",
+    srcs = ["src/main.rs"],
+    crate_features = ["backtrace"],
+    crate_name = "kernel_boot",
+    crate_root = "src/main.rs",
+    edition = "2024",
+    linker_script = "linker-x86_64.ld",
+    platform = "//platforms:x86_64-none",
+    deps = [
+        ":lib",
+        kernel_crate_label("device"),
+        kernel_crate_label("vfs"),
+        crate_label("mkfs-ext2"),
+        crate_label("mkfs-filesystem"),
+        crate_label("spin"),
+        crate_label("tracing"),
+        crate_label("x86_64"),
+    ],
+)

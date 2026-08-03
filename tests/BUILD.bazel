@@ -1,0 +1,95 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//bazel/rules:image.bzl", "ext2_image", "limine_iso")
+
+limine_iso(
+    name = "test_iso",
+    kernel = "//tests/kernel:test-kernel",
+)
+
+_HELLO = "muffin says hi\n"
+
+# The `spawn` file is the manifest the test kernel reads. One line per process,
+# in the order the assertions index them.
+ext2_image(
+    name = "mmap_disk",
+    contents = {"spawn": "/bin/mmap\n"},
+    files = {"//tests/bins:mmap": "bin/mmap"},
+)
+
+ext2_image(
+    name = "signals_disk",
+    contents = {"spawn": "/bin/init\n/bin/init\n"},
+    files = {"//tests/bins:signals_init": "bin/init"},
+)
+
+ext2_image(
+    name = "exit_codes_disk",
+    contents = {
+        "data/hello.txt": _HELLO,
+        "spawn": "/bin/exit-code\n/bin/file-read\n",
+    },
+    files = {
+        "//tests/bins:exit_code": "bin/exit-code",
+        "//tests/bins:file_read": "bin/file-read",
+    },
+)
+
+ext2_image(
+    name = "file_read_disk",
+    contents = {
+        "data/hello.txt": _HELLO,
+        "spawn": "/bin/file-read\n",
+    },
+    files = {"//tests/bins:file_read": "bin/file-read"},
+)
+
+ext2_image(
+    name = "fb_ioctl_disk",
+    contents = {"spawn": "/bin/fb-ioctl\n"},
+    files = {"//tests/bins:fb_ioctl": "bin/fb-ioctl"},
+)
+
+ext2_image(
+    name = "fb_mmap_disk",
+    contents = {"spawn": "/bin/fb-mmap\n"},
+    files = {"//tests/bins:fb_mmap": "bin/fb-mmap"},
+)
+
+# no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
+# harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
+#
+# Each case boots a QEMU guest with 4G and 4 vcpus, hence size large: it tells
+# Bazel to reserve real resources rather than run six emulators at once. The
+# timeout must stay above the harness's own 180s deadline plus its 2s grace,
+# otherwise Bazel kills the run before the harness can dump its transcript.
+[
+    rust_test(
+        name = name,
+        srcs = [name + ".rs"],
+        data = [
+            ":test_iso",
+            ":" + name + "_disk",
+            "@ovmf//:x64_code",
+            "@ovmf//:x64_vars",
+        ],
+        edition = "2024",
+        rustc_env = {
+            "MUFFIN_TEST_ISO": "$(rootpath :test_iso)",
+            "MUFFIN_TEST_DISK": "$(rootpath :{}_disk)".format(name),
+            "OVMF_X86_64_CODE": "$(rootpath @ovmf//:x64_code)",
+            "OVMF_X86_64_VARS": "$(rootpath @ovmf//:x64_vars)",
+        },
+        size = "large",
+        tags = ["no-sandbox"],
+        timeout = "moderate",
+        deps = ["//tests/support"],
+    )
+    for name in [
+        "exit_codes",
+        "fb_ioctl",
+        "fb_mmap",
+        "file_read",
+        "mmap",
+        "signals",
+    ]
+]

@@ -1,0 +1,1 @@
+# Package marker so the sibling BUILD templates are addressable as labels.

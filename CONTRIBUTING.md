@@ -9,21 +9,24 @@ Welcome to Muffin OS! This guide will help you get started with contributing to 
 - **Language:** Rust (Nightly)
 - **Target:** x86_64-unknown-none
 - **Bootloader:** Limine v12.5.2
-- **Build System:** Cargo with custom build scripts
+- **Build System:** Bazel (bzlmod)
 
 ## Architecture
 
-The project uses a modular workspace structure:
+The project uses a modular Bazel build:
 
 ```
-├── kernel/                      # Main kernel crate (bare-metal)
-│   ├── crates/                 # Kernel subsystem crates (testable on host)
-│   │   └── kernel_*            #   - VFS, memory management, device drivers, etc.
-│   ├── src/                    # Kernel source code
-│   └── linker-x86_64.ld        # Custom linker script
-├── userspace/                  # User-space components
-├── src/main.rs                 # QEMU runner
-└── build.rs                    # Build orchestration
+├── MODULE.bazel                 # External deps, Rust toolchain pin, crate specs
+├── muffinos/                    # //muffinos runner, :iso, :disk
+├── kernel/
+│   ├── boot/                   # //kernel/boot, the bootable ELF + kernel lib
+│   │   └── linker-x86_64.ld    # Custom linker script
+│   └── <subsystem>/            # //kernel/vfs, //kernel/abi, ... crate kernel_<name>
+├── userspace/                  # init, fbdemo, minilib, libs/gfx
+├── tests/                      # QEMU integration tests, test-kernel, test bins
+├── platforms/                  # The x86_64-unknown-none target platform
+├── bazel/                      # Crate graph, image rules, external BUILD files
+└── tools/miri/                 # Miri shim over a synthesized Cargo workspace
 ```
 
 ### Testability Philosophy
@@ -32,14 +35,27 @@ The project uses a modular workspace structure:
 
 ## Prerequisites
 
+Obviously, if you know better, do better. For example, there is no need to use bazelisk.
+This is just to get someone started that maybe hasn't worked with bazel or other components yet.
+
 ### Required Tools
 
-This guide assumes Rust is installed through [rustup](https://rustup.rs/). The project uses Rust nightly with required components configured in `rust-toolchain.toml`, which rustup will automatically set up.
+Install Bazel through [Bazelisk](https://github.com/bazelbuild/bazelisk) so the
+version in `.bazelversion` is honored. Bazel downloads the Rust toolchain itself
+from the pin in `MODULE.bazel`, so a `rustup` install is not needed to build or
+test.
+
+The toolchain is the only thing Bazel provides for you. `xorriso` and
+`e2fsprogs` are still host prerequisites, because `//muffinos:iso` and every
+`ext2_image` target shell out to `xorriso` and `mke2fs`. `qemu-system-x86` is
+needed to run the OS and to run the `//tests` integration tests.
 
 ```bash
-# Install system dependencies for ISO creation and running the OS
-sudo apt update && sudo apt install -y xorriso qemu-system
+sudo apt update && sudo apt install -y bazelisk xorriso e2fsprogs qemu-system-x86
 ```
+
+`rustup` with the `miri` component is required only for the Miri targets, which
+drive Cargo rather than Bazel.
 
 ### Optional Tools
 
@@ -52,11 +68,11 @@ sudo apt update && sudo apt install -y xorriso qemu-system
 To build the project:
 
 ```bash
-# Build all workspace components
-cargo build
+# Build everything
+bazel build //...
 
-# Build in release mode
-cargo build --release
+# Build optimized
+bazel build -c opt //...
 ```
 
 ### Full System Build
@@ -64,50 +80,68 @@ cargo build --release
 To build the complete bootable ISO:
 
 ```bash
-# Requires xorriso to be installed
-cargo build --release
+# Requires xorriso and e2fsprogs to be installed
+bazel build -c opt //muffinos:iso //muffinos:disk
 ```
 
 This creates:
-- Kernel binary
-- Bootable ISO image (`target/release/build/**/out/muffin.iso`)
-- Disk image (`disk.img`)
+- Kernel binary (`bazel build //kernel/boot`)
+- Bootable ISO image (`bazel-bin/muffinos/muffinos.iso`)
+- Disk image (`bazel-bin/muffinos/disk.img`)
 
 The build process automatically:
-1. Downloads the Limine bootloader binaries (cached after first build)
-2. Downloads OVMF firmware for UEFI support
+1. Fetches the pinned Limine bootloader release and builds its `limine` tool
+2. Fetches the pinned OVMF firmware for UEFI support
 3. Compiles the kernel for bare-metal x86-64
 4. Creates a bootable ISO with xorriso
-5. Builds an ext2 filesystem image
+5. Builds an ext2 filesystem image with mke2fs
+
+### Updating External Crates
+
+External Rust dependencies are declared as `crate.spec` tags in `MODULE.bazel`.
+After editing them, repin the lock files:
+
+```bash
+CARGO_BAZEL_REPIN=1 bazel mod deps
+```
+
+Commit the resulting `bazel/Cargo.Bazel.lock` and `bazel/cargo-bazel-lock.json`.
+
+### IDE Support
+
+```bash
+bazel run @rules_rust//tools/rust_analyzer:gen_rust_project
+```
+
+This writes a gitignored `rust-project.json` that rust-analyzer picks up.
 
 ## Testing
 
 ### Running Tests
 
-Due to the bare-metal nature of the kernel, testing is done at the crate level:
-
 ```bash
-# Run all tests (automatically tests only testable crates)
-cargo test
+# Host unit tests, doc tests, and the QEMU integration tests
+bazel test //...
 
-# Test individual crates
-cargo test -p kernel_abi
-cargo test -p kernel_vfs
+# Test one package, no need to know its target names
+bazel test //kernel/vfs/...
 ```
 
-**Note:** The kernel binary itself cannot be tested with standard unit tests. Many crates may have no tests yet (0 tests is normal).
+The integration tests under `//tests` boot the real kernel under QEMU against
+Bazel-built images. Many crates may have no tests yet (0 tests is normal).
+
+**Note:** The kernel binary itself cannot be tested with standard unit tests.
 
 ### Miri Tests (Undefined Behavior Detection)
 
-Miri is used to detect undefined behavior in unsafe code:
+Miri is used to detect undefined behavior in unsafe code. These targets are
+tagged `manual`, so `bazel test //...` skips them and they must be named
+explicitly. Each one synthesizes a throwaway Cargo workspace and runs
+`cargo miri test` against it, so it needs `rustup` with the `miri` component.
 
 ```bash
-# Setup Miri (first time only)
-cargo miri setup
-
-# Run Miri on specific crates
-cargo miri test -p kernel_abi
-cargo miri test -p kernel_vfs
+bazel test --config=miri //tools/miri:kernel_abi
+bazel test --config=miri //tools/miri:kernel_vfs
 ```
 
 ## Development Workflow
@@ -122,31 +156,30 @@ Run these commands in order to validate your changes:
 
 ```bash
 # 1. Format check (fastest)
-cargo fmt -- --check
+bazel build --config=rustfmt //...
 
-# 2. Lint check
-cargo clippy -- -D clippy::all
+# 2. Apply formatting if the check failed
+bazel run @rules_rust//tools/rustfmt
 
-# 3. Build check
-cargo build
+# 3. Lint check
+bazel build --config=clippy //...
 
-# 4. Test
-cargo test
+# 4. Build and test
+bazel test //...
 
 # 5. (Optional) Miri tests if you changed kernel crates
-cargo miri setup
-cargo miri test -p <modified_crate>
+bazel test --config=miri //tools/miri:vfs
 
-# 6. (Optional) Full build
-cargo build --release
+# 6. (Optional) Optimized build
+bazel test -c opt //...
 ```
 
 ### CI Pipeline
 
 GitHub Actions runs on every push with these jobs:
 
-1. **Lint:** Checks formatting and runs clippy with `-D clippy::all`
-2. **Test:** Runs tests in both debug and release modes
+1. **Lint:** Runs the rustfmt and clippy aspects with `-D clippy::all`
+2. **Test:** Runs `bazel test //...` in both `-c dbg` and `-c opt`
 3. **Miri:** Tests each kernel crate with Miri for undefined behavior
 4. **Build:** Creates the bootable ISO and uploads artifacts
 
@@ -158,20 +191,24 @@ To build and run Muffin OS in QEMU:
 
 ```bash
 # Run with default settings
-cargo run
+bazel run //muffinos
 
 # Run without GUI
-cargo run -- --headless
+bazel run //muffinos -- --headless
 
 # Run with GDB debugging (connects on localhost:1234)
-cargo run -- --debug
+bazel run //muffinos -- --debug
 
 # Customize CPU cores and memory
-cargo run -- --smp 4 --mem 512M
+bazel run //muffinos -- --smp 4 --mem 512M
 
-# Build ISO without running
-cargo run -- --no-run
+# Build the images without booting
+bazel run //muffinos -- --no-run
 ```
+
+`bazel run` boots QEMU in the foreground and does not exit on its own, since the
+kernel idles once boot completes. Stop it with Ctrl-C. It is a manual smoke test,
+not an automated one. Automated coverage lives in `//tests`.
 
 ## Project Guidelines
 
@@ -214,9 +251,8 @@ Muffin OS is dual-licensed under Apache-2.0 OR MIT. All contributions must be co
 
 ### Performance Tips
 
-- Use incremental builds (default) for faster iteration
-- First build takes longer due to downloading dependencies
-- Subsequent builds are much faster
+- Bazel caches actions across builds, so iteration after the first build is fast
+- The first build downloads the Rust toolchain, Limine, OVMF, and every crate
 
 ---
 

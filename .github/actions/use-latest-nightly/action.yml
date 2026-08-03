@@ -1,0 +1,19 @@
+name: Use latest nightly
+description: >-
+  Repoints both nightly pins at today's nightly. rules_rust rejects a bare
+  "nightly" version because it requires an ISO date for that channel, so the
+  date has to be resolved before it can be substituted.
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve and pin latest nightly
+      shell: bash
+      run: |
+        set -euo pipefail
+        # minimal profile is enough, this step only reads the version string.
+        rustup toolchain install nightly --profile minimal
+        DATE=$(rustc +nightly --version | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        echo "Pinning both manifests to nightly-${DATE}"
+        sed -i "s/^channel = .*/channel = \"nightly-${DATE}\"/" rust-toolchain.toml
+        sed -i "s|nightly/[0-9-]\{10\}|nightly/${DATE}|g" MODULE.bazel

@@ -2,8 +2,8 @@
 //!
 //! Boots the shared generic `test-kernel` under QEMU with a two-line `/spawn`
 //! manifest that launches two instances of a dedicated test init (a driver and
-//! a victim) at `/bin/init`. The harness assembles the ISO and disk image and
-//! parses the serial transcript.
+//! a victim) at `/bin/init`. The harness boots the images its Bazel target
+//! declared and parses the serial transcript.
 //!
 //! The two processes coordinate with a ping/ack handshake over SIGWINCH and
 //! SIGURG instead of racing on wall-clock delays. The driver pings the victim
@@ -34,14 +34,7 @@ const MARKERS: [&str; 10] = [
 
 #[test]
 fn signal_delivery_end_to_end() {
-    let report = KernelTest::new("signals", test_support::host_env!())
-        .program(
-            "bin/init",
-            env!("CARGO_BIN_FILE_SIGNALS_TEST_INIT_signals-test-init"),
-        )
-        .spawn("/bin/init")
-        .spawn("/bin/init")
-        .run();
+    let report = KernelTest::new("signals", test_support::host_env!()).run();
 
     // The report line is the load-bearing assertion. A missing report and a
     // wrong-count report both break the ordered scan the same way, so diagnose

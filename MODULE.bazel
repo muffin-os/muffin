@@ -1,0 +1,167 @@
+module(
+    name = "muffinos",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.71.3")
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "rules_shell", version = "0.6.1")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = ["x86_64-unknown-none"],
+    # Keep this date in sync with rust-toolchain.toml. .github/workflows/nightly-upgrade.yml bumps both.
+    rustfmt_version = "nightly/2026-07-12",
+    versions = ["nightly/2026-07-12"],
+    # Setting extra_rustc_flags as well would silently redirect these to the exec
+    # configuration: rules_rust selects the exec flag source based on whether
+    # extra_rustc_flags is non-empty.
+    extra_rustc_flags_triples = {
+        "x86_64-unknown-none": [
+            "-Cpanic=abort",
+            "-Clink-arg=-z",
+            "-Clink-arg=nostart-stop-gc",
+            "-Cforce-frame-pointers=yes",
+            "-Cforce-unwind-tables=yes",
+            "-Crelocation-model=static",
+            "-Cdebuginfo=2",
+        ],
+    },
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+
+# x86_64-unknown-linux-gnu is mandatory, not cosmetic: crate_universe runs
+# `cargo tree` on a host-tools triple to resolve features and hard-errors without one.
+RUST_TRIPLES = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-none",
+]
+
+crate.spec(package = "acpi", version = "5.2")
+crate.spec(
+    default_features = False,
+    features = [
+        "fallible-iterator",
+        "rustc-demangle",
+    ],
+    package = "addr2line",
+    version = "0.26",
+)
+crate.spec(package = "bitfield", version = "0.19")
+crate.spec(package = "bitflags", version = "2.11")
+crate.spec(
+    features = ["derive"],
+    package = "clap",
+    version = "4.5",
+)
+crate.spec(
+    default_features = False,
+    package = "conquer-once",
+    version = "0.4",
+)
+crate.spec(
+    default_features = False,
+    features = ["alloc"],
+    package = "cordyceps",
+    version = "0.3",
+)
+crate.spec(
+    default_features = False,
+    features = ["nightly"],
+    package = "elf",
+    version = "0.7",
+)
+crate.spec(
+    default_features = False,
+    features = ["use_alloc"],
+    package = "itertools",
+    version = "0.14.0",
+)
+crate.spec(
+    default_features = False,
+    features = ["alloc"],
+    package = "jiff",
+    version = "0.2",
+)
+crate.spec(package = "limine", version = "0.5")
+crate.spec(package = "linked_list_allocator", version = "0.10")
+crate.spec(package = "linkme", version = "0.3")
+crate.spec(
+    git = "https://github.com/tsatke/mkfs",
+    package = "mkfs-ext2",
+    rev = "24c1cfba44f360c8d4936f08cee49a34a5e4f916",
+)
+crate.spec(
+    git = "https://github.com/tsatke/mkfs",
+    package = "mkfs-filesystem",
+    rev = "24c1cfba44f360c8d4936f08cee49a34a5e4f916",
+)
+crate.spec(package = "raw-cpuid", version = "11")
+crate.spec(package = "rustc-demangle", version = "0.1")
+crate.spec(
+    default_features = False,
+    package = "sha3",
+    version = "0.11.0-rc.8",
+)
+crate.spec(package = "spin", version = "0.10")
+crate.spec(
+    default_features = False,
+    package = "thiserror",
+    version = "2.0",
+)
+crate.spec(
+    default_features = False,
+    features = ["attributes"],
+    package = "tracing",
+    version = "0.1",
+)
+crate.spec(package = "uart_16550", version = "0.4")
+crate.spec(package = "virtio-drivers", version = "0.13")
+crate.spec(
+    features = ["derive"],
+    package = "volatile",
+    version = "0.6",
+)
+crate.spec(package = "x2apic", version = "0.5")
+crate.spec(package = "x86_64", version = "0.15")
+crate.spec(
+    features = [
+        "alloc",
+        "derive",
+    ],
+    package = "zerocopy",
+    version = "0.9.0-alpha.0",
+)
+
+crate.from_specs(
+    name = "crates",
+    cargo_lockfile = "//bazel:Cargo.Bazel.lock",
+    lockfile = "//bazel:cargo-bazel-lock.json",
+    supported_platform_triples = RUST_TRIPLES,
+)
+use_repo(crate, "crates")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "limine",
+    build_file = "//bazel/external:limine.BUILD.bazel",
+    sha256 = "4c760c09c53560d859b362319a3dc63b79cca3d47f35d69ab0106a13b8057055",
+    strip_prefix = "limine-binary",
+    urls = ["https://github.com/limine-bootloader/limine/releases/download/v12.5.2/limine-binary.tar.gz"],
+)
+
+http_archive(
+    name = "ovmf",
+    build_file = "//bazel/external:ovmf.BUILD.bazel",
+    sha256 = "8ae4d2d73161cc2335f5675d3b8b6edfa0642301679764a246940488ea3ce20d",
+    strip_prefix = "edk2-stable202605-r1-bin",
+    urls = ["https://github.com/rust-osdev/ovmf-prebuilt/releases/download/edk2-stable202605-r1/edk2-stable202605-r1-bin.tar.xz"],
+)

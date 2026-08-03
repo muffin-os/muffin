@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//bazel:kernel_crates.bzl", "crate_label")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "test-kernel",
+    srcs = ["src/main.rs"],
+    crate_root = "src/main.rs",
+    edition = "2024",
+    linker_script = "//kernel/boot:linker-x86_64.ld",
+    platform = "//platforms:x86_64-none",
+    deps = [
+        "//kernel/boot:lib",
+        "//kernel/device",
+        "//kernel/vfs",
+        crate_label("mkfs-ext2"),
+        crate_label("mkfs-filesystem"),
+        crate_label("spin"),
+        crate_label("tracing"),
+        crate_label("x86_64"),
+    ],
+)

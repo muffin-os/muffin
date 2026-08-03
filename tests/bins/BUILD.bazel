@@ -1,0 +1,22 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+[
+    rust_binary(
+        name = name,
+        srcs = ["{}/src/main.rs".format(directory)],
+        crate_root = "{}/src/main.rs".format(directory),
+        edition = "2024",
+        platform = "//platforms:x86_64-none",
+        deps = ["//userspace/minilib"],
+    )
+    for name, directory in {
+        "exit_code": "exit-code",
+        "fb_ioctl": "fb-ioctl",
+        "fb_mmap": "fb-mmap",
+        "file_read": "file-read",
+        "mmap": "mmap",
+        "signals_init": "signals-init",
+    }.items()
+]

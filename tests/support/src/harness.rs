@@ -1,11 +1,12 @@
 //! Host-side harness for booting userspace test executables inside the real
 //! kernel under QEMU and asserting on their serial output and exit codes.
 //!
-//! A test builds a [`KernelTest`], stages files onto a fresh ext2 disk image
-//! (including a `/spawn` manifest of absolute paths), boots the shared
-//! `test-kernel` under QEMU, and collects the serial transcript. The kernel
-//! spawns every manifest entry as its own process, so a single boot can fan
-//! out into several processes whose outcomes the test kernel prints directly.
+//! A test names a [`KernelTest`], boots the shared `test-kernel` under QEMU
+//! against the ISO and disk its Bazel target declared, and collects the serial
+//! transcript. The disk carries a `/spawn` manifest of absolute paths. The
+//! kernel spawns every manifest entry as its own process, so a single boot can
+//! fan out into several processes whose outcomes the test kernel prints
+//! directly.
 //!
 //! The wire contract with `test-kernel` is four serial lines the test kernel
 //! prints itself, so it is independent of the active log filter. Spawns are
@@ -17,76 +18,54 @@
 //! inside the payload rather than matching from the start.
 
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
-use crate::{DiskFile, build_disk_image, build_iso};
-
 /// Overall wall-clock budget for a single boot. QEMU under TCG in CI is slow.
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(180);
 /// Extra window to keep draining serial output after completion is detected.
 const FINAL_MARKER_GRACE: Duration = Duration::from_secs(2);
 
-/// Compile-time environment captured at the root test crate's call site.
+/// Paths to the images and firmware a single test boots.
 ///
-/// `tests/support` cannot `env!` the artifact and firmware paths itself because
-/// they are compile-time env of the root `muffinos` package only. The
-/// [`host_env!`] macro expands where those vars exist and hands the values here.
+/// `tests/support` cannot `env!` these itself because `rustc_env` sets them on
+/// each test crate, not here. The [`host_env!`] macro expands at the caller and
+/// hands the values over.
 pub struct HostEnv {
+    pub iso: PathBuf,
+    pub disk: PathBuf,
     pub ovmf_code: PathBuf,
     pub ovmf_vars: PathBuf,
-    pub limine_dir: PathBuf,
-    pub limine_conf: PathBuf,
-    pub test_kernel: PathBuf,
-    pub out_root: PathBuf,
+    pub work_dir: PathBuf,
 }
 
-/// Builds a [`HostEnv`] from the root test crate's compile-time environment.
+/// Builds a [`HostEnv`] from the calling test crate's compile-time environment.
 ///
-/// This must expand at the caller's site, which is the only crate that sees the
-/// `OVMF_*`, `LIMINE_DIR`, and `CARGO_BIN_FILE_TEST_KERNEL_test-kernel` vars set
-/// by the root `build.rs` and artifact dependency.
+/// This must expand at the caller's site, which is the only crate whose
+/// `rustc_env` carries the four image and firmware paths.
 #[macro_export]
 macro_rules! host_env {
     () => {
         $crate::HostEnv {
+            iso: ::std::path::PathBuf::from(env!("MUFFIN_TEST_ISO")),
+            disk: ::std::path::PathBuf::from(env!("MUFFIN_TEST_DISK")),
             ovmf_code: ::std::path::PathBuf::from(env!("OVMF_X86_64_CODE")),
             ovmf_vars: ::std::path::PathBuf::from(env!("OVMF_X86_64_VARS")),
-            limine_dir: ::std::path::PathBuf::from(env!("LIMINE_DIR")),
-            limine_conf: ::std::path::PathBuf::from(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/limine.conf"
-            )),
-            test_kernel: ::std::path::PathBuf::from(env!("CARGO_BIN_FILE_TEST_KERNEL_test-kernel")),
-            out_root: ::std::path::PathBuf::from(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/target/test-images"
-            )),
+            work_dir: ::std::path::PathBuf::from(
+                ::std::env::var("TEST_TMPDIR").expect("TEST_TMPDIR is set by bazel test"),
+            ),
         }
     };
-}
-
-/// Reports whether `qemu-system-x86_64` is on `PATH` so tests can skip on hosts
-/// without QEMU (local runs) while CI, which installs it, still exercises them.
-#[must_use]
-pub fn qemu_available() -> bool {
-    Command::new("qemu-system-x86_64")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
 }
 
 /// A configured but not-yet-booted kernel test.
 pub struct KernelTest {
     name: &'static str,
     env: HostEnv,
-    files: Vec<DiskFile>,
-    spawn: Vec<String>,
     deadline: Duration,
     qemu_args: Vec<String>,
 }
@@ -97,38 +76,9 @@ impl KernelTest {
         Self {
             name,
             env,
-            files: vec![],
-            spawn: vec![],
             deadline: DEFAULT_DEADLINE,
             qemu_args: vec![],
         }
-    }
-
-    /// Stages raw bytes at a disk-relative path (e.g. `"data/hello.txt"`).
-    #[must_use]
-    pub fn file(mut self, disk_path: &'static str, content: Vec<u8>) -> Self {
-        self.files.push(DiskFile {
-            path: disk_path,
-            content,
-        });
-        self
-    }
-
-    /// Stages a prebuilt host binary at a disk-relative path (e.g. `"bin/mmap"`).
-    #[must_use]
-    pub fn program(self, disk_path: &'static str, host_binary: impl AsRef<Path>) -> Self {
-        let content =
-            fs::read(host_binary.as_ref()).expect("should be able to read the test program binary");
-        self.file(disk_path, content)
-    }
-
-    /// Appends one absolute in-OS path to the `/spawn` manifest. Spawning the
-    /// same path twice is allowed and is how a test fans out into multiple
-    /// processes.
-    #[must_use]
-    pub fn spawn(mut self, abs_path: &str) -> Self {
-        self.spawn.push(abs_path.to_owned());
-        self
     }
 
     #[must_use]
@@ -153,38 +103,20 @@ impl KernelTest {
     /// and per-process outcomes.
     ///
     /// # Panics
-    /// Panics (after dumping the serial transcript) if no spawn entries were
-    /// configured, if QEMU exits before every spawned process reports an
-    /// outcome, if the deadline expires first, or if any serial line contains
-    /// `panicked`.
+    /// Panics (after dumping the serial transcript) if QEMU exits before every
+    /// spawned process reports an outcome, if the deadline expires first, or if
+    /// any serial line contains `panicked`.
     #[must_use]
-    pub fn run(mut self) -> RunReport {
-        assert!(
-            !self.spawn.is_empty(),
-            "KernelTest::run requires at least one spawn entry"
-        );
-
-        // The manifest is a plain newline-separated list of absolute paths the
-        // kernel reads from `/spawn`. A trailing newline keeps every entry on
-        // its own line.
-        let manifest = format!("{}\n", self.spawn.join("\n"));
-        self.files.push(DiskFile {
-            path: "spawn",
-            content: manifest.into_bytes(),
-        });
-
-        let out_dir = self.env.out_root.join(self.name);
-        fs::create_dir_all(&out_dir).expect("should be able to create test image output directory");
-        let disk_image = build_disk_image(&self.files, &out_dir);
-        let bootable_iso = build_iso(
-            &self.env.limine_dir,
-            &self.env.limine_conf,
-            &self.env.test_kernel,
-            &out_dir,
-        );
+    pub fn run(self) -> RunReport {
+        // Runfiles are read-only build outputs. Booting them directly fails to
+        // open and would corrupt the action cache.
+        let out_dir = self.env.work_dir.join(self.name);
+        fs::create_dir_all(&out_dir).expect("should be able to create the test work directory");
+        let disk_image = stage_writable(&self.env.disk, &out_dir.join("disk.img"));
+        let ovmf_vars_image = stage_writable(&self.env.ovmf_vars, &out_dir.join("ovmf-vars.fd"));
 
         let ovmf_code = self.env.ovmf_code.display();
-        let ovmf_vars = self.env.ovmf_vars.display();
+        let ovmf_vars = ovmf_vars_image.display();
         // Accelerate with KVM when the host exposes it, falling back to TCG so
         // the test still runs on CI hosts without /dev/kvm. `-cpu max` (below)
         // stays valid under both, unlike `-cpu host`, which requires a hardware
@@ -210,7 +142,7 @@ impl KernelTest {
             .arg("-drive")
             .arg(format!("if=pflash,unit=1,format=raw,file={ovmf_vars}"))
             .arg("-cdrom")
-            .arg(&bootable_iso)
+            .arg(&self.env.iso)
             .arg("-cpu")
             .arg("max")
             .arg("-smp")
@@ -356,6 +288,26 @@ impl KernelTest {
             processes,
         }
     }
+}
+
+/// Stages a runfiles image at `dest`, writable, and returns `dest`.
+///
+/// Runfiles arrive read-only. QEMU opens both the vars flash and the disk
+/// read-write.
+fn stage_writable(src: &Path, dest: &Path) -> PathBuf {
+    let _ = fs::remove_file(dest);
+    fs::copy(src, dest).unwrap_or_else(|e| {
+        panic!(
+            "should be able to stage {} at {}: {e}",
+            src.display(),
+            dest.display()
+        )
+    });
+
+    fs::set_permissions(dest, fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|e| panic!("should be able to make {} writable: {e}", dest.display()));
+
+    dest.to_owned()
 }
 
 /// A spawned process whose outcome is still being awaited during the run.

@@ -1,0 +1,11 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "x64_code",
+    srcs = ["x64/code.fd"],
+)
+
+filegroup(
+    name = "x64_vars",
+    srcs = ["x64/vars.fd"],
+)
