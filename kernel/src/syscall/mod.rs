@@ -294,12 +294,8 @@ fn dispatch_sys_fsync(fd: usize) -> Result<usize, Errno> {
 ///
 /// hpet() panics only before HPET init, but syscalls only run long after init, so it cannot panic here
 fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno> {
-    let (ticks, period_fs) = {
-        let h = hpet().read();
-        (h.main_counter_value(), h.period_femtoseconds())
-    };
-    // femtoseconds per tick divided by 1e6 femtoseconds per ns yields ns since boot
-    let ns = ticks as u128 * period_fs as u128 / 1_000_000;
+    // elapsed_ns converts main counter ticks to ns since boot using the HPET period
+    let ns = u128::from(hpet().read().elapsed_ns());
 
     let secs_since_boot = ns / 1_000_000_000;
     // tv_nsec is always below 1e9 so the cast cannot truncate

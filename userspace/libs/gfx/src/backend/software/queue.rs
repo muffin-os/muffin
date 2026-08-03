@@ -83,6 +83,9 @@ impl SoftQueue {
 
         let interp_count = cmd.output_count.saturating_sub(2);
 
+        // reused across every covered pixel so no per-pixel heap alloc occurs
+        let mut interpolants = vec![0f32; interp_count];
+
         // Phase 2: rasterize as a triangle list; every 3 outputs form one triangle.
         let tri_count = outputs.len() / 3;
         for t in 0..tri_count {
@@ -100,24 +103,26 @@ impl SoftQueue {
             if total_area.abs() < 1e-6 {
                 continue; // degenerate triangle
             }
+            let inv_area = 1.0 / total_area;
 
             let min_x = x0.min(x1).min(x2).max(0.0) as u32;
             let min_y = y0.min(y1).min(y2).max(0.0) as u32;
             let max_x = (x0.max(x1).max(x2) as u32).min(self.width.saturating_sub(1));
             let max_y = (y0.max(y1).max(y2) as u32).min(self.height.saturating_sub(1));
 
+            // barycentric edge functions are affine in (cx, cy) so we evaluate the
+            // full expression once per scanline and step by a constant per pixel
+            let w0_dx = (y1 - y2) * inv_area;
+            let w1_dx = (y2 - y0) * inv_area;
+            let cx0 = min_x as f32 + 0.5;
             for py in min_y..=max_y {
+                let cy = py as f32 + 0.5;
+                let mut w0 = ((x1 - cx0) * (y2 - cy) - (x2 - cx0) * (y1 - cy)) * inv_area;
+                let mut w1 = ((cx0 - x0) * (y2 - y0) - (x2 - x0) * (cy - y0)) * inv_area;
                 for px in min_x..=max_x {
-                    let cx = px as f32 + 0.5;
-                    let cy = py as f32 + 0.5;
-
-                    // Barycentric weights via sub-triangle signed areas.
-                    let w0 = ((x1 - cx) * (y2 - cy) - (x2 - cx) * (y1 - cy)) / total_area;
-                    let w1 = ((cx - x0) * (y2 - y0) - (x2 - x0) * (cy - y0)) / total_area;
                     let w2 = 1.0 - w0 - w1;
 
                     if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                        let mut interpolants = vec![0f32; interp_count];
                         for k in 0..interp_count {
                             interpolants[k] = w0 * v0[2 + k] + w1 * v1[2 + k] + w2 * v2[2 + k];
                         }
@@ -125,6 +130,9 @@ impl SoftQueue {
                         let idx = py as usize * self.width as usize + px as usize;
                         self.framebuffer[idx] = color;
                     }
+
+                    w0 += w0_dx;
+                    w1 += w1_dx;
                 }
             }
         }

@@ -86,7 +86,8 @@ continue"
 
     if args.headless {
         // run without a window, but with graphics devices attached
-        cmd.arg("-nographic");
+        cmd.arg("-display");
+        cmd.arg("none");
     }
 
     cmd.arg("-m");
