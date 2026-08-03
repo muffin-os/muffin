@@ -119,7 +119,7 @@ jobs:
           sudo apt install -y xorriso e2fsprogs
       - name: Build
         run: bazel build -c opt //muffinos:iso
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: muffin-boot-images
           path: |
