@@ -83,6 +83,18 @@ impl Hpet<'_> {
     pub fn period_femtoseconds(&self) -> u32 {
         self.inner.capabilities_and_id().read().counter_clk_period()
     }
+
+    /// Nanoseconds since boot derived from the main counter and its period
+    ///
+    /// The counter starts at 0 at boot and the HPET spec caps the period at 100ns
+    /// (0x05F5E100 fs), so overflowing u64 nanoseconds needs 584+ years of uptime
+    #[must_use]
+    pub fn elapsed_ns(&self) -> u64 {
+        let ns = u128::from(self.main_counter_value()) * u128::from(self.period_femtoseconds())
+            / 1_000_000;
+        // saturation at the u64 horizon is acceptable, that is 584+ years of uptime
+        u64::try_from(ns).unwrap_or(u64::MAX)
+    }
 }
 
 #[repr(C)]

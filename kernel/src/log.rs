@@ -31,7 +31,7 @@ struct KernelEnvironment;
 impl Environment for KernelEnvironment {
     /// Nanoseconds since boot, or 0 while the HPET is not up yet.
     fn now_ns() -> u64 {
-        hpet_maybe().map_or(0, |hpet| hpet.read().main_counter_value())
+        hpet_maybe().map_or(0, |hpet| hpet.read().elapsed_ns())
     }
 
     fn critical<R>(f: impl FnOnce() -> R) -> R {
