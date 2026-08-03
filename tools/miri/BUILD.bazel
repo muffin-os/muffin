@@ -1,0 +1,108 @@
+"""Miri shim.
+
+`cargo miri` has no rules_rust equivalent, so each target synthesizes a
+throwaway Cargo workspace under `$TEST_TMPDIR` and runs Cargo against it. The
+manifests are generated from the same crate graph the rust_library targets use,
+so the two cannot drift apart.
+
+Cargo package names are the Rust crate names (`kernel_abi`), not the package
+directory names (`abi`), because the sources refer to each other as
+`use kernel_abi::...`.
+"""
+
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load(
+    "//bazel:kernel_crates.bzl",
+    "KERNEL_CRATES",
+    "MIRI_WORKSPACE_DEPENDENCIES",
+    "kernel_crate_closure",
+    "kernel_crate_name",
+)
+
+_CLOSURES = {name: kernel_crate_closure(name) for name in KERNEL_CRATES}
+
+[
+    write_file(
+        name = name + "_manifest",
+        out = name + ".member.toml",
+        content = [
+            "[package]",
+            'name = "{}"'.format(kernel_crate_name(name)),
+            'version = "0.1.0"',
+            'edition = "2024"',
+            "",
+            "[dependencies]",
+        ] + [
+            '{0} = {{ path = "../{0}" }}'.format(kernel_crate_name(dep))
+            for dep in spec.deps
+        ] + [
+            "{}.workspace = true".format(crate)
+            for crate in spec.crates
+        ],
+    )
+    for name, spec in KERNEL_CRATES.items()
+]
+
+# One workspace root per crate. Cargo requires every declared member to exist on
+# disk, so the member list is the crate's own transitive closure, not all 11.
+[
+    write_file(
+        name = name + "_workspace",
+        out = name + ".workspace.toml",
+        content = [
+            "[workspace]",
+            'resolver = "3"',
+            "members = [{}]".format(", ".join([
+                '"{}"'.format(kernel_crate_name(member))
+                for member in closure
+            ])),
+            "",
+            "[workspace.dependencies]",
+        ] + MIRI_WORKSPACE_DEPENDENCIES.rstrip("\n").split("\n"),
+    )
+    for name, closure in _CLOSURES.items()
+]
+
+# `manual` keeps Miri out of `bazel test //...`, so CI invokes these explicitly.
+# `requires-network` and `local` reflect that Cargo fetches crates.io and uses
+# the developer's rustup install.
+#
+# Each trailing arg is `<cargo package>=<manifest>=<source package dir>`. The
+# three differ, so none can be derived from another inside the shell script.
+[
+    sh_test(
+        name = name,
+        srcs = ["run_miri.sh"],
+        args = [
+            kernel_crate_name(name),
+            "$(rootpath :{}_workspace)".format(name),
+        ] + [
+            "{}=$(rootpath :{}_manifest)=kernel/{}".format(
+                kernel_crate_name(member),
+                member,
+                member,
+            )
+            for member in closure
+        ],
+        data = [
+            ":{}_workspace".format(name),
+            "//:rust-toolchain.toml",
+        ] + [
+            ":{}_manifest".format(member)
+            for member in closure
+        ] + [
+            "//kernel/{}:srcs".format(member)
+            for member in closure
+        ],
+        tags = [
+            "external",
+            "local",
+            "manual",
+            "no-sandbox",
+            "requires-network",
+        ],
+        timeout = "long",
+    )
+    for name, closure in _CLOSURES.items()
+]

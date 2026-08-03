@@ -32,7 +32,10 @@ jobs:
           echo "hash=$(echo "$VERSION" | grep -oE '\(([0-9a-f]+) ' | tr -d '( ')" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Bump pin
-        run: sed -i "s/^channel = .*/channel = \"nightly-${{ steps.nightly.outputs.date }}\"/" rust-toolchain.toml
+        run: |
+          DATE="${{ steps.nightly.outputs.date }}"
+          sed -i "s/^channel = .*/channel = \"nightly-${DATE}\"/" rust-toolchain.toml
+          sed -i "s|nightly/[0-9-]\{10\}|nightly/${DATE}|g" MODULE.bazel
       - uses: peter-evans/create-pull-request@v6
         with:
           branch: rust/nightly-upgrade

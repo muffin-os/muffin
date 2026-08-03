@@ -1,0 +1,1 @@
+# Package marker so image.bzl is loadable as //bazel/rules:image.bzl.

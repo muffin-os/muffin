@@ -1,9 +1,0 @@
-[package]
-name = "fbdemo"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-minilib = { path = "../minilib" }
-gfx = { path = "../libs/gfx" }
-kernel_abi = { path = "../../kernel/crates/kernel_abi" }

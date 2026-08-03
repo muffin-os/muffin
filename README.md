@@ -6,7 +6,14 @@ A hobby x86-64 operating system kernel written in Rust, designed to be a general
 
 ## Overview
 
-Muffin OS is a bare-metal operating system kernel that boots using the Limine bootloader and runs on QEMU. The project is structured as a modular workspace with a kernel and userspace components, all written in Rust.
+Muffin OS is a bare-metal operating system kernel that boots using the Limine bootloader and runs on QEMU.
+The project is structured as a modular Bazel build with a kernel and userspace components, all written in Rust.
+
+## I'm in the fast lane, how do I try this?
+
+1. Install `bazel`
+2. Install `xorriso`, `e2fsprogs` and `qemu-system-x86`
+3. Run `bazel run //muffinos`
 
 ## Key Features
 
@@ -28,57 +35,57 @@ Muffin OS aims for basic POSIX.1-2024 compliance, implementing standard system f
 
 ### Prerequisites
 
-Muffin OS is designed to be easy to build with minimal dependencies:
+`bazel`, `xorriso`, `e2fsprogs` and `qemu-system-x86`.
 
-```bash
-# System dependencies (xorriso for ISO creation, e2fsprogs for filesystem)
-sudo apt update && sudo apt install -y xorriso e2fsprogs
-
-# QEMU for running the OS (optional, only needed to run)
-sudo apt install -y qemu-system
-```
-
-Rust toolchain is automatically configured via `rust-toolchain.toml` (nightly channel with required components).
+I would like to use cargo workspaces, but [cargo#10444](https://github.com/rust-lang/cargo/issues/10444) makes that impossible right now.
 
 ### Quick Start
 
 ```bash
 # Build and run in QEMU
-cargo run
-
-# Run with verbose kernel logging
-RUST_LOG=debug cargo run -- --headless
+bazel run //muffinos
 
 # Run without GUI
-cargo run -- --headless
+bazel run //muffinos -- --headless
 
 # Run with debugging support (GDB on localhost:1234)
-cargo run -- --debug
+bazel run //muffinos -- --debug
 
-# Customize resources
-cargo run -- --smp 4 --mem 512M
+# Other options
+bazel run //muffinos -- --help
 ```
+
+The kernel log level is baked into `limine.conf` as a `cmdline` entry rather than
+read from the host environment.
 
 ### Building
 
 ```bash
-# Build all workspace components
-cargo build
-
-# Build in release mode
-cargo build --release
+# Build everything
+bazel build //...
 ```
 
-This creates a bootable ISO image (`muffin.iso`) and ext2 disk image.
+```
+# Build optimized
+bazel build -c opt //...
+```
+
+`bazel build //muffinos:iso` produces the bootable ISO at
+`bazel-bin/muffinos/muffinos.iso`, and `bazel build //muffinos:disk` produces the
+ext2 disk image at `bazel-bin/muffinos/disk.img`.
 
 ### Testing
 
 ```bash
-# Run tests on workspace crates
-cargo test
+# Host unit tests plus the QEMU integration tests
+bazel test //...
 ```
 
-**Note:** The kernel binary itself uses a custom linker script for bare-metal execution and cannot run standard unit tests. Testable functionality is extracted into separate crates (like `kernel_vfs`, `kernel_physical_memory`, etc.) that can be tested on the host.
+The integration tests under `//tests` boot the real kernel under QEMU against
+Bazel-built images, so they need all of the required components that were mentioned above.
+
+**Note:** The kernel binary itself uses a custom linker script for bare-metal execution and cannot run standard unit tests.
+Testable functionality is extracted into separate crates that can be tested on the host.
 
 ## Contributing
 

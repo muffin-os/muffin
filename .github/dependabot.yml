@@ -3,14 +3,11 @@
 # Please see the documentation for all configuration options:
 # https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
 
+# Dependabot has no Bazel-module ecosystem, so bazel_dep and crate.spec versions
+# in MODULE.bazel are bumped by hand.
 version: 2
 updates:
-  - package-ecosystem: "cargo"
-    directories:
-      - "**/*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: "daily"
-    ignore:
-      # These are peer deps of Cargo and should not be automatically bumped
-      - dependency-name: "semver"
-      - dependency-name: "crates-vfs"

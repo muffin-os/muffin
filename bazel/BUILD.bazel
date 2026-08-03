@@ -1,0 +1,4 @@
+exports_files([
+    "Cargo.Bazel.lock",
+    "cargo-bazel-lock.json",
+])

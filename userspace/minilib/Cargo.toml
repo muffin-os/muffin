@@ -1,8 +1,0 @@
-[package]
-name = "minilib"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-kernel_abi = { path = "../../kernel/crates/kernel_abi" }
-linked_list_allocator.workspace = true

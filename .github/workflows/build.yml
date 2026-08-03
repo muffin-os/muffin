@@ -14,9 +14,6 @@ on:
   schedule:
     - cron: 0 5,17 * * *
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
 
   lint:
@@ -26,48 +23,37 @@ jobs:
       - uses: actions/checkout@v4
       - name: Use latest nightly
         if: ${{ inputs.use_latest_nightly }}
-        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
+        uses: ./.github/actions/use-latest-nightly
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
-          toolchain: nightly
-          components: rustfmt, clippy, llvm-tools-preview, rust-src
-      - name: Add build target
-        run: |
-          rustup target add x86_64-unknown-none
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y xorriso
+          bazelisk-cache: true
+          repository-cache: true
       - name: Rustfmt
-        run: |
-          cargo fmt -- --check
+        run: bazel build --config=rustfmt //...
       - name: Clippy
-        run: |
-          cargo clippy --tests -- -D clippy::all
+        run: bazel build --config=clippy //...
 
   test:
     name: "Test"
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        strategy: [ debug, release ]
+        compilation_mode: [ dbg, opt ]
     steps:
       - uses: actions/checkout@v4
       - name: Use latest nightly
         if: ${{ inputs.use_latest_nightly }}
-        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
+        uses: ./.github/actions/use-latest-nightly
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
-          toolchain: nightly
+          bazelisk-cache: true
+          repository-cache: true
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y xorriso qemu-system-x86
+          sudo apt install -y xorriso e2fsprogs qemu-system-x86
       - name: Test
-        run: |
-          cargo test $(if [[ "${{ matrix.strategy }}" == "release" ]]; then echo "--release"; fi)
+        run: bazel test -c ${{ matrix.compilation_mode }} //...
 
   prepare-miri:
     name: "Prepare Miri"
@@ -76,11 +62,16 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
       - id: set-matrix
         run: |
-          export PACKAGES=$(ls kernel/crates | head -c -1 | jq -Rsc 'split("\n")')
-          echo "::set-output name=matrix::{\"package\":${PACKAGES}}"
-    
+          PACKAGES=$(bazel query 'kind(sh_test, //tools/miri:*)' --output label \
+            | jq -Rsc 'split("\n") | map(select(length > 0))')
+          echo "matrix={\"package\":${PACKAGES}}" >> "$GITHUB_OUTPUT"
+
   miri:
     name: "Miri"
     runs-on: ubuntu-latest
@@ -91,19 +82,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Use latest nightly
         if: ${{ inputs.use_latest_nightly }}
-        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
+        uses: ./.github/actions/use-latest-nightly
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
-          toolchain: nightly
+          bazelisk-cache: true
+          repository-cache: true
+      # The Miri shim drives rustup, not the Bazel toolchain, and run_miri.sh
+      # copies rust-toolchain.toml into the synthesized workspace. The toolchain
+      # that actually runs is therefore the pinned one, not floating nightly.
       - name: Miri Setup
         run: |
-          cargo miri setup
+          rustup toolchain install \
+            "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" \
+            --component miri
       - name: Miri
-        run: |
-          cargo miri test -p ${{ matrix.package }}
-  
-  
+        run: bazel test --config=miri ${{ matrix.package }}
 
   build:
     name: "Build and upload artifacts"
@@ -115,20 +108,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Use latest nightly
         if: ${{ inputs.use_latest_nightly }}
-        run: sed -i 's/^channel = .*/channel = "nightly"/' rust-toolchain.toml
-      - name: Install latest nightly
-        uses: actions-rs/toolchain@v1
+        uses: ./.github/actions/use-latest-nightly
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
-          toolchain: nightly
+          bazelisk-cache: true
+          repository-cache: true
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y xorriso
+          sudo apt install -y xorriso e2fsprogs
       - name: Build
-        run: |
-          cargo build --release
+        run: bazel build -c opt //muffinos:iso
       - uses: actions/upload-artifact@v4
         with:
           name: muffin-boot-images
           path: |
-            target/release/build/**/out/muffin.iso
+            bazel-bin/muffinos/muffinos.iso

@@ -1,0 +1,44 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//bazel/rules:image.bzl", "ext2_image", "limine_iso")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "muffinos",
+    srcs = ["main.rs"],
+    data = [
+        ":disk",
+        ":iso",
+        "//kernel/boot",
+        "@ovmf//:x64_code",
+        "@ovmf//:x64_vars",
+    ],
+    edition = "2024",
+    rustc_env = {
+        "BOOTABLE_ISO": "$(rootpath :iso)",
+        "DISK_IMAGE": "$(rootpath :disk)",
+        "KERNEL_BINARY": "$(rootpath //kernel/boot)",
+        "OVMF_X86_64_CODE": "$(rootpath @ovmf//:x64_code)",
+        "OVMF_X86_64_VARS": "$(rootpath @ovmf//:x64_vars)",
+    },
+    deps = ["@crates//clap"],
+)
+
+ext2_image(
+    name = "disk",
+    contents = {"var/hello.txt": "Hello, Muffin OS!\n"},
+    empty_dirs = [
+        "dev/fd",
+        "var/tmp",
+    ],
+    files = {
+        "//userspace/fbdemo": "bin/fbdemo",
+        "//userspace/init": "bin/init",
+    },
+)
+
+limine_iso(
+    name = "iso",
+    kernel = "//kernel/boot",
+    out = "muffinos.iso",
+)

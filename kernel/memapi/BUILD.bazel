@@ -1,0 +1,5 @@
+load("//bazel:kernel_crates.bzl", "kernel_crate")
+
+package(default_visibility = ["//visibility:public"])
+
+kernel_crate("memapi")
