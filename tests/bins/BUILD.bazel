@@ -16,6 +16,7 @@ package(default_visibility = ["//visibility:public"])
         "fb_ioctl": "fb-ioctl",
         "fb_mmap": "fb-mmap",
         "file_read": "file-read",
+        "floats": "floats",
         "mmap": "mmap",
         "signals_init": "signals-init",
     }.items()

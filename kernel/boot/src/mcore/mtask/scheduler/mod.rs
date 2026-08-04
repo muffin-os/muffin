@@ -1,5 +1,4 @@
 use alloc::boxed::Box;
-use core::arch::asm;
 use core::arch::x86_64::_fxsave;
 use core::cell::UnsafeCell;
 use core::mem::swap;
@@ -8,6 +7,7 @@ use core::pin::Pin;
 use cleanup::TaskCleanup;
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
+use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::model_specific::FsBase;
 
 use crate::mcore::context::ExecutionContext;
@@ -84,10 +84,10 @@ impl Scheduler {
             old_task.last_stack_ptr() as *mut usize
         };
 
-        if let Some(mut guard) = old_task.fx_area().try_write()
+        if !Cr0::read().contains(Cr0Flags::TASK_SWITCHED)
+            && let Some(mut guard) = old_task.fx_area().try_write()
             && let Some(fx_area) = guard.as_mut()
         {
-            unsafe { asm!("clts") };
             unsafe {
                 // Safety: Safe because we hold a mutable reference to the fx_area
                 _fxsave(fx_area.start().as_mut_ptr::<u8>());

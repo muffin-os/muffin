@@ -353,8 +353,9 @@ fn terminate_faulting_task(
         return;
     }
 
-    // ...in which case we mark the task for termination and halt, waiting for the
-    // scheduler to terminate the task
+    // Returning would retry the faulting instruction and fault forever, and a
+    // Ring 0 fault has no user context to redirect. Only the scheduler can reap
+    // the task, so interrupts have to come back on before halting.
     task.set_should_terminate(ShouldTerminate::Yes);
     interrupts::enable();
     loop {

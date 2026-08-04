@@ -223,7 +223,7 @@ enum UserAccess {
 /// non-reentrant lock and hangs the CPU.
 ///
 /// A page that no memory region backs is left unmapped and reported, never
-/// paged in. Only the caller knows which access it needs.
+/// paged in.
 ///
 /// # Errors
 /// `EFAULT` for a non-canonical address, for a page that cannot be mapped, and
