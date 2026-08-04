@@ -1,34 +1,39 @@
 use alloc::boxed::Box;
-use alloc::vec;
+use core::mem;
 
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
-use x86_64::structures::paging::{PageSize, Size4KiB};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::{PrivilegeLevel, VirtAddr};
 
-use crate::U64Ext;
+use crate::mcore::mtask::task::HigherHalfStack;
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 pub const PAGE_FAULT_IST_INDEX: u16 = 1;
 
 fn create_tss() -> TaskStateSegment {
     let mut tss = TaskStateSegment::new();
-    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = allocate_ist_stack(5);
-    tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = allocate_ist_stack(5);
+    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = allocate_exception_stack(5);
+    tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = allocate_exception_stack(5);
 
     // Boot fallback for Ring 3 -> Ring 0 transitions before the first reschedule
     // updates `privilege_stack_table[0]` to the running task's kernel stack. After
     // tasks start running, this value is overwritten on every context switch.
-    tss.privilege_stack_table[0] = allocate_ist_stack(4);
+    tss.privilege_stack_table[0] = allocate_exception_stack(4);
     tss
 }
 
-fn allocate_ist_stack(pages: usize) -> VirtAddr {
-    let stack_size = Size4KiB::SIZE.into_usize() * pages;
-    let stack = Box::into_raw(vec![0_u8; stack_size].into_boxed_slice());
+/// Allocates a stack for the hardware to switch to on an exception, with
+/// `usable_pages` writable pages above an unmapped guard page.
+fn allocate_exception_stack(usable_pages: usize) -> VirtAddr {
+    let stack = HigherHalfStack::allocate_plain(usable_pages + 1)
+        .expect("should be able to allocate an exception stack");
+    let top = stack.top();
 
-    let stack_start = VirtAddr::from_ptr(stack);
-    stack_start + (stack_size as u64)
+    // The TSS holds the only reference for the lifetime of the CPU, and the
+    // hardware reads it without asking us. Dropping the handle would unmap the
+    // stack and turn the next exception into a triple fault.
+    mem::forget(stack);
+    top
 }
 
 #[allow(dead_code)]

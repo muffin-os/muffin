@@ -23,6 +23,9 @@ build:linux --host_linkopt=-fuse-ld=bfd
 build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
 build:clippy --output_groups=clippy_checks
 build:clippy --@rules_rust//rust/settings:clippy_flag=-Dclippy::all
+# `clippy::all` covers only the clippy namespace, so plain rustc lints such as
+# unused_imports would still pass as warnings. The `warnings` group closes that.
+build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
 
 build:rustfmt --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
 build:rustfmt --output_groups=rustfmt_checks

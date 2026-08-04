@@ -7,7 +7,7 @@ use kernel_vfs::node::VfsNode;
 use kernel_virtual_memory::Segment;
 use spin::mutex::Mutex;
 use thiserror::Error;
-use tracing::{debug, trace};
+use tracing::trace;
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
 use x86_64::structures::paging::mapper::MapToError;
