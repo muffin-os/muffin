@@ -3,8 +3,8 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use access::KernelAccess;
 use kernel_abi::{
-    EFAULT, EINVAL, ESRCH, Errno, IoctlRequest, ProcessId, SigAction, SigMaskHow, SigSet, Signal,
-    Timespec, syscall_name,
+    EFAULT, EINVAL, EIO, ENOMEM, ESRCH, Errno, IoctlRequest, ProcessId, SigAction, SigMaskHow,
+    SigSet, Signal, Timespec, syscall_name,
 };
 use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
@@ -19,6 +19,7 @@ use x86_64::instructions::hlt;
 use crate::hpet::hpet;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::ExitOutcome;
+use crate::mcore::mtask::process::mem::PageInError;
 use crate::mcore::mtask::task::Task;
 
 mod access;
@@ -209,6 +210,48 @@ unsafe fn slice_from_ptr_and_len_mut<'a, T>(ptr: usize, len: usize) -> Result<&'
     Ok(slice)
 }
 
+enum UserAccess {
+    Read,
+    Write,
+}
+
+/// Makes `[ptr, ptr + len)` resident, then checks it against `access`.
+///
+/// Every syscall that goes on to take a filesystem lock must call this first.
+/// The page fault handler pages in file backed memory through that same per
+/// mount lock, so a fault raised while the lock is held re-enters a
+/// non-reentrant lock and hangs the CPU.
+///
+/// A page that no memory region backs is left unmapped and reported, never
+/// paged in. Only the caller knows which access it needs.
+///
+/// # Errors
+/// `EFAULT` for a non-canonical address, for a page that cannot be mapped, and
+/// for a range that is resident but not reachable with `access`. `ENOMEM` when
+/// no physical frame is available. `EIO` when the backing file read fails.
+fn make_user_range_resident(ptr: usize, len: usize, access: UserAccess) -> Result<(), Errno> {
+    let Ok(addr) = VirtAddr::try_new(ptr as u64) else {
+        return Err(EFAULT);
+    };
+
+    let process = ExecutionContext::load().current_process();
+    let address_space = process.address_space();
+    process
+        .memory_regions()
+        .populate(address_space, addr, len)
+        .map_err(|e| match e {
+            PageInError::OutOfMemory => ENOMEM,
+            PageInError::MapFailed => EFAULT,
+            PageInError::ReadFailed => EIO,
+        })?;
+
+    let accessible = match access {
+        UserAccess::Read => address_space.is_user_readable(addr, len),
+        UserAccess::Write => address_space.is_user_writable(addr, len),
+    };
+    if accessible { Ok(()) } else { Err(EFAULT) }
+}
+
 fn dispatch_sys_getcwd(path: usize, size: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
@@ -241,6 +284,7 @@ fn dispatch_sys_open(
 ) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
+    make_user_range_resident(path, path_len, UserAccess::Read)?;
     let path = unsafe { UserspacePtr::try_from_usize(path)? };
     sys_open(&cx, path, path_len, oflag as i32, mode as i32)
 }
@@ -252,6 +296,7 @@ fn dispatch_sys_read(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     let slice = unsafe { slice_from_ptr_and_len_mut(buf, nbyte) }?;
+    make_user_range_resident(buf, nbyte, UserAccess::Write)?;
     sys_read(&cx, fd, slice)
 }
 
@@ -262,6 +307,7 @@ fn dispatch_sys_write(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errn
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     let slice = unsafe { slice_from_ptr_and_len(buf, nbyte) }?;
+    make_user_range_resident(buf, nbyte, UserAccess::Read)?;
     sys_write(&cx, fd, slice)
 }
 
@@ -276,6 +322,7 @@ fn dispatch_sys_ioctl(fd: usize, request: usize, argp: usize) -> Result<usize, E
         0 => sys_ioctl(&cx, fd, request, &mut []),
         size => {
             let arg = unsafe { slice_from_ptr_and_len_mut(argp, size) }?;
+            make_user_range_resident(argp, size, UserAccess::Write)?;
             sys_ioctl(&cx, fd, request, arg)
         }
     }

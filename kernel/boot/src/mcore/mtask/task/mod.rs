@@ -5,8 +5,8 @@ use alloc::sync::Arc;
 use core::ffi::c_void;
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::{AtomicBool, AtomicU64};
 
 use cordyceps::Linked;
 use cordyceps::mpsc_queue::Links;
@@ -40,6 +40,7 @@ pub struct Task {
     /// Whether this task should be terminated upon the next reschedule.
     /// This can be set at any point.
     should_terminate: AtomicBool,
+    pending_fault_addr: AtomicU64,
     /// The stack pointer of the task at the time of the last context switch.
     /// If this task is currently running, then this value is not the current stack pointer.
     /// This must be set during the context switch.
@@ -110,6 +111,7 @@ impl Task {
             name,
             process,
             should_terminate,
+            pending_fault_addr: AtomicU64::new(0),
             last_stack_ptr,
             state,
             kstack: Some(stack),
@@ -133,6 +135,7 @@ impl Task {
             name,
             process,
             should_terminate,
+            pending_fault_addr: AtomicU64::new(0),
             last_stack_ptr,
             state,
             kstack: None,
@@ -185,6 +188,7 @@ impl Task {
             name,
             process,
             should_terminate,
+            pending_fault_addr: AtomicU64::new(0),
             last_stack_ptr,
             state,
             kstack: None,
@@ -225,6 +229,10 @@ impl Task {
 
     pub fn kstack(&self) -> &Option<HigherHalfStack> {
         &self.kstack
+    }
+
+    pub fn pending_fault_addr(&self) -> &AtomicU64 {
+        &self.pending_fault_addr
     }
 
     pub fn ustack(&self) -> &RwLock<Option<LowerHalfAllocation<Writable>>> {

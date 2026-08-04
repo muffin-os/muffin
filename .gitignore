@@ -3,4 +3,5 @@ debug.lldb
 debug.gdb
 /bazel-*
 /rust-project.json
+/.rules_rust_analyzer/
 /user.bazelrc

@@ -327,6 +327,24 @@ impl AddressSpace {
     /// writable, and user accessible in this address space.
     #[must_use]
     pub fn is_user_writable(&self, addr: VirtAddr, len: usize) -> bool {
+        self.is_user_accessible(
+            addr,
+            len,
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
+        )
+    }
+
+    #[must_use]
+    pub fn is_user_readable(&self, addr: VirtAddr, len: usize) -> bool {
+        self.is_user_accessible(
+            addr,
+            len,
+            PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
+        )
+    }
+
+    #[must_use]
+    fn is_user_accessible(&self, addr: VirtAddr, len: usize, required: PageTableFlags) -> bool {
         if len == 0 {
             return true;
         }
@@ -337,8 +355,6 @@ impl AddressSpace {
             return false;
         };
 
-        let required =
-            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
         let mapper = self.inner.read();
 
         Page::<Size4KiB>::range_inclusive(

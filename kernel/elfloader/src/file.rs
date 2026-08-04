@@ -26,6 +26,8 @@ pub enum ElfParseError {
     UnsupportedElfVersion,
     #[error("unsupported endianness")]
     UnsupportedEndian,
+    #[error("buffer shorter than the elf header")]
+    TruncatedHeader,
 }
 
 impl<'a> ElfFile<'a> {
@@ -36,6 +38,10 @@ impl<'a> ElfFile<'a> {
         const ENDIAN: u8 = 1;
         #[cfg(target_endian = "big")]
         const ENDIAN: u8 = 2;
+
+        if source.len() < size_of::<ElfHeader>() {
+            return Err(ElfParseError::TruncatedHeader);
+        }
 
         let header = ElfHeader::try_ref_from_bytes(&source[..size_of::<ElfHeader>()])
             .map_err(|_| ElfParseError::HeaderParseError)?;
@@ -68,6 +74,16 @@ impl<'a> ElfFile<'a> {
     #[must_use]
     pub fn entry(&self) -> usize {
         self.header.entry
+    }
+
+    #[must_use]
+    pub fn typ(&self) -> &ElfType {
+        &self.header.typ
+    }
+
+    #[must_use]
+    pub fn program_header_table_end(&self) -> usize {
+        self.header.phoff + usize::from(self.header.phnum) * usize::from(self.header.phentsize)
     }
 
     pub fn program_headers(&self) -> impl Iterator<Item = &ProgramHeader> {
@@ -459,6 +475,18 @@ mod tests {
                 shnum: 0x3344,
                 shstrndx: 5,
             }
+        );
+    }
+
+    #[test]
+    fn try_parse_rejects_short_buffer() {
+        use crate::file::{ElfFile, ElfHeader, ElfParseError};
+
+        let short = [0u8; size_of::<ElfHeader>() - 1];
+        assert_eq!(
+            ElfFile::try_parse(&short).unwrap_err(),
+            ElfParseError::TruncatedHeader,
+            "a buffer shorter than the elf header must be rejected before slicing"
         );
     }
 }

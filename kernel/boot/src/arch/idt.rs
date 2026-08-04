@@ -1,26 +1,24 @@
-use core::alloc::Layout;
 use core::arch::asm;
-use core::arch::x86_64::{_fxrstor, _fxsave};
+use core::arch::x86_64::_fxrstor;
 use core::fmt::{Debug, Formatter};
-use core::mem::transmute;
+use core::mem::{offset_of, transmute};
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::Signal;
-use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use kernel_syscall::signal::AsyncAction;
 use tracing::{error, warn};
-use x86_64::PrivilegeLevel;
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::Cr2;
 use x86_64::registers::debug::{Dr6, Dr7};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::structures::paging::{Page, Size4KiB};
+use x86_64::{PrivilegeLevel, VirtAddr};
 
-use crate::UsizeExt;
+use crate::U64Ext;
 use crate::arch::{gdt, signal};
 use crate::mcore::context::ExecutionContext;
-use crate::mcore::mtask::process::mem::MemoryRegion;
-use crate::mcore::mtask::task::{FxArea, ShouldTerminate};
-use crate::mem::memapi::LowerHalfMemoryApi;
+use crate::mcore::mtask::process::mem::{MemoryRegion, PageInError};
+use crate::mcore::mtask::task::{ShouldTerminate, Task};
 use crate::syscall::dispatch_syscall;
 
 #[derive(Debug, Clone, Copy)]
@@ -242,15 +240,41 @@ extern "x86-interrupt" fn invalid_tss_handler(stack_frame: InterruptStackFrame, 
     panic!("EXCEPTION: INVALID TSS:\nerror code: {error_code:#X}\n{stack_frame:#?}");
 }
 
-enum RegionOutcome {
-    Handled,
-    Invalid,
+#[repr(C)]
+pub(crate) struct CalleeSavedRegisters {
+    pub rbx: usize,
+    pub rbp: usize,
+    pub r12: usize,
+    pub r13: usize,
+    pub r14: usize,
+    pub r15: usize,
 }
+
+#[repr(C)]
+pub(crate) struct FaultBlock {
+    pub regs: SyscallRegisters,
+    pub callee: CalleeSavedRegisters,
+    pub error_code: u64,
+    pub frame: InterruptStackFrame,
+}
+
+const _: () = {
+    assert!(168 == size_of::<FaultBlock>());
+    assert!(0 == offset_of!(FaultBlock, regs));
+    assert!(120 == offset_of!(FaultBlock, error_code));
+    assert!(128 == offset_of!(FaultBlock, frame));
+};
 
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(naked)]
 pub unsafe extern "sysv64" fn page_fault_wrapper() {
     core::arch::naked_asm!(
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push rbp",
+        "push rbx",
         "push rax",
         "push rcx",
         "push rdx",
@@ -260,12 +284,29 @@ pub unsafe extern "sysv64" fn page_fault_wrapper() {
         "push r9",
         "push r10",
         "push r11",
-        "sub rsp, 8", // align the stack to 16 bytes for the SysV call
-        "lea rdi, [rsp + 88]", // Arg #1: &InterruptStackFrame (8 pad + 72 regs + 8 err)
-        "lea rsi, [rsp + 8]",  // Arg #2: &SyscallRegisters
-        "mov rdx, [rsp + 80]", // Arg #3: error code
-        "call {}",
+        "sub rsp, 8",
+        "lea rdi, [rsp + 136]",
+        "lea rsi, [rsp + 8]",
+        "mov rdx, [rsp + 128]",
+        "call {classify}",
         "add rsp, 8",
+        "test rax, rax",
+        "jz 2f",
+        "mov rdi, rax",
+        "sub rdi, 168",
+        "mov rsi, rsp",
+        "mov rcx, 21",
+        "cld",
+        "rep movsq",
+        "mov rsp, rax",
+        "sub rsp, 168",
+        "mov rdi, rsp",
+        "sub rsp, 8",
+        "sti",
+        "call {pager}",
+        "cli",
+        "add rsp, 8",
+        "2:",
         "pop r11",
         "pop r10",
         "pop r9",
@@ -275,17 +316,57 @@ pub unsafe extern "sysv64" fn page_fault_wrapper() {
         "pop rdx",
         "pop rcx",
         "pop rax",
-        "add rsp, 8", // drop the error code
+        "pop rbx",
+        "pop rbp",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+        "add rsp, 8",
         "iretq",
-        sym page_fault_handler_impl
+        classify = sym page_fault_classify,
+        pager = sym page_fault_pager,
     );
 }
 
-extern "sysv64" fn page_fault_handler_impl(
+fn pager_stack_top(task: &Task, frame: &InterruptStackFrame, from_user: bool) -> Option<usize> {
+    let stack = task.kstack().as_ref()?;
+    if from_user {
+        return Some(stack.top().as_u64().into_usize());
+    }
+
+    let mapped = stack.mapped_segment();
+    let rsp = frame.stack_pointer;
+    if rsp <= mapped.start || rsp > mapped.start + mapped.len {
+        return None;
+    }
+    Some((rsp.as_u64().into_usize() - 128) & !0xf)
+}
+
+fn terminate_faulting_task(
+    frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
+    task: &Task,
+) {
+    if frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+        signal::deliver_fault(frame, regs, Signal::Segfault);
+        return;
+    }
+
+    // ...in which case we mark the task for termination and halt, waiting for the
+    // scheduler to terminate the task
+    task.set_should_terminate(ShouldTerminate::Yes);
+    interrupts::enable();
+    loop {
+        hlt();
+    }
+}
+
+extern "sysv64" fn page_fault_classify(
     frame: &mut InterruptStackFrame,
     regs: &mut SyscallRegisters,
     error_code: u64,
-) {
+) -> usize {
     let error_code = PageFaultErrorCode::from_bits_truncate(error_code);
     let accessed_address = Cr2::read().ok();
     let from_user = frame.code_segment.rpl() == PrivilegeLevel::Ring3;
@@ -305,83 +386,43 @@ extern "sysv64" fn page_fault_handler_impl(
         {
             error!(
                 "KERNEL STACK OVERFLOW DETECTED in process '{}' task '{}', terminating...",
-                task.process().name(),
+                process.name(),
                 task.name(),
             );
-
-            if from_user {
-                signal::deliver_fault(frame, regs, Signal::Segfault);
-                return;
-            }
-
-            // ...in which case we mark the task for termination and halt, waiting for the
-            // scheduler to terminate the task
-            task.set_should_terminate(ShouldTerminate::Yes);
-            interrupts::enable();
-            loop {
-                hlt();
-            }
+            terminate_faulting_task(frame, regs, task);
+            return 0;
         }
 
         // ...but if it's not a stack issue, maybe it is a lazy mapping?
-        let regions = process.memory_regions();
-        let outcome = regions.with_memory_region_for_address(addr, |region| {
-            debug_assert!(
-                region.addr() <= addr,
-                "region addr must be less than or equal to the addr we are looking for"
-            );
-            debug_assert!(
-                region.addr() + region.size().into_u64() > addr,
-                "region addr + it's size must be larger than the addr we are looking for"
-            );
-
-            // we found a region that matches the accessed address
-            match region {
-                MemoryRegion::Lazy(_lazy_memory_region) => {
-                    // TODO: allocate new physical page, map it and add it to the lazy memory
-                    // region
-                    RegionOutcome::Handled
-                }
-                MemoryRegion::Mapped(_mapped_memory_region) => {
-                    error!(
-                        "invalid memory access in process '{}' task '{}', terminating...",
-                        process.name(),
-                        task.name()
-                    );
-                    RegionOutcome::Invalid
-                }
-                MemoryRegion::FileBacked(_file_backed_memory_region) => {
-                    // TODO: invoke an access on the nested lazy memory region, then read from
-                    // the node and write data accordingly
-                    RegionOutcome::Handled
-                }
-                MemoryRegion::Shared(_shared_memory_region) => {
+        if let Some(region) = process.memory_regions().region_for(addr) {
+            let reason = if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
+                "protection violation"
+            } else {
+                match &*region {
+                    MemoryRegion::Lazy(_) | MemoryRegion::FileBacked(_) => {
+                        match pager_stack_top(task, frame, from_user) {
+                            Some(top) => {
+                                task.pending_fault_addr().store(addr.as_u64(), Relaxed);
+                                return top;
+                            }
+                            None => "demand paging fault on an unusable stack",
+                        }
+                    }
+                    MemoryRegion::Mapped(_) => "invalid access to a mapped region",
                     // A shared device mapping is fully mapped eagerly, so a
                     // fault inside it is an invalid access.
-                    error!(
-                        "invalid access to shared memory region in process '{}' task '{}', terminating...",
-                        process.name(),
-                        task.name()
-                    );
-                    RegionOutcome::Invalid
+                    MemoryRegion::Shared(_) => "invalid access to a shared region",
                 }
-            }
-        });
+            };
 
-        match outcome {
-            Some(RegionOutcome::Handled) => return,
-            Some(RegionOutcome::Invalid) => {
-                if from_user {
-                    signal::deliver_fault(frame, regs, Signal::Segfault);
-                    return;
-                }
-                task.set_should_terminate(ShouldTerminate::Yes);
-                interrupts::enable();
-                loop {
-                    hlt();
-                }
-            }
-            None => {}
+            error!(
+                reason,
+                "page fault at {addr:p} in process '{}' task '{}', terminating...",
+                process.name(),
+                task.name()
+            );
+            terminate_faulting_task(frame, regs, task);
+            return 0;
         }
     }
 
@@ -389,12 +430,39 @@ extern "sysv64" fn page_fault_handler_impl(
     if from_user {
         error!("unhandled user page fault at {accessed_address:?}, delivering SIGSEGV");
         signal::deliver_fault(frame, regs, Signal::Segfault);
-        return;
+        return 0;
     }
 
     panic!(
         "EXCEPTION: PAGE FAULT:\naccessed address: {accessed_address:?}\nerror code: {error_code:#?}\n{frame:#?}"
     );
+}
+
+extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
+    let ctx = ExecutionContext::load();
+    let task = ctx.current_task();
+    let process = task.process();
+    let addr = VirtAddr::new(task.pending_fault_addr().swap(0, Relaxed));
+    let page = Page::<Size4KiB>::containing_address(addr);
+    let address_space = process.address_space();
+
+    let region = process.memory_regions().region_for(addr);
+    let failure = match region.as_deref() {
+        Some(MemoryRegion::Lazy(r)) => r.map_zeroed(address_space, page).err(),
+        Some(MemoryRegion::FileBacked(r)) => r.page_in(address_space, page).err(),
+        _ => Some(PageInError::MapFailed),
+    };
+
+    if let Some(e) = failure {
+        error!(
+            error = %e,
+            "failed to page in {addr:p} in process '{}' task '{}', terminating...",
+            process.name(),
+            task.name()
+        );
+        let block = unsafe { &mut *block };
+        terminate_faulting_task(&mut block.frame, &mut block.regs, task);
+    }
 }
 
 extern "x86-interrupt" fn segment_not_present_handler(
@@ -431,38 +499,15 @@ extern "x86-interrupt" fn debug_handler(stack_frame: InterruptStackFrame) {
 extern "x86-interrupt" fn device_not_available_handler(_stack_frame: InterruptStackFrame) {
     let cx = ExecutionContext::load();
     let current_task = cx.current_task();
-
-    let mut guard = current_task.fx_area().write();
-    let (fresh, fx_area) = if let Some(fx_area) = &*guard {
-        (false, fx_area)
-    } else {
-        let process = current_task.process();
-        let mut memapi = LowerHalfMemoryApi::new(process.clone());
-        let fx_area = memapi
-            .allocate(
-                Location::Anywhere,
-                Layout::new::<FxArea>(),
-                UserAccessible::Yes,
-                Guarded::No,
-            )
-            .expect("should be able to allocate fx area");
-
-        (true, guard.insert(fx_area) as &_)
-    };
-
-    let fx_area_ptr = fx_area.start().as_mut_ptr::<u8>();
+    let guard = current_task.fx_area().read();
+    let fx_area_ptr = guard.as_ref().map(|fx| fx.start().as_mut_ptr::<u8>());
     drop(guard); // _fxrstor could trigger #NM again, so we must drop the guard before calling it
 
     unsafe { asm!("clts") };
 
-    // saving is done every time we switch tasks, so we can only restore it here
-    if fresh {
-        unsafe {
-            asm!("finit");
-            _fxsave(fx_area_ptr);
-        }
+    if let Some(ptr) = fx_area_ptr {
+        unsafe { _fxrstor(ptr) };
     }
-    unsafe { _fxrstor(fx_area_ptr) };
 }
 
 /// Notifies the LAPIC that the interrupt has been handled.
