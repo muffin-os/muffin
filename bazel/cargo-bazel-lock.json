@@ -1,5 +1,5 @@
 {
-  "checksum": "9ff8089b47c61813086671656c916797cf83d230d2ca68a98b30152b28ccd4df",
+  "checksum": "59862366603557b6ceb60d6034684e3d24bad882ddb7c2fcb42b5fe8483727ee",
   "crates": {
     "acpi 5.2.0": {
       "name": "acpi",
@@ -1277,12 +1277,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "const_fn 0.4.12",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -1528,11 +1525,13 @@
             {
               "id": "bitflags 1.3.2",
               "target": "bitflags"
-            },
-            {
-              "id": "defmt 1.1.1",
-              "target": "build_script_build"
             }
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -1611,10 +1610,6 @@
         "deps": {
           "common": [
             {
-              "id": "defmt-macros 1.1.1",
-              "target": "build_script_build"
-            },
-            {
               "id": "defmt-parser 1.0.0",
               "target": "defmt_parser"
             },
@@ -1630,6 +1625,12 @@
               "id": "syn 2.0.119",
               "target": "syn"
             }
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -2213,10 +2214,6 @@
               "target": "cfg_if"
             },
             {
-              "id": "generator 0.8.9",
-              "target": "build_script_build"
-            },
-            {
               "id": "log 0.4.33",
               "target": "log"
             }
@@ -2239,6 +2236,12 @@
               }
             ]
           }
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
+          ],
+          "selects": {}
         },
         "edition": "2021",
         "version": "0.8.9"
@@ -2835,12 +2838,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "libc 0.2.189",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -3010,12 +3010,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "linkme 0.3.37",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -3093,10 +3090,6 @@
         "deps": {
           "common": [
             {
-              "id": "linkme-impl 0.3.37",
-              "target": "build_script_build"
-            },
-            {
               "id": "proc-macro2 1.0.107",
               "target": "proc_macro2"
             },
@@ -3108,6 +3101,12 @@
               "id": "syn 3.0.3",
               "target": "syn"
             }
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -3641,12 +3640,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "paste 1.0.15",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -3751,12 +3747,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "portable-atomic 1.14.0",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -3827,11 +3820,13 @@
             {
               "id": "portable-atomic 1.14.0",
               "target": "portable_atomic"
-            },
-            {
-              "id": "portable-atomic-util 0.2.7",
-              "target": "build_script_build"
             }
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -3907,13 +3902,15 @@
         "deps": {
           "common": [
             {
-              "id": "proc-macro2 1.0.107",
-              "target": "build_script_build"
-            },
-            {
               "id": "unicode-ident 1.0.24",
               "target": "unicode_ident"
             }
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -3991,11 +3988,13 @@
             {
               "id": "proc-macro2 1.0.107",
               "target": "proc_macro2"
-            },
-            {
-              "id": "quote 1.0.47",
-              "target": "build_script_build"
             }
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -4272,12 +4271,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "rustversion 1.0.23",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -4469,12 +4465,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "serde_core 1.0.229",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -5078,12 +5071,9 @@
             ]
           }
         },
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "thiserror 2.0.19",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -5723,12 +5713,9 @@
         "compile_data_glob": [
           "**"
         ],
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "valuable 0.1.1",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -6243,11 +6230,13 @@
             {
               "id": "raw-cpuid 10.7.0",
               "target": "raw_cpuid"
-            },
-            {
-              "id": "x86 0.52.0",
-              "target": "build_script_build"
             }
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -6402,12 +6391,9 @@
           ],
           "selects": {}
         },
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "zerocopy 0.8.55",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
@@ -6491,12 +6477,9 @@
           ],
           "selects": {}
         },
-        "deps": {
+        "extra_deps": {
           "common": [
-            {
-              "id": "zerocopy 0.9.0-alpha.0",
-              "target": "build_script_build"
-            }
+            ":build_script_build"
           ],
           "selects": {}
         },
