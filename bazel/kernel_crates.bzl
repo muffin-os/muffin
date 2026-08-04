@@ -29,10 +29,7 @@ KERNEL_CRATES = {
         crates = ["spin", "thiserror"],
     ),
     "device": struct(deps = [], crates = ["spin", "thiserror", "x86_64"]),
-    "elfloader": struct(
-        deps = ["memapi"],
-        crates = ["itertools", "thiserror", "tracing", "x86_64", "zerocopy"],
-    ),
+    "elfloader": struct(deps = [], crates = ["thiserror", "zerocopy"]),
     "log": struct(deps = [], crates = ["conquer-once", "spin", "tracing"]),
     "memapi": struct(deps = [], crates = ["x86_64"]),
     "pci": struct(deps = ["memapi"], crates = ["spin", "thiserror", "x86_64"]),

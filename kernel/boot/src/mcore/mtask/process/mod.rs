@@ -3,7 +3,11 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::alloc::Layout;
+use core::arch::asm;
+use core::arch::x86_64::_fxsave;
 use core::ffi::c_void;
 use core::fmt::{Debug, Formatter};
 use core::ptr;
@@ -11,17 +15,14 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use conquer_once::spin::OnceCell;
 use kernel_abi::ProcessId;
-use kernel_elfloader::{ElfFile, ElfLoader};
-use kernel_memapi::{Allocation, Guarded, Location, MemoryApi, UserAccessible};
+use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use kernel_syscall::signal::SignalState;
-use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
 use spin::RwLock;
 use thiserror::Error;
 use tracing::debug;
 use x86_64::VirtAddr;
-use x86_64::registers::model_specific::FsBase;
 use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrameValue;
 use x86_64::structures::paging::{PageSize, Size4KiB};
@@ -33,11 +34,13 @@ use crate::mcore::mtask::process::mem::MemoryRegions;
 use crate::mcore::mtask::process::telemetry::Telemetry;
 use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
-use crate::mcore::mtask::task::{HigherHalfStack, StackAllocationError, Task};
+use crate::mcore::mtask::task::{FxArea, HigherHalfStack, StackAllocationError, Task};
 use crate::mem::address_space::AddressSpace;
-use crate::mem::memapi::{Executable, LowerHalfAllocation, LowerHalfMemoryApi};
+use crate::mem::memapi::{LowerHalfAllocation, LowerHalfMemoryApi, Writable};
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
+
+mod elf;
 
 pub mod fd;
 pub mod mem;
@@ -66,7 +69,7 @@ pub struct Process {
     ppid: RwLock<ProcessId>,
 
     executable_path: Option<AbsoluteOwnedPath>,
-    executable_file_data: RwLock<Option<LowerHalfAllocation<Executable>>>,
+    executable_segments: RwLock<Vec<LowerHalfAllocation<Writable>>>,
     current_working_directory: RwLock<AbsoluteOwnedPath>,
 
     address_space: Option<AddressSpace>,
@@ -92,7 +95,7 @@ impl Process {
                 name: "root".to_string(),
                 ppid: RwLock::new(pid),
                 executable_path: None,
-                executable_file_data: RwLock::new(None),
+                executable_segments: RwLock::new(vec![]),
                 current_working_directory: RwLock::new(ROOT.to_owned()),
                 address_space: None,
                 lower_half_memory: Arc::new(RwLock::new(VirtualMemoryManager::new(
@@ -124,7 +127,7 @@ impl Process {
             name,
             ppid: RwLock::new(parent_pid),
             executable_path: executable_path.map(|x| x.as_ref().to_owned()),
-            executable_file_data: RwLock::new(None),
+            executable_segments: RwLock::new(vec![]),
             current_working_directory: RwLock::new(parent.current_working_directory.read().clone()),
             address_space: Some(address_space),
             // Dynamic (Location::Anywhere) reservations start at 4 GiB so they
@@ -218,6 +221,10 @@ impl Process {
         &self.memory_regions
     }
 
+    pub fn executable_segments(&self) -> &RwLock<Vec<LowerHalfAllocation<Writable>>> {
+        &self.executable_segments
+    }
+
     pub fn telemetry(&self) -> &Telemetry {
         &self.telemetry
     }
@@ -285,65 +292,8 @@ extern "C" fn trampoline(_arg: *mut c_void) {
         .write()
         .open(executable_path)
         .expect("should be able to open executable");
-    let stat = {
-        let mut stat = Stat::default();
-        node.stat(&mut stat)
-            .expect("should be able to stat executable");
-        stat
-    };
-
-    let mut memapi = LowerHalfMemoryApi::new(current_process.clone());
-
-    let mut executable_file_allocation = memapi
-        .allocate(
-            Location::Anywhere,
-            Layout::from_size_align(stat.size, Size4KiB::SIZE.into_usize()).unwrap(),
-            UserAccessible::Yes,
-            Guarded::No,
-        )
-        .expect("should be able to allocate memory for executable file");
-    let buf = executable_file_allocation.as_mut();
-    let mut offset = 0;
-    loop {
-        let read = node
-            .read(&mut buf[offset..], offset)
-            .expect("should be able to read");
-        if read == 0 {
-            break;
-        }
-        offset += read;
-    }
-    let executable_file_allocation = memapi
-        .make_executable(executable_file_allocation)
-        .expect("should be able to make allocation executable");
-
-    let elf_file = ElfFile::try_parse(executable_file_allocation.as_ref())
-        .expect("should be able to parse elf binary");
-    let elf_image = ElfLoader::new(memapi.clone())
-        .load(elf_file)
-        .expect("should be able to load elf file");
-
-    if let Some(master_tls) = elf_image.tls_allocation() {
-        let mut tls_alloc = memapi
-            .allocate(
-                Location::Anywhere,
-                master_tls.layout(),
-                UserAccessible::Yes,
-                Guarded::No,
-            )
-            .expect("should be able to allocate TLS data");
-
-        let slice = tls_alloc.as_mut();
-        slice.copy_from_slice(master_tls.as_ref());
-
-        FsBase::write(tls_alloc.start());
-
-        {
-            let mut guard = current_task.tls().write();
-            assert!(guard.is_none(), "TLS should not exist yet");
-            *guard = Some(tls_alloc);
-        }
-    }
+    let code_ptr = elf::load(&current_process, current_task, &node)
+        .expect("should be able to load executable");
 
     let mut memapi = LowerHalfMemoryApi::new(current_process.clone());
     let ustack_allocation = memapi
@@ -367,13 +317,27 @@ extern "C" fn trampoline(_arg: *mut c_void) {
     }
     assert!(ustack_rsp.is_aligned(16_u64));
 
-    let sel = ctx.selectors();
+    let fx_area = memapi
+        .allocate(
+            Location::Anywhere,
+            Layout::new::<FxArea>(),
+            UserAccessible::Yes,
+            Guarded::No,
+        )
+        .expect("should be able to allocate fx area");
+    let fx_area_ptr = fx_area.start().as_mut_ptr::<u8>();
+    unsafe {
+        asm!("clts");
+        asm!("finit");
+        _fxsave(fx_area_ptr);
+    }
+    {
+        let mut guard = current_task.fx_area().write();
+        assert!(guard.is_none(), "fx area should not exist yet");
+        *guard = Some(fx_area);
+    }
 
-    let code_ptr = elf_file.entry(); // TODO: this needs to be computed when the elf file is relocatable
-    let _ = current_process
-        .executable_file_data
-        .write()
-        .insert(executable_file_allocation);
+    let sel = ctx.selectors();
 
     debug!("stack_ptr: {:p}", ustack_rsp.as_ptr::<u8>());
     debug!("code_ptr: {:p}", code_ptr as *const u8);
