@@ -28,11 +28,14 @@ build:linux --host_linkopt=-fuse-ld=bfd
 # crate changes.
 build --@rules_rust//rust/settings:clippy_flag=-Wclippy::all
 
-# The aspect runs on every build, so coverage follows the target pattern and
-# needs no list of labels anywhere. `+` keeps the default outputs as well,
-# otherwise a build would produce clippy markers and nothing else.
-build --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
-build --output_groups=+clippy_checks
+# Runs on every build, so coverage follows the target pattern and needs no list
+# of labels anywhere. The wrapper in //bazel:clippy.bzl propagates along
+# dependency edges, which rules_rust's own aspect does not, so a narrow build
+# still checks everything beneath it and each crate is checked in the
+# configuration it actually builds in. `+` keeps the default outputs, otherwise
+# a build would produce clippy markers and nothing else.
+build --aspects=//bazel:clippy.bzl%clippy_closure_aspect
+build --output_groups=+clippy_all
 
 # `clippy::all` covers only the clippy namespace, so plain rustc lints such as
 # unused_imports would pass as warnings. The `warnings` group closes that.
