@@ -61,6 +61,15 @@ ext2_image(
     files = {"//tests/bins:fb_mmap": "bin/fb-mmap"},
 )
 
+ext2_image(
+    name = "kstack_overflow_disk",
+    contents = {
+        "kernel-stack-overflow": "1\n",
+        "spawn": "/bin/exit-code\n",
+    },
+    files = {"//tests/bins:exit_code": "bin/exit-code"},
+)
+
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
 # harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
 #
@@ -96,6 +105,7 @@ ext2_image(
         "fb_mmap",
         "file_read",
         "floats",
+        "kstack_overflow",
         "mmap",
         "signals",
     ]

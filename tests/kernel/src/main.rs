@@ -6,6 +6,8 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec;
 use core::error::Error;
+use core::ffi::c_void;
+use core::ptr;
 
 use ext2::Ext2Fs;
 use kernel::driver::KernelDeviceId;
@@ -15,6 +17,8 @@ use kernel::file::vfs;
 use kernel::limine::BASE_REVISION;
 use kernel::mcore;
 use kernel::mcore::mtask::process::{ExitOutcome, Process};
+use kernel::mcore::mtask::scheduler::global::GlobalTaskQueue;
+use kernel::mcore::mtask::task::Task;
 use kernel_device::block::{BlockBuf, BlockDevice};
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
@@ -45,6 +49,18 @@ unsafe extern "C" fn main() -> ! {
                 ),
             )
             .expect("should be able to mount ext2fs at /");
+    }
+
+    // A kernel stack overflow cannot be provoked from userspace, so the trigger has
+    // to live in the kernel. It is opt-in through a marker file so that the shared
+    // test kernel stays generic, and so no other suite pays for it.
+    if let Ok(marker) = AbsolutePath::try_new("/kernel-stack-overflow")
+        && vfs().write().open(marker).is_ok()
+    {
+        let task = Task::create_new(Process::root(), overflow_kernel_stack, ptr::null_mut())
+            .expect("should be able to create the stack overflow task");
+        kernel::serial_println!("test-kernel: kernel stack overflow armed");
+        GlobalTaskQueue::enqueue(Box::pin(task));
     }
 
     {
@@ -178,4 +194,24 @@ fn handle_panic(info: &core::panic::PanicInfo) {
             error!("error capturing backtrace: {e:?}");
         }
     }
+}
+
+/// Recurses until RSP walks into the kernel stack guard page.
+///
+/// Each frame has to stay far below the 4 KiB guard page. A frame larger than
+/// the guard page can step over it into unreserved virtual memory, where the
+/// fault is no longer recognizable as a stack overflow. The volatile access
+/// keeps the frame live, and the addition after the recursive call keeps the
+/// call from becoming a tail call that the optimizer folds into a loop.
+extern "C" fn overflow_kernel_stack(_: *mut c_void) {
+    #[inline(never)]
+    #[allow(unconditional_recursion)]
+    fn recurse(depth: u64) -> u64 {
+        let mut frame = [depth; 8];
+        unsafe { core::ptr::write_volatile(&raw mut frame[0], depth) };
+        let deeper = recurse(depth.wrapping_add(1));
+        unsafe { core::ptr::read_volatile(&raw const frame[0]) }.wrapping_add(deeper)
+    }
+
+    core::hint::black_box(recurse(0));
 }
