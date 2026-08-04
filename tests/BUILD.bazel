@@ -44,6 +44,12 @@ ext2_image(
 )
 
 ext2_image(
+    name = "floats_disk",
+    contents = {"spawn": "/bin/floats\n/bin/floats\n"},
+    files = {"//tests/bins:floats": "bin/floats"},
+)
+
+ext2_image(
     name = "fb_ioctl_disk",
     contents = {"spawn": "/bin/fb-ioctl\n"},
     files = {"//tests/bins:fb_ioctl": "bin/fb-ioctl"},
@@ -89,6 +95,7 @@ ext2_image(
         "fb_ioctl",
         "fb_mmap",
         "file_read",
+        "floats",
         "mmap",
         "signals",
     ]
