@@ -20,8 +20,8 @@ TARGET_JSON = json.encode(X86_64_UNKNOWN_MUFFIN)
 
 # extra_rustc_flags_triples in MODULE.bazel keys on the triple STRING
 # "x86_64-unknown-none", so none of those flags fire for a JSON target. They are
-# restated here. -Cpanic=abort and -Crelocation-model=static live in the spec
-# itself so bootstrap and real toolchain cannot disagree.
+# restated here. The panic strategy and -Crelocation-model=static live in the
+# spec itself so bootstrap and real toolchain cannot disagree.
 EXTRA_RUSTC_FLAGS = [
     # rustc destabilised JSON target specs in rust-lang/rust#150151. Loading one
     # now requires -Zunstable-options.

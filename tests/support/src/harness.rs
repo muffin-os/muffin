@@ -105,7 +105,7 @@ impl KernelTest {
     /// # Panics
     /// Panics (after dumping the serial transcript) if QEMU exits before every
     /// spawned process reports an outcome, if the deadline expires first, or if
-    /// any serial line contains `panicked`.
+    /// any serial line contains `kernel panicked`.
     #[must_use]
     pub fn run(self) -> RunReport {
         // Runfiles are read-only build outputs. Booting them directly fails to
@@ -205,7 +205,7 @@ impl KernelTest {
             };
             match rx.recv_timeout(timeout) {
                 Ok(line) => {
-                    if line.contains("panicked") {
+                    if line.contains("kernel panicked") {
                         transcript.push(line.clone());
                         fail(
                             &transcript,

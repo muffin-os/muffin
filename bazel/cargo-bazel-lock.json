@@ -1,5 +1,5 @@
 {
-  "checksum": "59862366603557b6ceb60d6034684e3d24bad882ddb7c2fcb42b5fe8483727ee",
+  "checksum": "f6db8b7794057412ecea801d0c89a06b14ce6170615b0a50c9e4a11c632385c0",
   "crates": {
     "acpi 5.2.0": {
       "name": "acpi",
@@ -1880,6 +1880,10 @@
               "target": "uart_16550"
             },
             {
+              "id": "unwinding 0.2.10",
+              "target": "unwinding"
+            },
+            {
               "id": "virtio-drivers 0.13.0",
               "target": "virtio_drivers"
             },
@@ -2320,6 +2324,51 @@
         },
         "edition": "2024",
         "version": "0.33.0"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
+    "gimli 0.34.0": {
+      "name": "gimli",
+      "version": "0.34.0",
+      "package_url": "https://github.com/gimli-rs/gimli",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/gimli/0.34.0/download",
+          "sha256": "1033caf0b349c518623b5396bfb2cf0bddf44f0306d543a250e5743297aafd10"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "gimli",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "gimli",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "read-core"
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.34.0"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -5627,6 +5676,67 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
+    "unwinding 0.2.10": {
+      "name": "unwinding",
+      "version": "0.2.10",
+      "package_url": "https://github.com/nbdd0121/unwinding/",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/unwinding/0.2.10/download",
+          "sha256": "4b134ada16dda9e435abe2a6d76a01d497bc60707357845a15f9b0ed42dc88ce"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "unwinding",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "unwinding",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "alloc",
+            "dwarf-expr",
+            "fde-custom",
+            "hide-trace",
+            "panic",
+            "panicking",
+            "personality",
+            "unwinder"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "gimli 0.34.0",
+              "target": "gimli"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.2.10"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
     "utf8parse 0.2.2": {
       "name": "utf8parse",
       "version": "0.2.2",
@@ -6680,6 +6790,7 @@
     "thiserror 2.0.19",
     "tracing 0.1.44",
     "uart_16550 0.4.0",
+    "unwinding 0.2.10",
     "virtio-drivers 0.13.0",
     "volatile 0.6.1",
     "x2apic 0.5.0",

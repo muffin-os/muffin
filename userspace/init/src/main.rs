@@ -7,11 +7,14 @@ use minilib::{exit, write};
 pub extern "C" fn _start() {
     let bytes = b"hello from init!\n";
     write(1, bytes);
+    foo();
     exit(0);
 }
 
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(_info: &::core::panic::PanicInfo) -> ! {
-    loop {}
+fn foo() {
+    bar();
+}
+
+fn bar() {
+    panic!("I AM CALM");
 }

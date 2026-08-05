@@ -70,6 +70,12 @@ ext2_image(
     files = {"//tests/bins:exit_code": "bin/exit-code"},
 )
 
+ext2_image(
+    name = "unwind_disk",
+    contents = {"spawn": "/bin/unwind\n"},
+    files = {"//tests/bins:unwind": "bin/unwind"},
+)
+
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
 # harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
 #
@@ -108,5 +114,6 @@ ext2_image(
         "kstack_overflow",
         "mmap",
         "signals",
+        "unwind",
     ]
 ]

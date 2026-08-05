@@ -19,5 +19,6 @@ package(default_visibility = ["//visibility:public"])
         "floats": "floats",
         "mmap": "mmap",
         "signals_init": "signals-init",
+        "unwind": "unwind",
     }.items()
 ]

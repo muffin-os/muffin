@@ -146,6 +146,14 @@ spin = "0.10"
 thiserror = { version = "2.0", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["attributes"] }
 uart_16550 = "0.4"
+unwinding = { version = "0.2.10", default-features = false, features = [
+  "dwarf-expr",
+  "fde-custom",
+  "hide-trace",
+  "panic",
+  "personality",
+  "unwinder",
+] }
 virtio-drivers = "0.13"
 volatile = { version = "0.6", features = ["derive"] }
 x2apic = "0.5"
