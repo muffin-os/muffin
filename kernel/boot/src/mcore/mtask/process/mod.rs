@@ -6,8 +6,6 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::alloc::Layout;
-use core::arch::asm;
-use core::arch::x86_64::_fxsave;
 use core::ffi::c_void;
 use core::fmt::{Debug, Formatter};
 use core::ptr;
@@ -279,6 +277,27 @@ pub enum CreateProcessError {
     StackAllocationError(#[from] StackAllocationError),
 }
 
+/// The FPU state a task starts with, in the architectural 512 byte FXSAVE layout.
+///
+/// A fresh task must not inherit the kernel's live XMM registers or MXCSR, and the
+/// backing allocation arrives uninitialised, so all 512 bytes are written. Fields
+/// not named below stay zero, which empties ST0-7 (offsets 32..160) and zeroes
+/// XMM0-15 (offsets 160..416). FTW at offset 4 stays zero, marking all x87
+/// registers empty. `0x1F80` sets no reserved MXCSR bits, so `fxrstor` accepts it.
+const INITIAL_FX_IMAGE: [u8; 512] = {
+    let mut image = [0u8; 512];
+    // FCW at offset 0, the x87 default with every exception masked
+    image[0] = 0x7F;
+    image[1] = 0x03;
+    // MXCSR at offset 24, every SSE exception masked, round to nearest
+    image[24] = 0x80;
+    image[25] = 0x1F;
+    // MXCSR_MASK at offset 28
+    image[28] = 0xFF;
+    image[29] = 0xFF;
+    image
+};
+
 extern "C" fn trampoline(_arg: *mut c_void) {
     let ctx = ExecutionContext::load();
     let current_task = ctx.scheduler().current_task();
@@ -309,13 +328,19 @@ extern "C" fn trampoline(_arg: *mut c_void) {
         )
         .expect("should be able to allocate userspace stack");
 
-    let ustack_rsp = ustack_allocation.start() + ustack_allocation.len().into_u64();
+    let ustack_top = ustack_allocation.start() + ustack_allocation.len().into_u64();
     {
         let mut ustack_guard = current_task.ustack().write();
         assert!(ustack_guard.is_none(), "ustack should not exist yet");
         *ustack_guard = Some(ustack_allocation);
     }
-    assert!(ustack_rsp.is_aligned(16_u64));
+    assert!(ustack_top.is_aligned(16_u64));
+    // The entry point is an ordinary SysV function, so it expects the shape a
+    // `call` leaves behind, a return address pushed onto a 16 byte aligned stack.
+    // Enter one word below the top so `rsp % 16 == 8` holds. Without it every
+    // 16 byte aligned spill slot the entry point computes lands 8 bytes off and
+    // its first `movaps` raises a general protection fault.
+    let ustack_rsp = ustack_top - 8_u64;
 
     let fx_area = memapi
         .allocate(
@@ -327,9 +352,7 @@ extern "C" fn trampoline(_arg: *mut c_void) {
         .expect("should be able to allocate fx area");
     let fx_area_ptr = fx_area.start().as_mut_ptr::<u8>();
     unsafe {
-        asm!("clts");
-        asm!("finit");
-        _fxsave(fx_area_ptr);
+        fx_area_ptr.copy_from_nonoverlapping(INITIAL_FX_IMAGE.as_ptr(), INITIAL_FX_IMAGE.len());
     }
     {
         let mut guard = current_task.fx_area().write();

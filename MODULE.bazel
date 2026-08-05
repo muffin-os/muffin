@@ -31,8 +31,16 @@ rust.toolchain(
         ],
     },
 )
-use_repo(rust, "rust_toolchains")
+use_repo(rust, "rust_toolchains", "rust_linux_x86_64__x86_64-unknown-none__nightly_tools")
 
+# The stock none-toolchain's target_compatible_with (cpu:x86_64, os:none) is a
+# subset of the muffin platform's constraints, so it would also match and,
+# absent explicit precedence, could win toolchain resolution. Registering the
+# custom pair first gives them priority.
+register_toolchains(
+    "//bazel/toolchains:x86_64-unknown-muffin",
+    "//bazel/toolchains:x86_64-unknown-muffin-bootstrap",
+)
 register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
@@ -164,4 +172,12 @@ http_archive(
     sha256 = "8ae4d2d73161cc2335f5675d3b8b6edfa0642301679764a246940488ea3ce20d",
     strip_prefix = "edk2-stable202605-r1-bin",
     urls = ["https://github.com/rust-osdev/ovmf-prebuilt/releases/download/edk2-stable202605-r1/edk2-stable202605-r1-bin.tar.xz"],
+)
+
+http_archive(
+    name = "rust_src",
+    build_file = "//bazel/external:rust_src.BUILD.bazel",
+    sha256 = "99c110f203f38294e3b1565950809a45a5b0a91749244fa3a2ea94dd77e5be5b",
+    strip_prefix = "rust-src-nightly/rust-src/lib/rustlib/src/rust",
+    urls = ["https://static.rust-lang.org/dist/2026-07-12/rust-src-nightly.tar.xz"],
 )

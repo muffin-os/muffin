@@ -1,5 +1,4 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary")
-load("//bazel:kernel_crates.bzl", "crate_label")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,9 +6,6 @@ rust_binary(
     name = "init",
     srcs = ["src/main.rs"],
     edition = "2024",
-    platform = "//platforms:x86_64-none",
-    deps = [
-        "//userspace/minilib",
-        crate_label("x86_64"),
-    ],
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = ["//userspace/minilib"],
 )

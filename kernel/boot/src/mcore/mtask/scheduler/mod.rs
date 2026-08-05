@@ -163,8 +163,21 @@ impl Scheduler {
         next_task
     }
 
-    #[allow(clippy::unused_self)]
+    /// Picks the task to run next, or `None` to keep running the current one.
+    ///
+    /// An idle task is only taken when the current task cannot continue, meaning
+    /// it is itself idle or is terminating. Yielding to a halt loop while the
+    /// current task is still runnable costs that task a full timer quantum.
+    ///
+    /// A task that never blocks starves the idle queue, so the task cleanup reaper
+    /// only drops dead tasks once the core has slack.
     fn next_task(&self) -> Option<Pin<Box<Task>>> {
-        GlobalTaskQueue::dequeue()
+        if let Some(task) = GlobalTaskQueue::dequeue() {
+            return Some(task);
+        }
+        if self.current_task.is_idle() || self.current_task.should_terminate().yes() {
+            return GlobalTaskQueue::dequeue_idle();
+        }
+        None
     }
 }

@@ -86,9 +86,12 @@ fn fence_is_always_ready() {
 }
 
 #[test]
-fn blank_framebuffer_is_all_zero() {
-    let q = SoftQueue::new(4, 4);
-    assert!(q.framebuffer().iter().all(|&p| p == 0));
+fn new_does_not_write_target() {
+    // A zeroed target could not distinguish a queue that leaves the target alone
+    // from one that clears it.
+    let mut target = [0xDEAD_BEEFu32; 16];
+    let q = SoftQueue::new(&mut target, 4, 4, 4);
+    assert!(q.framebuffer().iter().all(|&p| p == 0xDEAD_BEEF));
 }
 
 #[test]
@@ -102,7 +105,8 @@ fn no_draw_leaves_framebuffer_blank() {
         })
         .unwrap();
 
-    let mut q = SoftQueue::new(4, 4);
+    let mut target = [0u32; 16];
+    let mut q = SoftQueue::new(&mut target, 4, 4, 4);
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
@@ -132,7 +136,8 @@ fn triangle_writes_correct_pixels() {
         .unwrap();
     buf.data.copy_from_slice(&bytes);
 
-    let mut q = SoftQueue::new(4, 4);
+    let mut target = [0u32; 16];
+    let mut q = SoftQueue::new(&mut target, 4, 4, 4);
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
@@ -228,7 +233,8 @@ fn interpolants_vary_across_triangle() {
         .unwrap();
     buf.data.copy_from_slice(&bytes);
 
-    let mut q = SoftQueue::new(4, 4);
+    let mut target = [0u32; 16];
+    let mut q = SoftQueue::new(&mut target, 4, 4, 4);
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
@@ -304,7 +310,8 @@ fn gouraud_triangle_blends_per_vertex_colors() {
         .unwrap();
     buf.data.copy_from_slice(&bytes);
 
-    let mut q = SoftQueue::new(8, 8);
+    let mut target = [0u32; 64];
+    let mut q = SoftQueue::new(&mut target, 8, 8, 8);
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
@@ -335,12 +342,36 @@ fn gouraud_triangle_blends_per_vertex_colors() {
 }
 
 #[test]
-fn present_into_copies_rows_and_preserves_stride_padding() {
-    let q = SoftQueue::new(3, 2);
+fn draw_respects_stride_padding() {
+    // A 3x2 target at stride 4 has one padding column per row, at indices 3 and 7.
+    // Indexing a pixel store by width corrupts those columns.
+    let bytes = encode_verts(&[-2.0, 2.0, 2.0, 2.0, 0.0, -2.0]);
+
+    let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let pso = simple_pipeline(&mut backend, 8);
+    let mut buf = backend
+        .alloc_buffer(&BufferDesc {
+            size: bytes.len(),
+            is_dynamic: false,
+        })
+        .unwrap();
+    buf.data.copy_from_slice(&bytes);
+
     let mut target = [0xDEAD_BEEFu32; 8];
-    q.present_into(&mut target, 4);
+    let mut q = SoftQueue::new(&mut target, 3, 2, 4);
+    q.submit(|rec| {
+        rec.bind_pipeline(&pso);
+        rec.bind_vertex_buffer(&buf);
+        rec.draw(3);
+    })
+    .unwrap();
+
     for (i, &px) in target.iter().enumerate() {
-        let expected = if i == 3 || i == 7 { 0xDEAD_BEEF } else { 0 };
+        let expected = if i == 3 || i == 7 {
+            0xDEAD_BEEF
+        } else {
+            0xFFFF_FFFF
+        };
         assert_eq!(px, expected, "pixel at index {i} mismatch");
     }
 }

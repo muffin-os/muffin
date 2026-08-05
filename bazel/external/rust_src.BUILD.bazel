@@ -1,0 +1,72 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# The repo-wide clippy aspect (//bazel:clippy.bzl) follows every edge and `bazel
+# test` promotes warnings to errors. These crates are upstream rust-lang/rust
+# sources, not ours to lint or format.
+_TAGS = ["manual", "noclippy", "norustfmt"]
+
+rust_library(
+    name = "core",
+    crate_name = "core",
+    crate_root = "library/core/src/lib.rs",
+    # core #[path]-includes core_arch from stdarch and core_simd from
+    # portable-simd (library/core/src/lib.rs:355,378).
+    srcs = glob([
+        "library/core/src/**/*.rs",
+        "library/stdarch/crates/core_arch/src/**/*.rs",
+        "library/portable-simd/crates/core_simd/src/**/*.rs",
+    ]),
+    compile_data = glob([
+        "library/core/**/*.md",
+        "library/portable-simd/crates/core_simd/src/**/*.md",
+        "library/stdarch/crates/core_arch/src/**/*.md",
+    ]),
+    edition = "2024",
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "compiler_builtins",
+    crate_name = "compiler_builtins",
+    crate_root = "library/compiler-builtins/compiler-builtins/src/lib.rs",
+    # src/math/mod.rs #[path]-includes ../../../libm/src/math/mod.rs.
+    srcs = glob([
+        "library/compiler-builtins/compiler-builtins/src/**/*.rs",
+        "library/compiler-builtins/libm/src/**/*.rs",
+    ]),
+    edition = "2024",
+    # The `compiler-builtins` feature activates #![compiler_builtins]. The `mem`
+    # and `unmangled-names` features un-mangle memcpy/memset/memcmp. Without
+    # them memcpy/memset are undefined at link time.
+    crate_features = [
+        "arch",
+        "compiler-builtins",
+        "unmangled-names",
+        "mem",
+    ],
+    # build.rs cannot run under a JSON target (see spec.bzl). These are the cfgs
+    # it would emit for x86_64 bare metal. `intrinsics_enabled` is unconditional
+    # for the CompilerBuiltins library. `mem_unaligned` is set because x86_64 has
+    # hardware unaligned access support.
+    rustc_flags = [
+        "--cfg=intrinsics_enabled",
+        "--cfg=mem_unaligned",
+    ],
+    deps = [":core"],
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "alloc",
+    crate_name = "alloc",
+    crate_root = "library/alloc/src/lib.rs",
+    srcs = glob(["library/alloc/src/**/*.rs"]),
+    edition = "2024",
+    deps = [
+        ":compiler_builtins",
+        ":core",
+    ],
+    tags = _TAGS,
+)

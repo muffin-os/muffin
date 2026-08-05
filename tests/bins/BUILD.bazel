@@ -8,7 +8,7 @@ package(default_visibility = ["//visibility:public"])
         srcs = ["{}/src/main.rs".format(directory)],
         crate_root = "{}/src/main.rs".format(directory),
         edition = "2024",
-        platform = "//platforms:x86_64-none",
+        platform = "//platforms:x86_64-unknown-muffin",
         deps = ["//userspace/minilib"],
     )
     for name, directory in {

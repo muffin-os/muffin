@@ -83,10 +83,25 @@ fn color_vert(input: &[f32], output: &mut [f32]) {
     output[4] = input[4]; // blue
 }
 
+/// Scales a unit-interval channel to 0..=255, saturating outside it.
+///
+/// Runs three times per covered pixel, so it must not become an out-of-line
+/// call. In an unoptimised build only `inline(always)` guarantees that.
+#[inline(always)]
+fn channel_to_u8(value: f32) -> u32 {
+    if value <= 0.0 {
+        0
+    } else if value >= 1.0 {
+        255
+    } else {
+        (value * 255.0) as u32
+    }
+}
+
 fn color_frag(interp: &[f32]) -> u32 {
-    let r = (interp[0].clamp(0.0, 1.0) * 255.0) as u32;
-    let g = (interp[1].clamp(0.0, 1.0) * 255.0) as u32;
-    let b = (interp[2].clamp(0.0, 1.0) * 255.0) as u32;
+    let r = channel_to_u8(interp[0]);
+    let g = channel_to_u8(interp[1]);
+    let b = channel_to_u8(interp[2]);
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
@@ -125,11 +140,10 @@ pub extern "C" fn _start() {
         exit(1);
     }
 
-    // gfx renders into a heap-backed SoftQueue framebuffer before presenting, so
-    // the pool must fit that back buffer (width*height*4 ≈ len) plus rasterizer
-    // churn; the extra megabyte is slack for the transient allocations.
+    // Covers the vertex buffer and the queue's scratch buffers. The framebuffer
+    // is mapped, so it needs no pool of its own.
     let t = now_us();
-    let heap_ok = heap_init(len + (1 << 20));
+    let heap_ok = heap_init(1 << 20);
     report("heap_init", t, now_us());
     if !heap_ok {
         puts("fbdemo: FAIL heap\n");
@@ -173,20 +187,24 @@ pub extern "C" fn _start() {
     vbuf.data.copy_from_slice(&bytes);
     report("alloc_buffer", t, now_us());
 
-    let t = now_us();
-    let mut q = SoftQueue::new(info.width, info.height);
-    report("queue_new", t, now_us());
-
     let stride = info.pitch as usize / 4;
     let width = info.width as usize;
     let height = info.height as usize;
-    // SAFETY: the mmap covers `len` bytes and is page-aligned, hence u32-aligned;
+    // SAFETY: the mmap covers `len` bytes and is page-aligned, hence u32-aligned.
     // `stride * (height - 1) + width` u32 words stay within that mapping.
     let fb_u32 = unsafe {
         core::slice::from_raw_parts_mut(addr as usize as *mut u32, stride * (height - 1) + width)
     };
+    // The mapped framebuffer's initial content is undefined and `SoftQueue::new`
+    // never clears its target, so uncovered pixels would keep whatever the device
+    // left there.
+    fb_u32.fill(0);
 
-    // render several frames to expose warm-up effects across submit/present/fsync
+    let t = now_us();
+    let mut q = SoftQueue::new(fb_u32, info.width, info.height, stride);
+    report("queue_new", t, now_us());
+
+    // render several frames to expose warm-up effects across submit/fsync
     for frame in 0..5u32 {
         let t0 = now_us();
         or_fail_gfx(q.submit(|rec| {
@@ -195,10 +213,8 @@ pub extern "C" fn _start() {
             rec.draw(3);
         }));
         let t1 = now_us();
-        q.present_into(fb_u32, stride);
-        let t2 = now_us();
         let fsync_rc = fsync(fd);
-        let t3 = now_us();
+        let t2 = now_us();
         if fsync_rc != 0 {
             puts("fbdemo: FAIL fsync\n");
             exit(1);
@@ -207,10 +223,8 @@ pub extern "C" fn _start() {
         put_u32(frame);
         puts(" submit ");
         put_u64(t1.saturating_sub(t0));
-        puts("us present ");
-        put_u64(t2.saturating_sub(t1));
         puts("us fsync ");
-        put_u64(t3.saturating_sub(t2));
+        put_u64(t2.saturating_sub(t1));
         puts("us\n");
     }
 

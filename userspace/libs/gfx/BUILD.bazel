@@ -1,5 +1,4 @@
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
-load("//bazel:kernel_crates.bzl", "crate_label")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -9,7 +8,6 @@ rust_library(
     edition = "2024",
     deps = [
         "//kernel/abi",
-        crate_label("tracing"),
     ],
 )
 

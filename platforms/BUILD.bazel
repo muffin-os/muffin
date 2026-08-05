@@ -7,3 +7,46 @@ platform(
         "@platforms//os:none",
     ],
 )
+
+# Userspace needs SSE for the C ABI, and the kernel must stay soft-float. An explicit
+# constraint keeps the two rust toolchains mutually exclusive, which constraint
+# subsetting alone would not.
+constraint_setting(name = "float_abi", default_constraint_value = ":softfloat")
+
+constraint_value(name = "softfloat", constraint_setting = ":float_abi")
+
+constraint_value(name = "hardfloat", constraint_setting = ":float_abi")
+
+# core/alloc/compiler_builtins are compiled under the bootstrap platform, whose
+# toolchain has no rust_std. Without the split, the real toolchain would depend
+# on rlibs whose compilation depends on that same toolchain.
+constraint_setting(name = "std_source", default_constraint_value = ":prebuilt")
+
+constraint_value(name = "prebuilt", constraint_setting = ":std_source")
+
+constraint_value(name = "bootstrap", constraint_setting = ":std_source")
+
+# `os:none` here does not agree with the spec's `"os": "muffin"`, and must not be
+# changed to match it. Every `@crates` target gates `target_compatible_with` on
+# `@rules_rust//rust/platform:x86_64-unknown-none`, which resolves through
+# `@platforms//os:none`. crate_universe cannot be handed a JSON triple to generate
+# a `muffin` condition from, so moving this constraint makes all of userspace
+# resolve to `@platforms//:incompatible`.
+platform(
+    name = "x86_64-unknown-muffin",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:none",
+        ":hardfloat",
+    ],
+)
+
+platform(
+    name = "x86_64-unknown-muffin-bootstrap",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:none",
+        ":hardfloat",
+        ":bootstrap",
+    ],
+)

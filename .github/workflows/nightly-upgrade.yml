@@ -36,6 +36,14 @@ jobs:
           DATE="${{ steps.nightly.outputs.date }}"
           sed -i "s/^channel = .*/channel = \"nightly-${DATE}\"/" rust-toolchain.toml
           sed -i "s|nightly/[0-9-]\{10\}|nightly/${DATE}|g" MODULE.bazel
+          sed -i "s|dist/[0-9-]\{10\}/rust-src-nightly|dist/${DATE}/rust-src-nightly|" MODULE.bazel
+          NEW_SHA=$(curl -sL "https://static.rust-lang.org/dist/${DATE}/rust-src-nightly.tar.xz" | sha256sum | cut -d ' ' -f1)
+          sed -i "/name = \"rust_src\"/,/^)/ s|sha256 = \"[0-9a-f]\{64\}\"|sha256 = \"${NEW_SHA}\"|" MODULE.bazel
+          # The muffin and bootstrap rust_toolchain rules live in separate
+          # packages (bazel/toolchains/muffin, bazel/toolchains/bootstrap) so
+          # their generated target spec files share a basename. Both iso_date
+          # fields need the same bump.
+          sed -i "s|iso_date = \"[0-9-]\{10\}\"|iso_date = \"${DATE}\"|" bazel/toolchains/muffin/BUILD.bazel bazel/toolchains/bootstrap/BUILD.bazel
       - uses: peter-evans/create-pull-request@v8
         with:
           branch: rust/nightly-upgrade

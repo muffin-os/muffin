@@ -6,7 +6,7 @@ rust_binary(
     name = "fbdemo",
     srcs = ["src/main.rs"],
     edition = "2024",
-    platform = "//platforms:x86_64-none",
+    platform = "//platforms:x86_64-unknown-muffin",
     deps = [
         "//kernel/abi",
         "//userspace/libs/gfx",
