@@ -48,8 +48,14 @@ test --@rules_rust//rust/settings:clippy_flag=-Dwarnings
 
 # The aspect is already on, so this config only raises the severity. It exists
 # for CI, which needs a gate on a machine that has no qemu to run the tests.
+#
+# The lint runner has no mke2fs or xorriso, so the image rules must stay out of
+# the graph. An unprefixed output group replaces the default outputs instead of
+# extending them. Coverage is unaffected, because a clippy action builds the
+# rlibs it depends on.
 build:clippy --@rules_rust//rust/settings:clippy_flag=-Dclippy::all
 build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
+build:clippy --output_groups=clippy_all
 
 build:rustfmt --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
 build:rustfmt --output_groups=rustfmt_checks
