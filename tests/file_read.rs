@@ -12,5 +12,6 @@ fn file_read() {
     let report = KernelTest::new("file_read", host_env!()).run();
 
     report.assert_line_contains("fileio: content ok");
+    report.assert_line_contains("fileio: seek ok");
     report.assert_exit_code(0, 0);
 }

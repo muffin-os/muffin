@@ -1,15 +1,17 @@
 //! Symbolized stack backtrace for the panic report.
 //!
 //! Neither `.symtab` nor the debug sections carry `SHF_ALLOC`, so the loader never
-//! maps them and the process has to read its own executable back off disk.
+//! maps them and the process maps its own executable read only to reach them.
 //!
 //! DWARF gives a source position and covers inlined functions. An optimized build
 //! ships none, leaving `.symtab` to name the enclosing function alone.
 
-use alloc::vec;
-use alloc::vec::Vec;
 use core::ffi::{c_int, c_void};
 use core::fmt::Write;
+use core::ptr;
+use core::slice;
+use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
 use addr2line::Context;
 use addr2line::gimli::{Dwarf, EndianSlice, NativeEndian};
@@ -18,10 +20,10 @@ use elf::string_table::StringTable;
 use elf::symbol::SymbolTable;
 use unwinding::abi::{_Unwind_Backtrace, _Unwind_GetIPInfo, UnwindContext, UnwindReasonCode};
 
+use crate::{MapFlags, ProtFlags, Stat};
+
 /// Frames collected before the walk is cut short, bounding a runaway recursion.
 const MAX_FRAMES: usize = 32;
-
-const READ_CHUNK: usize = 256 * 1024;
 
 const PATH_MAX: usize = 4096;
 
@@ -70,8 +72,7 @@ pub(crate) fn print(out: &mut impl Write) {
     _Unwind_Backtrace(collect, (&raw mut trace).cast());
 
     let _ = writeln!(out, "stack backtrace:");
-    let image = read_own_image();
-    let symbols = image.as_deref().and_then(load_symbols);
+    let symbols = map_own_image().and_then(load_symbols);
     for (index, &ip) in trace.ips[..trace.len].iter().enumerate() {
         write_frame(out, index, ip, symbols.as_ref());
     }
@@ -104,7 +105,26 @@ extern "C" fn collect(ctx: &UnwindContext<'_>, arg: *mut c_void) -> UnwindReason
     UnwindReasonCode::NO_REASON
 }
 
-fn read_own_image() -> Option<Vec<u8>> {
+/// Maps the running executable read only, once per process.
+///
+/// The mapping is lazy, so it commits a frame only for the pages the ELF and
+/// DWARF parse touch. This runs on the panic path, where committing a
+/// multi-megabyte image in physical frames can itself fail.
+///
+/// The result is cached because there is no munmap syscall and `catch_unwind`
+/// lets a process print several backtraces, each of which would otherwise
+/// strand another mapping of the whole image.
+fn map_own_image() -> Option<&'static [u8]> {
+    static IMAGE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
+    static LEN: AtomicUsize = AtomicUsize::new(0);
+
+    let cached = IMAGE.load(Acquire);
+    if !cached.is_null() {
+        // SAFETY: the pointer was published after its length, and no munmap
+        // syscall exists, so the mapping outlives every borrow of it.
+        return Some(unsafe { slice::from_raw_parts(cached, LEN.load(Relaxed)) });
+    }
+
     let mut path = [0u8; PATH_MAX];
     let written = crate::exe_path(&mut path);
     if written <= 0 {
@@ -117,20 +137,22 @@ fn read_own_image() -> Option<Vec<u8>> {
         return None;
     }
 
-    let mut image = vec![];
-    loop {
-        let filled = image.len();
-        image.resize(filled + READ_CHUNK, 0);
-        let read = crate::read(fd, &mut image[filled..]);
-        // Zero is end of file and a negative value is an errno. Either way what
-        // was already read stays usable.
-        if read <= 0 {
-            image.truncate(filled);
-            break;
-        }
-        image.truncate(filled + read as usize);
+    let mut stat = Stat::default();
+    if crate::fstat(fd, &mut stat) < 0 || stat.size == 0 {
+        return None;
     }
-    (!image.is_empty()).then_some(image)
+    let len = stat.size as usize;
+
+    let mapped = crate::mmap(0, len, ProtFlags::READ, MapFlags::PRIVATE, fd as usize, 0);
+    if mapped <= 0 {
+        return None;
+    }
+    let ptr = mapped as usize as *mut u8;
+
+    LEN.store(len, Relaxed);
+    IMAGE.store(ptr, Release);
+    // SAFETY: the mapping covers `len` readable bytes and is never unmapped.
+    Some(unsafe { slice::from_raw_parts(ptr, len) })
 }
 
 fn load_symbols(image: &[u8]) -> Option<Symbols<'_>> {

@@ -1,13 +1,13 @@
 use core::ffi::c_int;
 
-use kernel_abi::{EINVAL, ENOTTY, Errno, IoctlRequest};
+use kernel_abi::{EINVAL, ENOSYS, ENOTTY, Errno, IoctlRequest, Stat};
 use kernel_vfs::path::AbsolutePath;
 
 pub trait FileInfo {}
 
 pub trait FileAccess {
     type FileInfo: FileInfo;
-    type Fd: From<c_int> + Into<c_int> + core::fmt::Debug;
+    type Fd: From<c_int> + Into<c_int> + Clone + core::fmt::Debug;
     type OpenError;
     type ReadError;
     type WriteError;
@@ -40,6 +40,33 @@ pub trait FileAccess {
         let _ = fd;
         Err(EINVAL)
     }
+
+    /// Fills file metadata for an open file.
+    ///
+    /// # Errors
+    /// Returns `ENOSYS` when the context does not implement stat.
+    fn fstat(&self, fd: Self::Fd) -> Result<Stat, Errno> {
+        let _ = fd;
+        Err(ENOSYS)
+    }
+
+    /// Returns the offset the next read or write on `fd` starts at.
+    ///
+    /// # Errors
+    /// Returns `ENOSYS` when the context tracks no offset.
+    fn position(&self, fd: Self::Fd) -> Result<u64, Errno> {
+        let _ = fd;
+        Err(ENOSYS)
+    }
+
+    /// Sets the offset the next read or write on `fd` starts at.
+    ///
+    /// # Errors
+    /// Returns `ENOSYS` when the context tracks no offset.
+    fn set_position(&self, fd: Self::Fd, position: u64) -> Result<(), Errno> {
+        let _ = (fd, position);
+        Err(ENOSYS)
+    }
 }
 
 #[cfg(test)]
@@ -52,6 +79,7 @@ pub mod testing {
     use core::sync::atomic::AtomicUsize;
     use core::sync::atomic::Ordering::Relaxed;
 
+    use kernel_abi::{EBADF, Errno, Stat};
     use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath};
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
@@ -196,6 +224,27 @@ pub mod testing {
             } else {
                 Err(())
             }
+        }
+
+        fn fstat(&self, fd: Self::Fd) -> Result<Stat, Errno> {
+            let guard = self.lock();
+            let file = guard.open_fds.get(&fd).ok_or(EBADF)?;
+            Ok(Stat {
+                size: file.data.read().len() as u64,
+            })
+        }
+
+        fn position(&self, fd: Self::Fd) -> Result<u64, Errno> {
+            let guard = self.lock();
+            guard.open_fds.get(&fd).ok_or(EBADF)?;
+            Ok(fd.position.load(Relaxed) as u64)
+        }
+
+        fn set_position(&self, fd: Self::Fd, position: u64) -> Result<(), Errno> {
+            let guard = self.lock();
+            guard.open_fds.get(&fd).ok_or(EBADF)?;
+            fd.position.store(position as usize, Relaxed);
+            Ok(())
         }
     }
 }

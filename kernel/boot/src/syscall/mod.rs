@@ -4,13 +4,13 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 use access::KernelAccess;
 use kernel_abi::{
     EFAULT, EINVAL, EIO, ENOENT, ENOMEM, ERANGE, ESRCH, Errno, IoctlRequest, ProcessId, SigAction,
-    SigMaskHow, SigSet, Signal, Timespec, syscall_name,
+    SigMaskHow, SigSet, Signal, Stat, Timespec, Whence, syscall_name,
 };
 use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
-use kernel_syscall::unistd::{sys_fsync, sys_getcwd, sys_ioctl, sys_read, sys_write};
+use kernel_syscall::unistd::{sys_fsync, sys_getcwd, sys_ioctl, sys_lseek, sys_read, sys_write};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use tracing::{debug, error};
 use x86_64::VirtAddr;
@@ -48,6 +48,8 @@ pub fn dispatch_syscall(
         kernel_abi::SYS_SIGPENDING => dispatch_sys_sigpending(arg1),
         kernel_abi::SYS_IOCTL => dispatch_sys_ioctl(arg1, arg2, arg3),
         kernel_abi::SYS_FSYNC => dispatch_sys_fsync(arg1),
+        kernel_abi::SYS_FSTAT => dispatch_sys_fstat(arg1, arg2),
+        kernel_abi::SYS_LSEEK => dispatch_sys_lseek(arg1, arg2, arg3),
         kernel_abi::SYS_CLOCK_GETTIME => dispatch_sys_clock_gettime(arg1, arg2),
         kernel_abi::SYS_EXE_PATH => dispatch_sys_exe_path(arg1, arg2),
         _ => {
@@ -336,6 +338,31 @@ fn dispatch_sys_fsync(fd: usize) -> Result<usize, Errno> {
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     sys_fsync(&cx, fd)
+}
+
+fn dispatch_sys_fstat(fd: usize, buf: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    let fd = <KernelAccess as FileAccess>::Fd::from(fd);
+
+    // The destination must be resident before the filesystem lock is taken,
+    // because paging it in re-enters that same non-reentrant lock.
+    make_user_range_resident(buf, size_of::<Stat>(), UserAccess::Write)?;
+    let stat = cx.fstat(fd)?;
+    write_user(buf, stat)?;
+    Ok(0)
+}
+
+fn dispatch_sys_lseek(fd: usize, offset: usize, whence: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    let fd = <KernelAccess as FileAccess>::Fd::from(fd);
+
+    let whence = Whence::try_from(whence)?;
+    // A negative offset arrives as its two's complement in the register.
+    sys_lseek(&cx, fd, offset as i64, whence)
 }
 
 /// POSIX clock_gettime backed by the HPET main counter

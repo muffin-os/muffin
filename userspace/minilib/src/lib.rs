@@ -12,7 +12,7 @@ use core::ffi::c_int;
 
 pub use kernel_abi::{
     CLOCK_MONOTONIC, DefaultAction, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, SaFlags,
-    SigAction, SigHandler, SigMaskHow, SigSet, Signal, Timespec,
+    SigAction, SigHandler, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence,
 };
 pub use panic::catch_unwind;
 
@@ -29,6 +29,14 @@ pub fn read(fd: c_int, buf: &mut [u8]) -> c_int {
 
 pub fn write(fd: c_int, buf: &[u8]) -> c_int {
     syscall3(37, fd as usize, buf.as_ptr() as usize, buf.len()) as i32
+}
+
+pub fn lseek(fd: c_int, offset: i64, whence: Whence) -> i64 {
+    syscall3(39, fd as usize, offset as usize, whence as usize) as i64
+}
+
+pub fn fstat(fd: c_int, stat: &mut Stat) -> c_int {
+    syscall2(5, fd as usize, core::ptr::from_mut(stat) as usize) as c_int
 }
 
 pub fn ioctl<T>(fd: c_int, request: IoctlRequest, arg: &mut T) -> c_int {

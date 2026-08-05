@@ -1,4 +1,4 @@
-use kernel_abi::{ENODEV, Errno};
+use kernel_abi::{ENODEV, Errno, ProtFlags};
 
 use crate::UserspacePtr;
 use crate::access::{AllocationStrategy, CreateMappingError, Location};
@@ -42,6 +42,25 @@ pub trait MemoryRegionAccess {
     /// mappings.
     fn map_shared_file(&self, fd: i32, len: usize) -> Result<UserspacePtr<u8>, Errno> {
         let _ = (fd, len);
+        Err(ENODEV)
+    }
+
+    /// Maps `len` bytes of the file behind `fd`, starting at `offset`, into the
+    /// calling process as a private lazily paged mapping, returning its address.
+    ///
+    /// The default rejects with `ENODEV` because the context has no filesystem.
+    /// POSIX uses that errno for an fd whose type mmap does not support.
+    ///
+    /// # Errors
+    /// Returns `ENODEV` when the context does not support file-backed mappings.
+    fn map_private_file(
+        &self,
+        fd: i32,
+        len: usize,
+        offset: usize,
+        prot: ProtFlags,
+    ) -> Result<UserspacePtr<u8>, Errno> {
+        let _ = (fd, len, offset, prot);
         Err(ENODEV)
     }
 }

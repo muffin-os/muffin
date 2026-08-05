@@ -1,3 +1,5 @@
+use crate::{EINVAL, Errno};
+
 pub const F_DUPFD: i32 = 1;
 pub const F_DUPFD_CLOEXEC: i32 = 2;
 pub const F_DUPFD_CLOFORK: i32 = 3;
@@ -59,3 +61,53 @@ pub const POSIX_FADV_NORMAL: i32 = 3;
 pub const POSIX_FADV_RANDOM: i32 = 4;
 pub const POSIX_FADV_SEQUENTIAL: i32 = 5;
 pub const POSIX_FADV_WILLNEED: i32 = 6;
+
+/// Origin an lseek offset is measured from.
+///
+/// The discriminants are the POSIX `SEEK_SET`, `SEEK_CUR` and `SEEK_END`
+/// numbers, which userspace passes raw in the syscall register.
+#[repr(usize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Whence {
+    Set = 0,
+    Cur = 1,
+    End = 2,
+}
+
+impl TryFrom<usize> for Whence {
+    type Error = Errno;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Set),
+            1 => Ok(Self::Cur),
+            2 => Ok(Self::End),
+            _ => Err(EINVAL),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whence_numbers_are_posix() {
+        for (value, expected) in [(0, Whence::Set), (1, Whence::Cur), (2, Whence::End)] {
+            assert_eq!(
+                Whence::try_from(value),
+                Ok(expected),
+                "whence {value} should decode to the POSIX origin"
+            );
+        }
+    }
+
+    #[test]
+    fn whence_unknown_is_einval() {
+        assert_eq!(
+            Whence::try_from(3),
+            Err(EINVAL),
+            "an origin outside 0, 1 and 2 should be rejected"
+        );
+    }
+}

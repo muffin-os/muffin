@@ -54,24 +54,30 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
 
         Ok(mapped_addr.addr())
     } else {
-        // A non-anonymous mapping is backed by an open file descriptor and
-        // must be shared so writes reach the device frames.
-        if !flags.contains(MapFlags::SHARED) {
-            return Err(EINVAL);
-        }
         if fd < 0 {
             return Err(EBADF);
         }
-        if offset != 0 {
-            return Err(EINVAL);
-        }
-        // MAP_FIXED is not supported for file-backed mappings; the kernel
-        // chooses the address.
+        // The kernel picks the address for a file-backed mapping, so a
+        // caller-supplied one cannot be honored.
         if flags.contains(MapFlags::FIXED) {
             return Err(EINVAL);
         }
 
-        let mapped_addr = cx.map_shared_file(fd, len)?;
+        let mapped_addr = match (
+            flags.contains(MapFlags::SHARED),
+            flags.contains(MapFlags::PRIVATE),
+        ) {
+            // A device mapping hands out the device's own frames, which sit at a
+            // fixed physical base, so it carries no file offset.
+            (true, false) => {
+                if offset != 0 {
+                    return Err(EINVAL);
+                }
+                cx.map_shared_file(fd, len)?
+            }
+            (false, true) => cx.map_private_file(fd, len, offset, prot)?,
+            _ => return Err(EINVAL),
+        };
         Ok(mapped_addr.addr())
     }
 }
@@ -81,7 +87,7 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec::Vec;
 
-    use kernel_abi::{EINVAL, ENODEV, MapFlags, ProtFlags};
+    use kernel_abi::{EBADF, EINVAL, ENODEV, MapFlags, ProtFlags};
     use spin::mutex::Mutex;
 
     use crate::UserspacePtr;
@@ -202,24 +208,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mmap_not_anonymous() {
-        let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
-
-        let result = sys_mmap(
-            &cx,
-            addr,
-            4096,
-            (ProtFlags::READ | ProtFlags::WRITE).bits(),
-            MapFlags::PRIVATE.bits(), // Missing MAP_ANONYMOUS
-            0,
-            0,
-        );
-
-        assert_eq!(result, Err(EINVAL));
-    }
-
-    #[test]
     fn test_mmap_not_private() {
         let cx = Arc::new(TestMemoryAccess::new());
         let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
@@ -276,7 +264,23 @@ mod tests {
     }
 
     #[test]
-    fn mmap_non_anonymous_requires_shared() {
+    fn mmap_file_requires_exactly_one_sharing_mode() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+
+        for flags in [MapFlags::empty(), MapFlags::SHARED | MapFlags::PRIVATE] {
+            let result = sys_mmap(&cx, addr, 4096, ProtFlags::READ.bits(), flags.bits(), 3, 0);
+
+            assert_eq!(
+                result,
+                Err(EINVAL),
+                "a file mapping needs exactly one of MAP_SHARED or MAP_PRIVATE, got {flags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mmap_private_fd_unsupported() {
         let cx = Arc::new(TestMemoryAccess::new());
         let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
 
@@ -285,7 +289,29 @@ mod tests {
             addr,
             4096,
             ProtFlags::READ.bits(),
-            MapFlags::PRIVATE.bits(), // neither ANONYMOUS nor SHARED
+            MapFlags::PRIVATE.bits(),
+            3,
+            0,
+        );
+
+        assert_eq!(
+            result,
+            Err(ENODEV),
+            "private fd mapping must hit the default map_private_file rejecting with ENODEV"
+        );
+    }
+
+    #[test]
+    fn mmap_private_file_fixed_rejected() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+
+        let result = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            ProtFlags::READ.bits(),
+            (MapFlags::PRIVATE | MapFlags::FIXED).bits(),
             3,
             0,
         );
@@ -293,8 +319,26 @@ mod tests {
         assert_eq!(
             result,
             Err(EINVAL),
-            "non-anonymous mapping without MAP_SHARED must be rejected"
+            "MAP_FIXED is not supported for a private file mapping"
         );
+    }
+
+    #[test]
+    fn mmap_file_bad_fd() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+
+        let result = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            ProtFlags::READ.bits(),
+            MapFlags::PRIVATE.bits(),
+            -1,
+            0,
+        );
+
+        assert_eq!(result, Err(EBADF), "a negative fd must be rejected before any mode check");
     }
 
     #[test]

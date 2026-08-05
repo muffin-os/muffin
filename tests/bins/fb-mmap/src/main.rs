@@ -2,7 +2,8 @@
 #![no_main]
 
 use minilib::{
-    FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, exit, ioctl, mmap, open, read, write,
+    FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Whence, exit, ioctl, lseek, mmap, open, read,
+    write,
 };
 
 const PATTERN_LEN: usize = 256;
@@ -77,17 +78,36 @@ pub extern "C" fn _start() {
         exit(1);
     }
 
-    // file-backed PRIVATE mapping is likewise unsupported
-    if mmap(
+    // A private mapping is served by a lazy page-in that reads the device, so
+    // the pattern held in the framebuffer must be visible through it.
+    let private = mmap(
         0,
         4096,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::PRIVATE,
         fd as usize,
         0,
-    ) >= 0
-    {
+    );
+    if private <= 0 {
         puts("fb-mmap: FAIL private-file\n");
+        exit(1);
+    }
+    let private_ptr = private as *mut u8;
+    for i in 0..PATTERN_LEN {
+        if unsafe { private_ptr.add(i).read_volatile() } != (i as u8) ^ 0x5A {
+            puts("fb-mmap: FAIL private-file\n");
+            exit(1);
+        }
+    }
+
+    // A private mapping owns its frames and is never written back, so the
+    // device keeps the pattern byte.
+    unsafe {
+        private_ptr.write_volatile(0xFF);
+    }
+    let mut first = [0u8; 1];
+    if lseek(fd, 0, Whence::Set) != 0 || read(fd, &mut first) != 1 || first[0] != 0x5A {
+        puts("fb-mmap: FAIL private-writeback\n");
         exit(1);
     }
 

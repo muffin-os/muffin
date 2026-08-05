@@ -6,7 +6,8 @@
 //! `MAP_SHARED`, stamps a pattern through the mapping, and reads the same bytes
 //! back through the read syscall to prove the mapping aliases the real device
 //! memory rather than a private copy. It also confirms that shared mmap of a
-//! regular file and private mmap of a device file are both rejected.
+//! regular file is rejected, and that a `MAP_PRIVATE` mapping of the same
+//! device sees the framebuffer content but never writes back to it.
 
 use test_support::{KernelTest, host_env};
 
