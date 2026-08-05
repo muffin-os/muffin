@@ -30,6 +30,10 @@ impl TaskCleanup {
         let cleanup_task = Task::create_new(Process::root(), Self::cleanup_tasks, ptr::null_mut())
             .expect("should be able to create cleanup task");
         info!(id = %cleanup_task.id(), "cleanup task created");
+        // Reaping dead tasks is not latency critical, and this task halts whenever
+        // the queue is empty. At ordinary priority that halt costs whatever else is
+        // runnable a full timer quantum.
+        cleanup_task.mark_idle();
         GlobalTaskQueue::enqueue(Box::pin(cleanup_task));
     }
 

@@ -110,13 +110,14 @@ unsafe extern "C" fn cpu_init_and_idle(cpu: &limine::mp::Cpu) -> ! {
     turn_idle()
 }
 
-/// Makes the current task an idle task.
+/// Parks the current task as this core's idle task, never returning.
 ///
-/// This adapts the current task priority and affinity.
+/// The task is not pinned to this core, so the scheduler may hand it to any core
+/// that runs out of ordinary work.
 pub fn turn_idle() -> ! {
-    // This is an idle-task now.
-    // TODO: pin this task to this CPU
-    // TODO: make this task lowest (idle) priority, so that it doesn't get scheduled if there are any other tasks
+    // Must precede the first halt. While this task sits in the ordinary queue it
+    // costs every runnable task a timer quantum each time it is picked.
+    ExecutionContext::load().current_task().mark_idle();
     loop {
         hlt();
     }

@@ -17,6 +17,8 @@ struct Args {
     debug: bool,
     #[arg(long, help = "Run QEMU without a display")]
     headless: bool,
+    #[arg(long, help = "QEMU -display spec, e.g. gtk, sdl, none")]
+    display: Option<String>,
     #[arg(long, help = "Number of CPU cores to emulate", default_value_t = 4)]
     smp: u8,
     #[arg(long, help = "Don't boot, just build")]
@@ -106,6 +108,9 @@ continue"
         // run without a window, but with graphics devices attached
         cmd.arg("-display");
         cmd.arg("none");
+    } else if let Some(display) = &args.display {
+        cmd.arg("-display");
+        cmd.arg(display);
     }
 
     cmd.arg("-m");

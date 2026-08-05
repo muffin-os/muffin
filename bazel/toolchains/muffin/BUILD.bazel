@@ -1,0 +1,29 @@
+load("@rules_rust//rust:toolchain.bzl", "rust_toolchain")
+load("//bazel/toolchains:common.bzl", "EXTRA_RUSTC_FLAGS", "TARGET_JSON", "TOOLS")
+
+package(default_visibility = ["//visibility:public"])
+
+# Named `impl` so its generated `impl.target.json` shares a rustc target
+# identity with //bazel/toolchains/bootstrap:impl. See common.bzl.
+rust_toolchain(
+    name = "impl",
+    binary_ext = "",
+    channel = "nightly",
+    clippy_driver = TOOLS + "//:clippy_driver_bin",
+    default_edition = "2024",
+    dylib_ext = ".so",
+    exec_triple = "x86_64-unknown-linux-gnu",
+    extra_rustc_flags = EXTRA_RUSTC_FLAGS,
+    iso_date = "2026-07-12",
+    linker = TOOLS + "//:rust-lld",
+    linker_type = "direct",
+    rust_doc = TOOLS + "//:rustdoc",
+    rust_objcopy = TOOLS + "//:rust-objcopy",
+    rust_std = "//bazel/toolchains:muffin_std",
+    rustc = TOOLS + "//:rustc",
+    rustc_lib = TOOLS + "//:rustc_lib",
+    staticlib_ext = ".a",
+    stdlib_linkflags = [],
+    target_json = TARGET_JSON,
+    version = "1.99.0",
+)
