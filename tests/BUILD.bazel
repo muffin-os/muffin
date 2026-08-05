@@ -76,6 +76,15 @@ ext2_image(
     files = {"//tests/bins:unwind": "bin/unwind"},
 )
 
+ext2_image(
+    name = "true_false_disk",
+    contents = {"spawn": "/bin/true\n/bin/false\n"},
+    files = {
+        "//userspace/utilities/false": "bin/false",
+        "//userspace/utilities/true": "bin/true",
+    },
+)
+
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
 # harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
 #
@@ -114,6 +123,7 @@ ext2_image(
         "kstack_overflow",
         "mmap",
         "signals",
+        "true_false",
         "unwind",
     ]
 ]
