@@ -83,8 +83,11 @@ ext2_image = rule(
         ),
         # Not `size`: Bazel reserves that attribute name for test targets.
         "image_size": attr.string(
-            default = "10M",
-            doc = "Filesystem size passed to mke2fs.",
+            default = "64M",
+            doc = """Filesystem size passed to mke2fs.
+
+A userspace binary carries full DWARF and minilib's symbolizer, putting it near
+10 MiB, and one image can hold several.""",
         ),
     },
 )

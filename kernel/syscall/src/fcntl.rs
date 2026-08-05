@@ -34,7 +34,7 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
         }
     };
 
-    debug!(?path, "path");
+    debug!(?path, "open");
 
     let info = cx.file_info(path.as_ref()).ok_or(ENOENT)?;
     let fd = cx.open(&info).map_err(|_| EINVAL)?; // TODO: check error

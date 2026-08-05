@@ -3,8 +3,8 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use access::KernelAccess;
 use kernel_abi::{
-    EFAULT, EINVAL, EIO, ENOMEM, ESRCH, Errno, IoctlRequest, ProcessId, SigAction, SigMaskHow,
-    SigSet, Signal, Timespec, syscall_name,
+    EFAULT, EINVAL, EIO, ENOENT, ENOMEM, ERANGE, ESRCH, Errno, IoctlRequest, ProcessId, SigAction,
+    SigMaskHow, SigSet, Signal, Timespec, syscall_name,
 };
 use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
@@ -49,6 +49,7 @@ pub fn dispatch_syscall(
         kernel_abi::SYS_IOCTL => dispatch_sys_ioctl(arg1, arg2, arg3),
         kernel_abi::SYS_FSYNC => dispatch_sys_fsync(arg1),
         kernel_abi::SYS_CLOCK_GETTIME => dispatch_sys_clock_gettime(arg1, arg2),
+        kernel_abi::SYS_EXE_PATH => dispatch_sys_exe_path(arg1, arg2),
         _ => {
             error!("unimplemented syscall: {} ({n})", syscall_name(n));
             loop {
@@ -361,4 +362,19 @@ fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno>
     let tv_sec = i64::try_from(total_secs).map_err(|_| EINVAL)?;
     write_user::<Timespec>(tp, Timespec { tv_sec, tv_nsec })?;
     Ok(0)
+}
+
+fn dispatch_sys_exe_path(buf: usize, len: usize) -> Result<usize, Errno> {
+    let slice = unsafe { slice_from_ptr_and_len_mut(buf, len) }?;
+    make_user_range_resident(buf, len, UserAccess::Write)?;
+
+    let process = ExecutionContext::load().current_process();
+    let path = process.executable_path().ok_or(ENOENT)?;
+
+    let bytelen = path.len();
+    if slice.len() < bytelen {
+        return Err(ERANGE);
+    }
+    slice.iter_mut().zip(path.bytes()).for_each(|(s, b)| *s = b);
+    Ok(bytelen)
 }

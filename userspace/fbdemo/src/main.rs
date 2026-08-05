@@ -10,7 +10,7 @@ use gfx::backend::software::{SoftAllocator, SoftBackend, SoftCompiler, SoftQueue
 use kernel_abi::gfx::BufferDesc;
 use minilib::{
     CLOCK_MONOTONIC, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Timespec, clock_gettime,
-    exit, fsync, heap_init, ioctl, mmap, open, write,
+    exit, fsync, ioctl, mmap, open, write,
 };
 
 fn puts(msg: &str) {
@@ -140,16 +140,6 @@ pub extern "C" fn _start() {
         exit(1);
     }
 
-    // Covers the vertex buffer and the queue's scratch buffers. The framebuffer
-    // is mapped, so it needs no pool of its own.
-    let t = now_us();
-    let heap_ok = heap_init(1 << 20);
-    report("heap_init", t, now_us());
-    if !heap_ok {
-        puts("fbdemo: FAIL heap\n");
-        exit(1);
-    }
-
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
     let t = now_us();
     let vert = or_fail_gfx(backend.compile_shader(&SoftShaderDef::Vertex {
@@ -234,10 +224,4 @@ pub extern "C" fn _start() {
     put_u32(info.height);
     puts("\n");
     exit(0);
-}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(_info: &::core::panic::PanicInfo) -> ! {
-    loop {}
 }

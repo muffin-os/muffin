@@ -22,6 +22,8 @@ and reapply these deltas to the printed JSON:
    because rules_rust dereferences `toolchain.target_os` unguarded.
 5. Restate `metadata.description`. rustc prints the stock target's wording, which names
    the float ABI this spec exists to change.
+6. Set `panic-strategy` to `"unwind"`. Userspace panics run destructors and stay catchable, which
+   requires landing pads in every userspace crate including the sysroot rlibs built from this spec.
 
 The Bazel platform deliberately keeps `@platforms//os:none` and does not follow this
 field. Every `@crates` target gates `target_compatible_with` on
@@ -47,13 +49,13 @@ X86_64_UNKNOWN_MUFFIN = {
     "llvm-target": "x86_64-unknown-none-elf",
     "max-atomic-width": 64,
     "metadata": {
-        "description": "muffin userspace, x86_64 with SSE2 and the SSE float ABI",
+        "description": "muffin userspace, x86_64 with SSE2, the SSE float ABI and unwinding",
         "host_tools": False,
         "std": False,
         "tier": 2,
     },
     "os": "muffin",
-    "panic-strategy": "abort",
+    "panic-strategy": "unwind",
     "plt-by-default": False,
     "position-independent-executables": False,
     "relocation-model": "static",

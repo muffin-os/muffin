@@ -43,9 +43,3 @@ pub extern "C" fn _start() {
     puts("fileio: FAIL\n");
     exit(1);
 }
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(_info: &::core::panic::PanicInfo) -> ! {
-    loop {}
-}

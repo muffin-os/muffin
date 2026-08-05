@@ -223,6 +223,11 @@ impl Process {
         &self.executable_segments
     }
 
+    /// The root process has no executable, so this returns `None` for it.
+    pub fn executable_path(&self) -> Option<&AbsolutePath> {
+        self.executable_path.as_ref().map(AsRef::as_ref)
+    }
+
     pub fn telemetry(&self) -> &Telemetry {
         &self.telemetry
     }

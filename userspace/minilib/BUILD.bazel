@@ -9,6 +9,10 @@ rust_library(
     edition = "2024",
     deps = [
         "//kernel/abi",
+        crate_label("addr2line"),
+        crate_label("elf"),
         crate_label("linked_list_allocator"),
+        crate_label("rustc-demangle"),
+        crate_label("unwinding"),
     ],
 )
