@@ -19,7 +19,7 @@ jobs:
     needs: check # only runs if the whole suite passed on latest nightly
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Resolve latest nightly
         id: nightly
         # minimal profile is sufficient: this job only reads the version string.
