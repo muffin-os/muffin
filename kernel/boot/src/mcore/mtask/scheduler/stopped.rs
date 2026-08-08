@@ -1,52 +1,50 @@
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
 use core::pin::Pin;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering::Relaxed;
 
 use conquer_once::spin::OnceCell;
-use kernel_abi::ProcessId;
-use spin::Mutex;
 
 use crate::mcore::mtask::process::SignalsWriteGuard;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
-use crate::mcore::mtask::task::Task;
+use crate::mcore::mtask::task::{Task, TaskQueue};
 
-type ParkedTasks = BTreeMap<ProcessId, Vec<Pin<Box<Task>>>>;
+static STOPPED_TASKS: OnceCell<TaskQueue> = OnceCell::uninit();
 
-static STOPPED_TASKS: OnceCell<Mutex<ParkedTasks>> = OnceCell::uninit();
+static PARKED: AtomicUsize = AtomicUsize::new(0);
 
-fn stopped_tasks() -> &'static Mutex<ParkedTasks> {
+fn stopped_tasks() -> &'static TaskQueue {
     STOPPED_TASKS.get().expect("StoppedTasks not initialized")
 }
 
 /// Parking lot for tasks whose process is stopped by a stop signal.
-///
-/// Keyed by pid rather than owned by `Process` to avoid an Arc cycle
-/// (`Process` owning a `Task` that owns `Arc<Process>`).
 pub struct StoppedTasks;
 
 impl StoppedTasks {
     pub fn init() {
-        STOPPED_TASKS.init_once(|| Mutex::new(BTreeMap::new()));
+        STOPPED_TASKS.init_once(TaskQueue::new);
     }
 
     /// Parks a task of a stopped process.
-    ///
-    /// # Errors
-    /// Returns the task if the registry lock is contended.
-    pub fn try_park(pid: ProcessId, task: Pin<Box<Task>>) -> Result<(), Pin<Box<Task>>> {
-        let Some(mut guard) = stopped_tasks().try_lock() else {
-            return Err(task);
-        };
-        guard.entry(pid).or_default().push(task);
-        Ok(())
+    pub fn park(task: Pin<Box<Task>>) {
+        PARKED.fetch_add(1, Relaxed);
+        stopped_tasks().enqueue(task);
     }
 
+    /// Releases every parked task of the signalled process back to the run
+    /// queue.
     pub fn resume_all(signals: &SignalsWriteGuard<'_>) {
-        let mut guard = stopped_tasks().lock();
-        if let Some(tasks) = guard.remove(&signals.pid()) {
-            for task in tasks {
+        let pid = signals.pid();
+        let queue = stopped_tasks();
+        for _ in 0..PARKED.load(Relaxed) {
+            let Some(task) = queue.dequeue() else {
+                break;
+            };
+            if task.process().pid() == pid {
+                PARKED.fetch_sub(1, Relaxed);
                 GlobalTaskQueue::enqueue(task);
+            } else {
+                queue.enqueue(task);
             }
         }
     }

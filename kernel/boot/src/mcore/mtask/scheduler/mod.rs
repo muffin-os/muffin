@@ -135,13 +135,7 @@ impl Scheduler {
     fn park(task: Pin<Box<Task>>) {
         let process = task.process().clone();
         match process.try_signals_read() {
-            Some(guard) if guard.stopped() => {
-                let pid = process.pid();
-                if let Err(task) = StoppedTasks::try_park(pid, task) {
-                    drop(guard);
-                    GlobalTaskQueue::enqueue(task);
-                }
-            }
+            Some(guard) if guard.stopped() => StoppedTasks::park(task),
             _ => GlobalTaskQueue::enqueue(task),
         }
     }
