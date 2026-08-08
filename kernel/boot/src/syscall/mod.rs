@@ -121,8 +121,8 @@ fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
 /// destination is not a mapped, writable, user page. Validating up front keeps
 /// a bad pointer from faulting the copy-out in Ring 0 and panicking the kernel.
 fn write_user<T>(addr: usize, value: T) -> Result<(), Errno> {
-    let mut ptr = unsafe { UserspaceMutPtr::<T>::try_from_usize(addr)? };
-    ptr.validate_range(size_of::<T>())?;
+    let mut ptr = unsafe { UserspaceMutPtr::<T>::try_from_usize(addr) }.map_err(|_| EFAULT)?;
+    ptr.validate_range(size_of::<T>()).map_err(|_| EFAULT)?;
 
     let Ok(vaddr) = VirtAddr::try_new(addr as u64) else {
         return Err(EFAULT);
@@ -142,16 +142,26 @@ fn write_user<T>(addr: usize, value: T) -> Result<(), Errno> {
     Ok(())
 }
 
+/// Reads a `T` from the userspace pointer `addr`, returning `EFAULT` unless
+/// the whole range is user memory that a region backs with read access.
+/// Making the range resident up front keeps a bad pointer from faulting the
+/// copy-in in Ring 0 and panicking the kernel.
+fn read_user<T>(addr: usize) -> Result<T, Errno> {
+    let ptr = unsafe { UserspacePtr::<T>::try_from_usize(addr) }.map_err(|_| EFAULT)?;
+    ptr.validate_range(size_of::<T>()).map_err(|_| EFAULT)?;
+    make_user_range_resident(addr, size_of::<T>(), UserAccess::Read)?;
+    // Safety: the range is lower-half, resident, and user readable, so this
+    // read cannot fault.
+    Ok(unsafe { ptr.as_ptr().read_unaligned() })
+}
+
 fn dispatch_sys_sigaction(signo: usize, new: usize, old: usize) -> Result<usize, Errno> {
     let signal = Signal::try_from(signo as i32)?;
 
     let new_action = if new == 0 {
         None
     } else {
-        let ptr = unsafe { UserspacePtr::<SigAction>::try_from_usize(new)? };
-        ptr.validate_range(size_of::<SigAction>())?;
-        // Safety: range-validated lower-half pointer, read by value
-        Some(unsafe { ptr.as_ptr().read_unaligned() })
+        Some(read_user::<SigAction>(new)?)
     };
 
     let process = ExecutionContext::load().current_process();
@@ -169,10 +179,7 @@ fn dispatch_sys_sigprocmask(how: usize, set: usize, oldset: usize) -> Result<usi
     let new_set = if set == 0 {
         None
     } else {
-        let ptr = unsafe { UserspacePtr::<SigSet>::try_from_usize(set)? };
-        ptr.validate_range(size_of::<SigSet>())?;
-        // Safety: range-validated lower-half pointer, read by value
-        Some(unsafe { ptr.as_ptr().read_unaligned() })
+        Some(read_user::<SigSet>(set)?)
     };
 
     let process = ExecutionContext::load().current_process();

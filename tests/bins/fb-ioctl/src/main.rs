@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
-use minilib::{FbScreenInfo, IoctlRequest, exit, ioctl, open, write};
+use core::ffi::c_int;
+
+use minilib::{ENOTTY, FbScreenInfo, IoctlRequest, exit, ioctl, open, write};
 
 fn puts(msg: &str) {
     write(1, msg.as_bytes());
@@ -52,7 +54,7 @@ pub extern "C" fn _start() {
         exit(1);
     }
     let mut enotty_info = FbScreenInfo::default();
-    if ioctl(spawn_fd, IoctlRequest::FbGetScreenInfo, &mut enotty_info) == -58 {
+    if ioctl(spawn_fd, IoctlRequest::FbGetScreenInfo, &mut enotty_info) == -c_int::from(ENOTTY) {
         puts("fb-ioctl: enotty ok\n");
     } else {
         puts("fb-ioctl: FAIL enotty\n");

@@ -10,7 +10,7 @@
 
 use core::arch::asm;
 
-use minilib::{Signal, exit, getpid, install_handler, write};
+use minilib::{SYS_KILL, Signal, exit, getpid, install_handler, write};
 
 /// Iterations per spin. A tight `dec` and `jnz` loop, so it retires much faster
 /// than iteration counts elsewhere in the test suite suggest. It has to stay
@@ -378,7 +378,7 @@ fn check_signal(pid: u64) -> bool {
             "movsd [{outp} + 120], xmm15",
             inp = in(reg) input.as_ptr(),
             outp = in(reg) out.as_mut_ptr(),
-            inout("rax") 42usize => _,
+            inout("rax") SYS_KILL => _,
             in("rdi") 0usize,
             in("rsi") signo,
             out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,

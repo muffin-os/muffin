@@ -205,7 +205,17 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
         terminate_current(Signal::Segfault);
     }
 
-    // Safety: range validated lower half pointer, read by value.
+    let ctx = ExecutionContext::load();
+    if !ctx
+        .current_process()
+        .address_space()
+        .is_user_readable(frame.stack_pointer, size_of::<SigFrame>())
+    {
+        terminate_current(Signal::Segfault);
+    }
+
+    // Safety: lower half pointer, range validated and user readable, read by
+    // value.
     let saved = unsafe { core::ptr::read_unaligned(ptr.as_ptr()) };
     if saved.magic != SIGFRAME_MAGIC {
         terminate_current(Signal::Segfault);
@@ -214,7 +224,6 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
     // Restores rax too, so sigreturn must not write its own result afterwards.
     *regs = saved.regs;
 
-    let ctx = ExecutionContext::load();
     let user_code = ctx.selectors().user_code;
     let user_data = ctx.selectors().user_data;
     // Preserve the arithmetic flags the handler observed, force interrupts on,

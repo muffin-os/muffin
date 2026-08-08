@@ -23,6 +23,12 @@ ext2_image(
 )
 
 ext2_image(
+    name = "signals_edge_disk",
+    contents = {"spawn": "/bin/init\n/bin/init\n/bin/init\n"},
+    files = {"//tests/bins:signals_edge": "bin/init"},
+)
+
+ext2_image(
     name = "exit_codes_disk",
     contents = {
         "data/hello.txt": _HELLO,
@@ -123,6 +129,7 @@ ext2_image(
         "kstack_overflow",
         "mmap",
         "signals",
+        "signals_edge",
         "true_false",
         "unwind",
     ]

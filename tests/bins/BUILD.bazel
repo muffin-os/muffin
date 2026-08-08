@@ -18,6 +18,7 @@ package(default_visibility = ["//visibility:public"])
         "file_read": "file-read",
         "floats": "floats",
         "mmap": "mmap",
+        "signals_edge": "signals-edge",
         "signals_init": "signals-init",
         "unwind": "unwind",
     }.items()

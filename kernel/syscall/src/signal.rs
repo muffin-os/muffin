@@ -1687,4 +1687,260 @@ mod tests {
             "SIGKILL is a fatal deliverable"
         );
     }
+
+    #[test]
+    fn set_blocked_raw_strips_kill_stop() {
+        let mut state = SignalState::default();
+        state.set_blocked_raw(u64::MAX);
+        assert_eq!(
+            state.blocked(),
+            !(Signal::Kill.bit() | Signal::Stop.bit()),
+            "sigreturn restore keeps SIGKILL and SIGSTOP unblockable"
+        );
+    }
+
+    #[test]
+    fn sigaction_query_keeps_action() {
+        let mut state = SignalState::default();
+        let action = custom_action(0x1000);
+        state.sigaction(Signal::Usr1, Some(action)).unwrap();
+        assert_eq!(
+            state.sigaction(Signal::Usr1, None),
+            Ok(action),
+            "query returns the installed action"
+        );
+        assert_eq!(
+            state.disposition(Signal::Usr1),
+            Disposition::Handler(action),
+            "query left the installed action intact"
+        );
+    }
+
+    #[test]
+    fn sigprocmask_query_keeps_mask() {
+        let mut state = SignalState::default();
+        state
+            .sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()))
+            .unwrap();
+        assert_eq!(
+            state.sigprocmask(SigMaskHow::SetMask, None),
+            Ok(Signal::Interrupt.bit()),
+            "query returns the current mask regardless of how"
+        );
+        assert_eq!(
+            state.blocked(),
+            Signal::Interrupt.bit(),
+            "query left the mask intact"
+        );
+    }
+
+    #[test]
+    fn sigprocmask_setmask_strips_kill_stop() {
+        let mut state = SignalState::default();
+        state
+            .sigprocmask(SigMaskHow::SetMask, Some(u64::MAX))
+            .unwrap();
+        assert_eq!(
+            state.blocked(),
+            !(Signal::Kill.bit() | Signal::Stop.bit()),
+            "SetMask blocks everything except SIGKILL and SIGSTOP"
+        );
+    }
+
+    #[test]
+    fn sigaction_ignore_and_default_need_no_restorer() {
+        let mut state = SignalState::default();
+        let ignore = SigAction {
+            handler: SigHandler::IGNORE,
+            mask: 0,
+            flags: SaFlags::default(),
+            restorer: 0,
+        };
+        assert_eq!(
+            state.sigaction(Signal::Usr1, Some(ignore)),
+            Ok(SigAction::default()),
+            "SIG_IGN needs no restorer"
+        );
+        let default = SigAction {
+            handler: SigHandler::DEFAULT,
+            mask: 0,
+            flags: SaFlags::default(),
+            restorer: 0,
+        };
+        assert_eq!(
+            state.sigaction(Signal::Usr1, Some(default)),
+            Ok(ignore),
+            "SIG_DFL needs no restorer and returns the previous action"
+        );
+    }
+
+    #[test]
+    fn apply_handler_entry_merges_action_mask_and_returns_old() {
+        let mut state = SignalState::default();
+        state
+            .sigprocmask(SigMaskHow::Block, Some(Signal::Terminate.bit()))
+            .unwrap();
+        let mut action = custom_action(0x1000);
+        action.mask = Signal::Interrupt.bit() | Signal::Kill.bit();
+
+        let old = state.apply_handler_entry(Signal::Usr1, &action);
+        assert_eq!(
+            old,
+            Signal::Terminate.bit(),
+            "handler entry returns the mask in force before it"
+        );
+        assert_eq!(
+            state.blocked(),
+            Signal::Terminate.bit() | Signal::Interrupt.bit() | Signal::Usr1.bit(),
+            "handler entry merges the action mask with the delivered signal, minus SIGKILL"
+        );
+    }
+
+    #[test]
+    fn apply_handler_entry_nodefer_with_resethand() {
+        let mut state = SignalState::default();
+        let mut nodefer = custom_action(0x1000);
+        nodefer.flags = SaFlags::NODEFER;
+        state.sigaction(Signal::Usr1, Some(nodefer)).unwrap();
+        state.apply_handler_entry(Signal::Usr1, &nodefer);
+        assert_eq!(
+            state.blocked() & Signal::Usr1.bit(),
+            0,
+            "NODEFER leaves SIGUSR1 unblocked during its own handler"
+        );
+        assert_eq!(
+            state.disposition(Signal::Usr1),
+            Disposition::Handler(nodefer),
+            "NODEFER alone keeps the handler installed"
+        );
+
+        let mut resethand = custom_action(0x2000);
+        resethand.flags = SaFlags::RESETHAND;
+        state.sigaction(Signal::Usr2, Some(resethand)).unwrap();
+        state.apply_handler_entry(Signal::Usr2, &resethand);
+        assert_eq!(
+            state.disposition(Signal::Usr2),
+            Disposition::DefaultTerminate,
+            "RESETHAND drops the handler back to the default action"
+        );
+    }
+
+    #[test]
+    fn take_next_deliverable_none_when_all_blocked() {
+        let mut state = SignalState::default();
+        let blocked = Signal::Interrupt.bit() | Signal::Terminate.bit();
+        state.sigprocmask(SigMaskHow::Block, Some(blocked)).unwrap();
+        state.set_pending(Signal::Interrupt);
+        state.set_pending(Signal::Terminate);
+        assert_eq!(
+            state.take_next_deliverable(),
+            None,
+            "nothing is deliverable while every pending signal is blocked"
+        );
+        assert_eq!(
+            state.sigpending() & blocked,
+            blocked,
+            "blocked signals stay pending"
+        );
+    }
+
+    #[test]
+    fn has_fatal_deliverable_false_for_nonfatal_pendings() {
+        let mut state = SignalState::default();
+        state.set_pending(Signal::WindowChanged);
+        state.set_pending(Signal::TerminalStop);
+        assert!(
+            !state.has_fatal_deliverable(),
+            "default-ignore and default-stop pendings are not fatal"
+        );
+        state.set_pending(Signal::Kill);
+        assert!(
+            state.has_fatal_deliverable(),
+            "pending SIGKILL is always fatal"
+        );
+    }
+
+    #[test]
+    fn set_pending_discard_applies_to_blocked_signals() {
+        let mut state = SignalState::default();
+        state
+            .sigprocmask(SigMaskHow::Block, Some(Signal::TerminalStop.bit()))
+            .unwrap();
+        state.set_pending(Signal::TerminalStop);
+        state.set_pending(Signal::Continue);
+        assert_eq!(
+            state.sigpending() & Signal::TerminalStop.bit(),
+            0,
+            "SIGCONT discards a blocked pending SIGTSTP"
+        );
+
+        let mut state = SignalState::default();
+        state
+            .sigprocmask(SigMaskHow::Block, Some(Signal::Continue.bit()))
+            .unwrap();
+        state.set_pending(Signal::Continue);
+        state.set_pending(Signal::TerminalStop);
+        assert_eq!(
+            state.sigpending() & Signal::Continue.bit(),
+            0,
+            "SIGTSTP discards a blocked pending SIGCONT"
+        );
+    }
+
+    #[test]
+    fn disposition_kill_fixed_and_ignore_paths() {
+        let mut state = SignalState::default();
+        assert_eq!(
+            state.disposition(Signal::Kill),
+            Disposition::DefaultTerminate,
+            "SIGKILL always terminates"
+        );
+        let ignore = SigAction {
+            handler: SigHandler::IGNORE,
+            mask: 0,
+            flags: SaFlags::default(),
+            restorer: 0,
+        };
+        state.sigaction(Signal::Terminate, Some(ignore)).unwrap();
+        assert_eq!(
+            state.disposition(Signal::Terminate),
+            Disposition::Ignore,
+            "SIG_IGN resolves to ignore"
+        );
+        assert_eq!(
+            state.disposition(Signal::WindowChanged),
+            Disposition::Ignore,
+            "a default-ignore signal resolves to ignore"
+        );
+    }
+
+    #[test]
+    fn flow_full_block_mask_never_shields_kill() {
+        let current = pid!(1);
+        let target = pid!(2);
+        let mut cx = StatefulTestContext::new(current, current, 1000);
+        cx.add_process(target, target, 1000);
+
+        {
+            let mut states = cx.states.borrow_mut();
+            let state = states.get_mut(&target).unwrap();
+            state
+                .sigprocmask(SigMaskHow::Block, Some(u64::MAX))
+                .unwrap();
+        }
+
+        sys_kill(&cx, SignalTarget::SpecificProcess(target), Signal::Kill).unwrap();
+
+        let states = cx.states.borrow();
+        let state = &states[&target];
+        assert!(
+            state.has_fatal_deliverable(),
+            "a full block mask cannot shield the process from SIGKILL"
+        );
+        assert_eq!(
+            state.blocked() & Signal::Kill.bit(),
+            0,
+            "SIGKILL is never in the blocked mask"
+        );
+    }
 }

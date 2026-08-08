@@ -4,8 +4,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use minilib::{
-    SigMaskHow, SigSet, Signal, exit, getpid, install_handler, kill, sigpending, sigprocmask,
-    syscall3, write,
+    EFAULT, SYS_SIGACTION, SigMaskHow, SigSet, Signal, exit, getpid, install_handler, kill,
+    sigpending, sigprocmask, syscall3, write,
 };
 
 fn puts(msg: &str) {
@@ -169,10 +169,8 @@ fn role_a() {
     // fail with EFAULT, not fault inside the kernel and panic it. Usr2 keeps
     // this disjoint from the handshake; new=0 leaves its disposition untouched
     // while old points at an unmapped lower-half address.
-    const SYS_SIGACTION: usize = 43;
-    const EFAULT: isize = 20;
     let efault = syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0, 0x43) as isize;
-    if efault == -EFAULT {
+    if efault == -isize::from(EFAULT) {
         puts("A: efault ok\n");
     }
 
