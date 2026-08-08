@@ -165,7 +165,7 @@ fn dispatch_sys_sigaction(signo: usize, new: usize, old: usize) -> Result<usize,
     };
 
     let process = ExecutionContext::load().current_process();
-    let old_action = process.signals().write().sigaction(signal, new_action)?;
+    let old_action = process.signals_write().sigaction(signal, new_action)?;
 
     if old != 0 {
         write_user(old, old_action)?;
@@ -183,7 +183,7 @@ fn dispatch_sys_sigprocmask(how: usize, set: usize, oldset: usize) -> Result<usi
     };
 
     let process = ExecutionContext::load().current_process();
-    let old_mask = process.signals().write().sigprocmask(how, new_set)?;
+    let old_mask = process.signals_write().sigprocmask(how, new_set)?;
 
     if oldset != 0 {
         write_user(oldset, old_mask)?;
@@ -197,8 +197,7 @@ fn dispatch_sys_sigpending(out: usize) -> Result<usize, Errno> {
     }
     let pending = ExecutionContext::load()
         .current_process()
-        .signals()
-        .read()
+        .signals_read()
         .sigpending();
     write_user(out, pending)?;
     Ok(0)

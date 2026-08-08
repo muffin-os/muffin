@@ -134,7 +134,7 @@ impl Scheduler {
     /// guard, so the flag is read here with the guard held across the insert.
     fn park(task: Pin<Box<Task>>) {
         let process = task.process().clone();
-        match process.signals().try_read() {
+        match process.try_signals_read() {
             Some(guard) if guard.stopped() => {
                 let pid = process.pid();
                 if let Err(task) = StoppedTasks::try_park(pid, task) {

@@ -7,6 +7,7 @@ use conquer_once::spin::OnceCell;
 use kernel_abi::ProcessId;
 use spin::Mutex;
 
+use crate::mcore::mtask::process::SignalsWriteGuard;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::Task;
 
@@ -41,14 +42,9 @@ impl StoppedTasks {
         Ok(())
     }
 
-    /// Re-enqueues all parked tasks of `pid`.
-    ///
-    /// Callers must hold the process's `signals` write guard (lock order:
-    /// `Process.signals` before `StoppedTasks`), which serializes this
-    /// against a concurrent park of the same process.
-    pub fn resume_all(pid: ProcessId) {
+    pub fn resume_all(signals: &SignalsWriteGuard<'_>) {
         let mut guard = stopped_tasks().lock();
-        if let Some(tasks) = guard.remove(&pid) {
+        if let Some(tasks) = guard.remove(&signals.pid()) {
             for task in tasks {
                 GlobalTaskQueue::enqueue(task);
             }

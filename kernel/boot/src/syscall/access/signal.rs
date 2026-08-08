@@ -61,7 +61,7 @@ impl SignalAccess for KernelAccess<'_> {
         let Some(process) = process_tree().read().processes.get(&pid).cloned() else {
             return;
         };
-        let mut guard = process.signals().write();
+        let mut guard = process.signals_write();
         let effect = guard.deliver(info.signo);
         // Log stop and terminate outcomes at generation time. The victim may
         // consume the signal at a timer tick, and the timer handler must not
@@ -83,9 +83,7 @@ impl SignalAccess for KernelAccess<'_> {
         }
         if effect.resume_tasks {
             info!("continuing process {pid}");
-            // Nested inside the signals write guard, per lock order
-            // signals -> StoppedTasks. This serializes against parking.
-            StoppedTasks::resume_all(pid);
+            StoppedTasks::resume_all(&guard);
         }
     }
 }

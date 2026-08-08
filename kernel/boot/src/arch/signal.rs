@@ -144,7 +144,7 @@ fn write_sigframe(
 pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
     let ctx = ExecutionContext::load();
     let process = ctx.current_process();
-    let Some(mut guard) = process.signals().try_write() else {
+    let Some(mut guard) = process.try_signals_write() else {
         return;
     };
     loop {
@@ -243,8 +243,7 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
     }
 
     ctx.current_process()
-        .signals()
-        .write()
+        .signals_write()
         .set_blocked_raw(saved.old_blocked);
 
     if saved.fx_valid {
@@ -283,8 +282,7 @@ pub fn terminate_current(signo: Signal) -> ! {
 pub fn force_fatal_current(signo: Signal) -> ! {
     ExecutionContext::load()
         .current_process()
-        .signals()
-        .write()
+        .signals_write()
         .set_pending(signo);
     terminate_current(signo);
 }
@@ -295,7 +293,7 @@ pub fn force_fatal_current(signo: Signal) -> ! {
 /// the safe choice POSIX leaves undefined for ignored or blocked fault signals.
 pub fn deliver_fault(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters, signo: Signal) {
     let process = ExecutionContext::load().current_process().clone();
-    let mut guard = process.signals().write();
+    let mut guard = process.signals_write();
 
     match guard.disposition(signo) {
         Disposition::Handler(action) if signo.bit() & guard.blocked() == 0 => {

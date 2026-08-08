@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::fmt::{Debug, Formatter};
+use core::ops::{Deref, DerefMut};
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -17,7 +18,7 @@ use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use kernel_syscall::signal::SignalState;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
-use spin::RwLock;
+use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 use tracing::debug;
 use x86_64::VirtAddr;
@@ -232,8 +233,26 @@ impl Process {
         &self.telemetry
     }
 
-    pub fn signals(&self) -> &RwLock<SignalState> {
-        &self.signals
+    pub fn signals_read(&self) -> RwLockReadGuard<'_, SignalState> {
+        self.signals.read()
+    }
+
+    pub fn try_signals_read(&self) -> Option<RwLockReadGuard<'_, SignalState>> {
+        self.signals.try_read()
+    }
+
+    pub fn signals_write(&self) -> SignalsWriteGuard<'_> {
+        SignalsWriteGuard {
+            pid: self.pid,
+            guard: self.signals.write(),
+        }
+    }
+
+    pub fn try_signals_write(&self) -> Option<SignalsWriteGuard<'_>> {
+        Some(SignalsWriteGuard {
+            pid: self.pid,
+            guard: self.signals.try_write()?,
+        })
     }
 
     /// Records the first terminating event. A process that exits while being
@@ -255,6 +274,32 @@ impl Debug for Process {
             .field("name", &self.name)
             .field("address_space", self.address_space())
             .finish_non_exhaustive()
+    }
+}
+
+pub struct SignalsWriteGuard<'a> {
+    pid: ProcessId,
+    guard: RwLockWriteGuard<'a, SignalState>,
+}
+
+impl SignalsWriteGuard<'_> {
+    #[must_use]
+    pub fn pid(&self) -> ProcessId {
+        self.pid
+    }
+}
+
+impl Deref for SignalsWriteGuard<'_> {
+    type Target = SignalState;
+
+    fn deref(&self) -> &SignalState {
+        &self.guard
+    }
+}
+
+impl DerefMut for SignalsWriteGuard<'_> {
+    fn deref_mut(&mut self) -> &mut SignalState {
+        &mut self.guard
     }
 }
 
