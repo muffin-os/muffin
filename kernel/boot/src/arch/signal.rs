@@ -85,11 +85,14 @@ fn capture_fpu(fx: &mut [u8; 512]) -> bool {
 
 /// Build a signal frame on the user stack and return the frame base address.
 ///
-/// The frame is placed below the red zone the interrupted code may still own,
-/// then aligned down to 16 bytes. The restorer address is written at `base - 8`
-/// so the handler returns into it, and the handler entry stack pointer becomes
-/// `base - 8` which gives the `rsp % 16 == 8` shape the SysV ABI expects right
-/// after a `call`.
+/// The frame is placed 128 bytes below the interrupted stack pointer, then
+/// aligned down to 16 bytes. Muffin's own toolchain disables the red zone,
+/// the skip keeps delivery safe for any ABI-conforming binary that does use
+/// `[rsp - 128, rsp)`.
+///
+/// The restorer address is written at `base - 8` so the handler returns into
+/// it, and the handler entry stack pointer becomes `base - 8` which gives
+/// the `rsp % 16 == 8` shape the SysV ABI expects right after a `call`.
 // NOTE: user stack MUST be large enough to hold such a frame
 fn write_sigframe(
     frame: &InterruptStackFrame,
@@ -135,51 +138,48 @@ fn write_sigframe(
     base
 }
 
-/// Deliver at most one pending signal at syscall exit and enforce default
-/// dispositions. Runs the whole delivery decision loop until a handler is set
-/// up (returns to run it), the process is terminated, or nothing is deliverable.
+/// Act on pending signals for the current task. Called from the timer tick
+/// with interrupts off and a Ring 3 frame. Contention means this tick
+/// delivers nothing and the next retries.
 pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
-    let process = ExecutionContext::load().current_process().clone();
-
+    let ctx = ExecutionContext::load();
+    let process = ctx.current_process();
+    let Some(mut guard) = process.signals().try_write() else {
+        return;
+    };
     loop {
-        let mut guard = process.signals().write();
+        if guard.stopped() {
+            ctx.current_task().set_should_park();
+            return;
+        }
         let Some(signo) = guard.take_next_deliverable() else {
             return;
         };
-
         match guard.disposition(signo) {
-            Disposition::Ignore => continue,
-            Disposition::DefaultTerminate => {
-                drop(guard);
-                terminate_current(signo);
-            }
+            Disposition::Ignore => {}
             Disposition::DefaultStop => {
                 guard.set_stopped(true);
+                ctx.current_task().set_should_park();
+                return;
+            }
+            Disposition::DefaultTerminate => {
                 drop(guard);
-                let pid = ExecutionContext::load().pid();
-                info!("stopping process {pid} on signal {}", signo.name());
-                // Interrupts are on in syscall context. The next timer tick
-                // parks this task via the reschedule routing, and a SIGCONT or
-                // SIGKILL clears the stopped flag to resume it here.
-                //
-                // The condition is evaluated with interrupts disabled so the
-                // read guard can never span a context switch. A task parked
-                // while holding this guard would wedge every later writer,
-                // including the SIGCONT that is supposed to resume it.
-                while interrupts::without_interrupts(|| process.signals().read().stopped()) {
-                    hlt();
-                }
-                continue;
+                // free the user allocations while this address space is active
+                let task = ctx.current_task();
+                let _ = task.fx_area().write().take();
+                let _ = task.tls().write().take();
+                let _ = task.ustack().write().take();
+                task.set_should_terminate(true);
+                return;
             }
             Disposition::Handler(action) => {
                 let old_blocked = guard.apply_handler_entry(signo, &action);
                 drop(guard);
                 let base = write_sigframe(frame, regs, signo, old_blocked, &action);
                 regs.rdi = signo.number() as usize;
-                // Safety: redirecting the interrupted context into the handler is
-                // the whole point of delivery. base - 8 is a validated user stack
-                // address and the handler address came from a checked sigaction.
                 unsafe {
+                    // Safety: base - 8 is a validated user stack address and the
+                    // handler address came from a checked sigaction.
                     frame.as_mut().update(|f| {
                         f.instruction_pointer =
                             VirtAddr::new_truncate(action.handler.addr() as u64);

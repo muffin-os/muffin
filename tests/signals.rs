@@ -19,10 +19,9 @@
 use test_support::KernelTest;
 
 /// Ordered markers, each expected at or after the previous one.
-const MARKERS: [&str; 10] = [
+const MARKERS: [&str; 9] = [
     "A: start",
     "A: pending ok",
-    "A: handler ran",
     "A: after unblock",
     "stopping process",
     "continuing process",
@@ -40,10 +39,11 @@ fn signal_delivery_end_to_end() {
     // wrong-count report both break the ordered scan the same way, so diagnose
     // them here where the actual line is visible.
     report.assert_line_contains("A: report ");
+    report.assert_line_contains("A: handler ran");
     if !report
         .transcript
         .iter()
-        .any(|line| line.contains(MARKERS[7]))
+        .any(|line| line.contains(MARKERS[6]))
         && let Some(actual) = report
             .transcript
             .iter()
@@ -59,7 +59,7 @@ fn signal_delivery_end_to_end() {
         eprintln!("===== end transcript =====");
         panic!(
             "report line did not match {:?}, found {actual:?}",
-            MARKERS[7]
+            MARKERS[6]
         );
     }
 

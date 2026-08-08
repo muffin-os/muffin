@@ -14,25 +14,27 @@ use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::scheduler::stopped::StoppedTasks;
 use crate::mcore::mtask::scheduler::switch::switch_impl;
-use crate::mcore::mtask::task::{ShouldTerminate, Task};
+use crate::mcore::mtask::task::Task;
 
 pub mod cleanup;
 pub mod global;
 pub mod stopped;
 mod switch;
 
+/// Where an outgoing task goes once it is off the CPU.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Disposal {
+    Enqueue,
+    Park,
+    Terminate,
+}
+
 #[derive(Debug)]
 pub struct Scheduler {
-    /// The task that is currently executing in this scheduler.
     current_task: Pin<Box<Task>>,
-    /// The task this scheduler last switched away from, paired with the
-    /// termination decision taken at switch time. We need this to eliminate
-    /// the race condition between re-queueing a task and actually switching
-    /// away from it. The flag is the snapshot of `should_terminate()` taken
-    /// when we picked the old task's stack-pointer slot, so the routing
-    /// decision on the next reschedule is guaranteed consistent with whether
-    /// the task's RSP was actually saved.
-    zombie_task: Option<(Pin<Box<Task>>, ShouldTerminate)>,
+    /// The task last switched away from, with the disposal decided when its
+    /// RSP save slot was picked, so routing matches whether RSP was saved.
+    zombie_task: Option<(Pin<Box<Task>>, Disposal)>,
     /// A dummy location that is a placeholder for the switch code to write the old stack
     /// pointer to if the old task is terminated.
     dummy_old_stack_ptr: UnsafeCell<usize>,
@@ -54,31 +56,31 @@ impl Scheduler {
     pub unsafe fn reschedule(&mut self) {
         assert!(!interrupts::are_enabled());
 
-        // in theory, we could move this to the end of this function, but I'd rather not do this right now
-        // Route the previous zombie based on the snapshot we took when we
-        // chose its stack-pointer slot — NOT a fresh load of
-        // should_terminate. This keeps the routing decision consistent with
-        // whether we actually saved its RSP, even if the flag flips later.
-        if let Some((zombie_task, terminate)) = self.zombie_task.take() {
-            if terminate.yes() {
-                TaskCleanup::enqueue(zombie_task);
-            } else {
-                Self::route_runnable(zombie_task);
-            }
+        if let Some((zombie_task, disposal)) = self.zombie_task.take() {
+            Self::route(zombie_task, disposal);
         }
 
-        let (next_task, cr3_value) = {
-            let Some(next_task) = self.next_task() else {
-                return;
-            };
-
-            let cr3_value = next_task.process().address_space().cr3_value();
-            (next_task, cr3_value)
+        let requested = if self.current_task.take_should_park() {
+            Disposal::Park
+        } else {
+            Disposal::Enqueue
         };
+        // A parking task cannot stay on the CPU, so an idle task is an
+        // acceptable target even while the run queue is empty.
+        let must_switch = matches!(requested, Disposal::Park);
+
+        let Some(next_task) = self.next_task(must_switch) else {
+            return;
+        };
+        let cr3_value = next_task.process().address_space().cr3_value();
 
         let mut old_task = self.swap_current_task(next_task);
-        let terminate_old = old_task.should_terminate();
-        let old_stack_ptr = if terminate_old.yes() {
+        let disposal = if old_task.should_terminate() {
+            Disposal::Terminate
+        } else {
+            requested
+        };
+        let old_stack_ptr = if matches!(disposal, Disposal::Terminate) {
             self.dummy_old_stack_ptr.get()
         } else {
             old_task.last_stack_ptr() as *mut usize
@@ -103,12 +105,10 @@ impl Scheduler {
         }
 
         assert!(self.zombie_task.is_none());
-        self.zombie_task = Some((old_task, terminate_old));
+        self.zombie_task = Some((old_task, disposal));
 
-        // Point TSS.RSP0 at the incoming task's own kernel stack so its next
-        // Ring 3 -> Ring 0 transition lands on a per-task stack. Without this,
-        // every CPU would funnel `int 0x80` onto a single shared stack and
-        // mid-syscall preemption could let one task overwrite another's frames.
+        // Point TSS.RSP0 at the incoming task's kernel stack so its next
+        // Ring 3 to Ring 0 transition lands on a per-task stack.
         if let Some(kstack) = self.current_task.kstack() {
             ExecutionContext::load().set_kernel_stack(kstack.top());
         }
@@ -122,17 +122,17 @@ impl Scheduler {
         }
     }
 
-    /// Routes a non-terminating outgoing task either to the stopped-task
-    /// parking lot (when its process is stopped by a signal) or back to the
-    /// global run queue.
-    ///
-    /// On any contention the task goes back to the run queue. That is safe because
-    /// the stopped flag persists and the task re-parks on a later tick.
-    fn route_runnable(task: Pin<Box<Task>>) {
-        // Keep the signals read guard alive across the park insert. A
-        // concurrent SIGCONT resumes under the signals write guard,
-        // so it either sees the task parked or waits until parking finished.
-        // No lost wakeup.
+    fn route(task: Pin<Box<Task>>, disposal: Disposal) {
+        match disposal {
+            Disposal::Enqueue => GlobalTaskQueue::enqueue(task),
+            Disposal::Park => Self::park(task),
+            Disposal::Terminate => TaskCleanup::enqueue(task),
+        }
+    }
+
+    /// SIGCONT clears the flag and drains the lot under the signals write
+    /// guard, so the flag is read here with the guard held across the insert.
+    fn park(task: Pin<Box<Task>>) {
         let process = task.process().clone();
         match process.signals().try_read() {
             Some(guard) if guard.stopped() => {
@@ -164,18 +164,12 @@ impl Scheduler {
     }
 
     /// Picks the task to run next, or `None` to keep running the current one.
-    ///
-    /// An idle task is only taken when the current task cannot continue, meaning
-    /// it is itself idle or is terminating. Yielding to a halt loop while the
-    /// current task is still runnable costs that task a full timer quantum.
-    ///
-    /// A task that never blocks starves the idle queue, so the task cleanup reaper
-    /// only drops dead tasks once the core has slack.
-    fn next_task(&self) -> Option<Pin<Box<Task>>> {
+    /// An idle task is only taken when the current task cannot continue.
+    fn next_task(&self, must_switch: bool) -> Option<Pin<Box<Task>>> {
         if let Some(task) = GlobalTaskQueue::dequeue() {
             return Some(task);
         }
-        if self.current_task.is_idle() || self.current_task.should_terminate().yes() {
+        if must_switch || self.current_task.is_idle() || self.current_task.should_terminate() {
             return GlobalTaskQueue::dequeue_idle();
         }
         None

@@ -5,7 +5,6 @@ use core::mem::{offset_of, transmute};
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::Signal;
-use kernel_syscall::signal::AsyncAction;
 use tracing::{error, warn};
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::Cr2;
@@ -18,7 +17,7 @@ use crate::U64Ext;
 use crate::arch::{gdt, signal};
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::mem::{MemoryRegion, PageInError};
-use crate::mcore::mtask::task::{ShouldTerminate, Task};
+use crate::mcore::mtask::task::Task;
 use crate::syscall::dispatch_syscall;
 
 #[derive(Debug, Clone, Copy)]
@@ -72,7 +71,14 @@ pub fn create_idt() -> InterruptDescriptorTable {
     idt.stack_segment_fault
         .set_handler_fn(stack_segment_fault_handler);
 
-    idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_interrupt_handler);
+    unsafe {
+        idt[InterruptIndex::Timer.as_u8()].set_handler_fn(transmute::<
+            *mut fn(),
+            extern "x86-interrupt" fn(InterruptStackFrame),
+        >(
+            timer_interrupt_handler as *mut fn()
+        ));
+    }
     idt[InterruptIndex::LapicErr.as_u8()].set_handler_fn(lapic_err_interrupt_handler);
     idt[InterruptIndex::Spurious.as_u8()].set_handler_fn(spurious_interrupt_handler);
 
@@ -125,6 +131,7 @@ macro_rules! wrap {
 }
 
 wrap!(syscall_handler_impl => syscall_handler);
+wrap!(timer_interrupt_handler_impl => timer_interrupt_handler);
 
 #[repr(align(8), C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -161,46 +168,24 @@ pub extern "sysv64" fn syscall_handler_impl(
 
     let result = dispatch_syscall(n, arg1, arg2, arg3, arg4, arg5, arg6);
 
-    regs.rax = result as usize; // save result
-    signal::deliver_pending(stack_frame, regs);
+    regs.rax = result as usize;
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFrame) {
+pub extern "sysv64" fn timer_interrupt_handler_impl(
+    stack_frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
+) {
     unsafe {
         end_of_interrupt();
     }
 
-    // A task interrupted in kernel mode may hold kernel locks, so only act on a
-    // user mode frame. try_write is mandatory here: interrupts are disabled and a
-    // same CPU task may hold the lock mid syscall, so blocking would deadlock.
-    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3
-        && let Some(ctx) = ExecutionContext::try_load()
-        && let Some(mut sig) = ctx.current_process().signals().try_write()
-    {
-        match sig.poll_async_action() {
-            Some(AsyncAction::Terminate(_)) => {
-                // Free the user allocations here, exactly like Task::exit does.
-                // The interrupted frame is Ring3, so the task holds no kernel
-                // locks, and its address space is still the active one, which
-                // the unmap path requires. Skipping this would make TaskCleanup
-                // drop the allocations from the root address space and trip the
-                // mapper's is_active assertion.
-                let task = ctx.current_task();
-                let _ = task.fx_area().write().take();
-                let _ = task.tls().write().take();
-                let _ = task.ustack().write().take();
-                task.set_should_terminate(ShouldTerminate::Yes);
-            }
-            Some(AsyncAction::Stop(_)) => {
-                // The stopped flag is now set, so the reschedule below parks it.
-            }
-            None => {}
-        }
+    // only deliver signals when we're in userspace
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+        signal::deliver_pending(stack_frame, regs);
     }
 
-    let ctx = ExecutionContext::load();
     unsafe {
-        ctx.scheduler_mut().reschedule();
+        ExecutionContext::load().scheduler_mut().reschedule();
     }
 }
 
@@ -356,7 +341,7 @@ fn terminate_faulting_task(
     // Returning would retry the faulting instruction and fault forever, and a
     // Ring 0 fault has no user context to redirect. Only the scheduler can reap
     // the task, so interrupts have to come back on before halting.
-    task.set_should_terminate(ShouldTerminate::Yes);
+    task.set_should_terminate(true);
     interrupts::enable();
     loop {
         hlt();

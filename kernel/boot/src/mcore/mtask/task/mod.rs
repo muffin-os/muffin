@@ -40,6 +40,10 @@ pub struct Task {
     /// Whether this task should be terminated upon the next reschedule.
     /// This can be set at any point.
     should_terminate: AtomicBool,
+    /// Set only by tick signal delivery on a Ring 3 frame, where the task
+    /// holds no kernel locks. Consumed by the next reschedule, which parks
+    /// the task.
+    should_park: AtomicBool,
     pending_fault_addr: AtomicU64,
     /// Whether this task may only run when no ordinary task is runnable.
     ///
@@ -116,6 +120,7 @@ impl Task {
             name,
             process,
             should_terminate,
+            should_park: AtomicBool::new(false),
             pending_fault_addr: AtomicU64::new(0),
             idle: AtomicBool::new(false),
             last_stack_ptr,
@@ -141,6 +146,7 @@ impl Task {
             name,
             process,
             should_terminate,
+            should_park: AtomicBool::new(false),
             pending_fault_addr: AtomicU64::new(0),
             idle: AtomicBool::new(false),
             last_stack_ptr,
@@ -166,7 +172,7 @@ impl Task {
             let _ = task.tls.write().take();
             let _ = task.ustack.write().take();
 
-            task.set_should_terminate(ShouldTerminate::Yes);
+            task.set_should_terminate(true);
         }
 
         loop {
@@ -195,6 +201,7 @@ impl Task {
             name,
             process,
             should_terminate,
+            should_park: AtomicBool::new(false),
             pending_fault_addr: AtomicU64::new(0),
             idle: AtomicBool::new(false),
             last_stack_ptr,
@@ -219,16 +226,20 @@ impl Task {
         &self.process
     }
 
-    pub fn should_terminate(&self) -> ShouldTerminate {
-        if self.should_terminate.load(Relaxed) {
-            ShouldTerminate::Yes
-        } else {
-            ShouldTerminate::No
-        }
+    pub fn should_terminate(&self) -> bool {
+        self.should_terminate.load(Relaxed)
     }
 
-    pub fn set_should_terminate(&self, should_terminate: ShouldTerminate) {
-        self.should_terminate.store(should_terminate.yes(), Relaxed);
+    pub fn set_should_terminate(&self, should_terminate: bool) {
+        self.should_terminate.store(should_terminate, Relaxed);
+    }
+
+    pub fn set_should_park(&self) {
+        self.should_park.store(true, Relaxed);
+    }
+
+    pub fn take_should_park(&self) -> bool {
+        self.should_park.swap(false, Relaxed)
     }
 
     pub fn is_idle(&self) -> bool {

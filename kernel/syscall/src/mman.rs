@@ -338,7 +338,11 @@ mod tests {
             0,
         );
 
-        assert_eq!(result, Err(EBADF), "a negative fd must be rejected before any mode check");
+        assert_eq!(
+            result,
+            Err(EBADF),
+            "a negative fd must be rejected before any mode check"
+        );
     }
 
     #[test]

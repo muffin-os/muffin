@@ -8,10 +8,9 @@
 
 use core::ffi::{c_int, c_void};
 use core::fmt::Write;
-use core::ptr;
-use core::slice;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use core::sync::atomic::{AtomicPtr, AtomicUsize};
+use core::{ptr, slice};
 
 use addr2line::Context;
 use addr2line::gimli::{Dwarf, EndianSlice, NativeEndian};

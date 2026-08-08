@@ -89,13 +89,6 @@ pub enum Disposition {
     Handler(SigAction),
 }
 
-/// Action the timer tick must take for a process spinning in user mode.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum AsyncAction {
-    Terminate(Signal),
-    Stop(Signal),
-}
-
 /// Side effect the kernel must apply after a generation-time `deliver`.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct DeliverEffect {
@@ -190,27 +183,6 @@ impl SignalState {
         let deliverable = self.pending & !self.blocked;
         Self::signals_in(deliverable)
             .any(|s| matches!(self.disposition(s), Disposition::DefaultTerminate))
-    }
-
-    /// Timer-tick decision for a user-spinning task. Terminate takes
-    /// precedence over stop and consumes nothing (the terminate path kills the
-    /// task). A stop consumes its bit and sets the stopped flag.
-    #[must_use]
-    pub fn poll_async_action(&mut self) -> Option<AsyncAction> {
-        let deliverable = self.pending & !self.blocked;
-        if let Some(signo) = Self::signals_in(deliverable)
-            .find(|&s| matches!(self.disposition(s), Disposition::DefaultTerminate))
-        {
-            return Some(AsyncAction::Terminate(signo));
-        }
-        if let Some(signo) = Self::signals_in(deliverable)
-            .find(|&s| matches!(self.disposition(s), Disposition::DefaultStop))
-        {
-            self.pending &= !signo.bit();
-            self.stopped = true;
-            return Some(AsyncAction::Stop(signo));
-        }
-        None
     }
 
     /// Resolve the disposition of a signal. `Kill` is always terminate, its
@@ -328,7 +300,7 @@ mod tests {
     use crate::access::{
         Capability, Identity, PermissionAccess, ProcessAccess, ProcessesAccess, SignalAccess,
     };
-    use crate::signal::{AsyncAction, Disposition, SignalState, SignalTarget, sys_kill};
+    use crate::signal::{Disposition, SignalState, SignalTarget, sys_kill};
 
     macro_rules! pid {
         ($n:expr) => {
@@ -1397,45 +1369,6 @@ mod tests {
     }
 
     #[test]
-    fn poll_async_action_terminate_over_stop() {
-        let mut state = SignalState::default();
-        state.set_pending(Signal::TerminalStop);
-        state.set_pending(Signal::Terminate);
-        assert_eq!(
-            state.poll_async_action(),
-            Some(AsyncAction::Terminate(Signal::Terminate)),
-            "terminate takes precedence over stop"
-        );
-        assert_ne!(
-            state.sigpending() & Signal::Terminate.bit(),
-            0,
-            "terminate does not consume the pending bit"
-        );
-    }
-
-    #[test]
-    fn poll_async_action_stop_consumes_and_sets_stopped() {
-        let mut state = SignalState::default();
-        state.set_pending(Signal::TerminalStop);
-        assert_eq!(
-            state.poll_async_action(),
-            Some(AsyncAction::Stop(Signal::TerminalStop)),
-            "stop returned when no terminate pending"
-        );
-        assert_eq!(
-            state.sigpending() & Signal::TerminalStop.bit(),
-            0,
-            "stop consumes its pending bit"
-        );
-        assert!(state.stopped(), "stopped flag set");
-        assert_eq!(
-            state.poll_async_action(),
-            None,
-            "nothing left after consuming the stop"
-        );
-    }
-
-    #[test]
     fn deliver_cont_resumes_stopped() {
         let mut state = SignalState::default();
         state.set_stopped(true);
@@ -1701,10 +1634,11 @@ mod tests {
             let mut states = cx.states.borrow_mut();
             let state = states.get_mut(&target).unwrap();
             assert_eq!(
-                state.poll_async_action(),
-                Some(AsyncAction::Stop(Signal::Stop)),
-                "SIGSTOP stops the process"
+                state.take_next_deliverable(),
+                Some(Signal::Stop),
+                "SIGSTOP is deliverable"
             );
+            state.set_stopped(true);
             assert!(state.stopped(), "target is stopped");
         }
 
@@ -1734,7 +1668,9 @@ mod tests {
         sys_kill(&cx, SignalTarget::SpecificProcess(target), Signal::Stop).unwrap();
         {
             let mut states = cx.states.borrow_mut();
-            let _ = states.get_mut(&target).unwrap().poll_async_action();
+            let state = states.get_mut(&target).unwrap();
+            let _ = state.take_next_deliverable();
+            state.set_stopped(true);
         }
 
         sys_kill(&cx, SignalTarget::SpecificProcess(target), Signal::Kill).unwrap();

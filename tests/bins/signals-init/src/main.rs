@@ -27,17 +27,13 @@ fn busy_delay_n(n: u64) {
 const PING: Signal = Signal::WindowChanged;
 const ACK: Signal = Signal::Urgent;
 
-/// Roughly 14ms of spin per pump. Small enough that pumping does not flood the
-/// serial transcript with syscall TRACE lines, large enough that a handful of
-/// pumps still covers process load and stop/cont settling.
+/// Roughly 14ms of spin per pump.
 const PUMP_SPIN: u64 = 2_000_000;
 
-/// Signal handlers are delivered only at syscall exit. A loop that spins purely
-/// in userspace never runs a pending handler. The `getpid` here is a cheap side
-/// effect free syscall whose exit path drains any pending delivery.
+/// Handlers are delivered at timer ticks that land in user mode. The spin
+/// gives ticks a user frame to land on.
 fn pump() {
     busy_delay_n(PUMP_SPIN);
-    let _ = getpid();
 }
 
 /// Pump up to `budget` times, returning early the moment the ack counter has
@@ -143,8 +139,8 @@ fn role_a() {
     wait_acks(before + 1, ACK_BUDGET);
     let pre = acks().saturating_sub(before).min(REPORT_CLAMP);
 
-    // Stop B, let the tick park it, then ping. A stopped process cannot reach a
-    // syscall exit, so the ping stays pending and no ack must arrive.
+    // Stop B, let the tick park it, then ping. A stopped process is never
+    // scheduled, so the ping stays pending and no ack must arrive.
     kill(2, Signal::Stop);
     spin(SETTLE_BUDGET);
     let before = acks();
@@ -192,7 +188,7 @@ fn role_b() -> ! {
     // pid 2, so the driver always exists to receive this announcement.
     kill(1, ACK);
 
-    // Keep making syscalls so the ping handler can run at each syscall exit.
+    // Spin in user mode so ticks can deliver the ping handler.
     loop {
         pump();
     }
@@ -264,12 +260,11 @@ fn print_pid(pid: i64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() {
     // Both handshake handlers are armed before any other syscall, and before
-    // the role is even known, because the peer may already be running. The
-    // kernel installs the new action during the syscall and only then drains
-    // pending signals, so a peer signal that arrived first is delivered against
-    // the handler this very call installs instead of hitting the default
-    // action. Ordering the ack first matters, it is the only one of the two
-    // that can already be pending here.
+    // the role is even known, because the peer may already be running. Signals
+    // are delivered at timer ticks, so a peer signal that arrived first
+    // reaches the handler this call installs and never the default action.
+    // Ordering the ack first matters, it is the only one of the two that can
+    // already be pending here.
     install_handler(ACK, on_ack);
     install_handler(PING, on_ping);
 

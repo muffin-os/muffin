@@ -79,11 +79,9 @@ pub fn sys_lseek<Cx: FileAccess>(
         Whence::Cur => cx.position(fildes.clone())?,
         Whence::End => cx.fstat(fildes.clone())?.size,
     };
-    let target = base.checked_add_signed(offset).ok_or(if offset < 0 {
-        EINVAL
-    } else {
-        EOVERFLOW
-    })?;
+    let target =
+        base.checked_add_signed(offset)
+            .ok_or(if offset < 0 { EINVAL } else { EOVERFLOW })?;
     cx.set_position(fildes, target)?;
     usize::try_from(target).map_err(Into::into)
 }
@@ -146,7 +144,9 @@ mod tests {
             .insert(path.clone(), Arc::new(MemoryFile::new(vec![0u8; 15])));
         let cx = Mutex::new(file_access);
 
-        let info = cx.file_info(path.as_ref()).expect("fixture file must exist");
+        let info = cx
+            .file_info(path.as_ref())
+            .expect("fixture file must exist");
         let fd = cx.open(&info).expect("fixture file must open");
         (cx, fd)
     }
