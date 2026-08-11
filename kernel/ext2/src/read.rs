@@ -133,9 +133,10 @@ where
     }
 
     pub fn indirect_pointer_limits(&self) -> (u32, u32, u32) {
+        let pointers_per_block = self.superblock.block_size() / 4;
         let direct_limit = 12;
-        let indirect_limit = direct_limit + self.superblock.block_size() / 4;
-        let double_indirect_limit = indirect_limit + indirect_limit * indirect_limit;
+        let indirect_limit = direct_limit + pointers_per_block;
+        let double_indirect_limit = indirect_limit + pointers_per_block * pointers_per_block;
         (direct_limit, indirect_limit, double_indirect_limit)
     }
 
@@ -225,16 +226,15 @@ where
         triple_indirect_block: Option<BlockAddress>,
         block_index: u32,
     ) -> Result<Option<BlockAddress>, Error> {
-        let block_size = self.superblock.block_size();
-
-        let double_indirect_block_size = block_size / 4;
-        let double_indirect_index = block_index / double_indirect_block_size;
+        let pointers_per_block = self.superblock.block_size() / 4;
+        let blocks_per_double_indirect = pointers_per_block * pointers_per_block;
+        let double_indirect_index = block_index / blocks_per_double_indirect;
 
         self.resolve_indirect_ptr(triple_indirect_block, double_indirect_index)
             .and_then(|double_indirect_block_ptr| {
                 self.resolve_double_indirect_ptr(
                     double_indirect_block_ptr,
-                    block_index % double_indirect_block_size,
+                    block_index % blocks_per_double_indirect,
                 )
             })
     }
