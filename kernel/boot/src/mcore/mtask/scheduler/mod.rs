@@ -13,7 +13,7 @@ use x86_64::registers::model_specific::FsBase;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::scheduler::switch::switch_impl;
-use crate::mcore::mtask::task::Task;
+use crate::mcore::mtask::task::{Task, TaskId};
 use crate::mcore::mtask::wait::TaskParkTicket;
 
 pub mod cleanup;
@@ -31,6 +31,14 @@ enum Disposal {
 #[derive(Debug)]
 pub struct Scheduler {
     current_task: Pin<Box<Task>>,
+    /// This CPU's own idle task while it is off the CPU. It never enters the
+    /// global queue, so it cannot migrate and a reschedule that must switch
+    /// always finds a target.
+    idle_task: Option<Pin<Box<Task>>>,
+    /// `None` until the bootstrap task enters its idle loop. Until then it
+    /// schedules like any other task, so kernel init is not demoted to idle
+    /// priority.
+    idle_tid: Option<TaskId>,
     /// The task last switched away from, with the disposal decided when its
     /// RSP save slot was picked, so routing matches whether RSP was saved.
     zombie_task: Option<(Pin<Box<Task>>, Disposal)>,
@@ -44,7 +52,9 @@ impl Scheduler {
     pub fn new_cpu_local() -> Self {
         let current_task = Box::pin(unsafe { Task::create_current() });
         Self {
+            idle_tid: None,
             current_task,
+            idle_task: None,
             zombie_task: None,
             dummy_old_stack_ptr: UnsafeCell::new(0),
         }
@@ -56,7 +66,7 @@ impl Scheduler {
         assert!(!interrupts::are_enabled());
 
         if let Some((zombie_task, disposal)) = self.zombie_task.take() {
-            Self::route(zombie_task, disposal);
+            self.route(zombie_task, disposal);
         }
 
         // A parking task cannot stay on the CPU, so an idle task is an
@@ -126,15 +136,26 @@ impl Scheduler {
         }
     }
 
-    fn route(task: Pin<Box<Task>>, disposal: Disposal) {
+    fn route(&mut self, task: Pin<Box<Task>>, disposal: Disposal) {
         match disposal {
-            Disposal::Enqueue => GlobalTaskQueue::enqueue(task),
+            Disposal::Enqueue => {
+                if self.idle_tid == Some(task.id()) {
+                    self.idle_task = Some(task);
+                } else {
+                    GlobalTaskQueue::enqueue(task);
+                }
+            }
             Disposal::Park(ticket) => match ticket.park(task) {
                 Ok(()) => {}
                 Err(err) => GlobalTaskQueue::enqueue(err.into_inner()),
             },
             Disposal::Terminate => TaskCleanup::enqueue(task),
         }
+    }
+
+    pub fn adopt_current_as_idle(&mut self) {
+        assert!(!interrupts::are_enabled());
+        self.idle_tid = Some(self.current_task.id());
     }
 
     unsafe fn switch(old_stack_ptr: *mut usize, new_stack_ptr: usize, new_cr3_value: usize) {
@@ -155,14 +176,12 @@ impl Scheduler {
     }
 
     /// Picks the task to run next, or `None` to keep running the current one.
-    /// An idle task is only taken when the current task cannot continue.
-    fn next_task(&self, must_switch: bool) -> Option<Pin<Box<Task>>> {
-        if let Some(task) = GlobalTaskQueue::dequeue() {
-            return Some(task);
-        }
-        if must_switch || self.current_task.is_idle() || self.current_task.should_terminate() {
-            return GlobalTaskQueue::dequeue_idle();
-        }
-        None
+    /// The own idle task is only taken when the current task cannot continue.
+    fn next_task(&mut self, must_switch: bool) -> Option<Pin<Box<Task>>> {
+        GlobalTaskQueue::dequeue().or_else(|| {
+            (must_switch || self.current_task.should_terminate())
+                .then(|| self.idle_task.take())
+                .flatten()
+        })
     }
 }

@@ -149,8 +149,7 @@ fn request_stop_park(ctx: &ExecutionContext, signals: &mut Signals) {
     };
     match ctx.current_task().set_park_reservation(reservation) {
         Ok(unpark_ticket) => signals.store_stop_unpark(unpark_ticket),
-        // A ticket from an earlier tick is still pending, because that tick's
-        // reschedule found no task to switch to. The fresh reservation goes
+        // A pending ticket keeps its wake source, the fresh reservation goes
         // back to the lot.
         Err(reservation) => reservation.release(),
     }

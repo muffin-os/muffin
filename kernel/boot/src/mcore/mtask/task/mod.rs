@@ -52,11 +52,6 @@ pub struct Task {
     /// yields the task that carried the ticket.
     park_ticket: ParkTicketCell<Pin<Box<Task>>>,
     pending_fault_addr: AtomicU64,
-    /// Whether this task may only run when no ordinary task is runnable.
-    ///
-    /// Set for tasks whose body is a halt loop. Scheduling one in place of a
-    /// runnable task costs that task a full timer quantum of latency.
-    idle: AtomicBool,
     /// The stack pointer of the task at the time of the last context switch.
     /// If this task is currently running, then this value is not the current stack pointer.
     /// This must be set during the context switch.
@@ -129,7 +124,6 @@ impl Task {
             should_terminate,
             park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
-            idle: AtomicBool::new(false),
             last_stack_ptr,
             state,
             kstack: Some(stack),
@@ -155,7 +149,6 @@ impl Task {
             should_terminate,
             park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
-            idle: AtomicBool::new(false),
             last_stack_ptr,
             state,
             kstack: None,
@@ -218,7 +211,6 @@ impl Task {
             should_terminate,
             park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
-            idle: AtomicBool::new(false),
             last_stack_ptr,
             state,
             kstack: None,
@@ -274,19 +266,6 @@ impl Task {
 
     pub(in crate::mcore::mtask) fn take_park_ticket(&self) -> Option<TaskParkTicket> {
         self.park_ticket.take()
-    }
-
-    pub fn is_idle(&self) -> bool {
-        self.idle.load(Relaxed)
-    }
-
-    /// Demotes this task to idle priority, permanently.
-    ///
-    /// Call before the task is first enqueued. `GlobalTaskQueue::enqueue` reads
-    /// this flag to pick a queue, so a task demoted afterwards stays in the
-    /// ordinary one.
-    pub fn mark_idle(&self) {
-        self.idle.store(true, Relaxed);
     }
 
     pub fn state(&self) -> State {

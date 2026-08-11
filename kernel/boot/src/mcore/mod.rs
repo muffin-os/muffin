@@ -109,13 +109,14 @@ unsafe extern "C" fn cpu_init_and_idle(cpu: &limine::mp::Cpu) -> ! {
 }
 
 /// Parks the current task as this core's idle task, never returning.
-///
-/// The task is not pinned to this core, so the scheduler may hand it to any core
-/// that runs out of ordinary work.
 pub fn turn_idle() -> ! {
-    // Must precede the first halt. While this task sits in the ordinary queue it
-    // costs every runnable task a timer quantum each time it is picked.
-    ExecutionContext::load().current_task().mark_idle();
+    interrupts::disable();
+    unsafe {
+        ExecutionContext::load()
+            .scheduler_mut()
+            .adopt_current_as_idle();
+    }
+    interrupts::enable();
     loop {
         hlt();
     }

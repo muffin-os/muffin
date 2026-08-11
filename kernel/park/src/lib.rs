@@ -475,6 +475,69 @@ impl<T> Debug for ParkTicketCell<T> {
     }
 }
 
+/// A lock-free, single-occupancy holder for an [`UnparkTicket`].
+///
+/// Claiming and storing are single pointer operations, so a wake source in
+/// interrupt context can take the unpark right without a lock.
+pub struct UnparkTicketCell<T: 'static> {
+    slot: AtomicPtr<Slot<T>>,
+}
+
+impl<T: Send> UnparkTicketCell<T> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            slot: AtomicPtr::new(null_mut()),
+        }
+    }
+
+    /// Stores the reservation's unpark right and hands back its park ticket.
+    /// An occupied cell rejects the offer and returns the reservation whole,
+    /// so the caller can release it instead of leaking the slot.
+    pub fn put_reservation(
+        &self,
+        reservation: Reservation<'static, T>,
+    ) -> Result<ParkTicket<'static, T>, Reservation<'static, T>> {
+        let ptr = core::ptr::from_ref(reservation.slot).cast_mut();
+        match self.slot.compare_exchange(null_mut(), ptr, AcqRel, Relaxed) {
+            Ok(_) => Ok(ParkTicket {
+                slot: reservation.slot,
+            }),
+            Err(_) => Err(reservation),
+        }
+    }
+
+    /// Takes the held ticket, leaving the cell empty.
+    #[must_use]
+    pub fn take(&self) -> Option<UnparkTicket<'static, T>> {
+        let ptr = self.slot.swap(null_mut(), AcqRel);
+        if ptr.is_null() {
+            return None;
+        }
+        // Safety: the pointer was stored by `put_reservation` from a
+        // reservation with a `'static` lifetime and segments are never freed
+        // while the lot lives, so the slot stays valid. The swap transferred
+        // sole ownership of the unpark right.
+        Some(UnparkTicket {
+            slot: unsafe { &*ptr },
+        })
+    }
+}
+
+impl<T: Send> Default for UnparkTicketCell<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Debug for UnparkTicketCell<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UnparkTicketCell")
+            .field("occupied", &!self.slot.load(Relaxed).is_null())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Why a value could not be parked. Always carries the value back.
 #[derive(Error)]
 pub enum ParkError<T> {
@@ -1100,5 +1163,43 @@ mod tests {
             .expect_err("an occupied cell accepted a second reservation");
         rejected.release();
         assert!(cell.has_ticket(), "the rejection emptied the cell");
+    }
+
+    #[test]
+    fn unpark_cell_round_trip() {
+        static LOT: ParkingLot<u32> = ParkingLot::new();
+        let cell = UnparkTicketCell::new();
+        assert!(cell.take().is_none(), "an empty cell produced a ticket");
+
+        let park_ticket = cell
+            .put_reservation(LOT.reserve())
+            .expect("filling an empty cell rejected the reservation");
+        assert!(
+            park_ticket.park(9).is_ok(),
+            "parking through the cell failed"
+        );
+
+        let unpark_ticket = cell.take().expect("the held ticket vanished");
+        assert!(cell.take().is_none(), "a second take produced a ticket");
+        assert_eq!(
+            unpark_ticket.unpark(),
+            Some(9),
+            "the unpark ticket did not belong to the stored reservation"
+        );
+    }
+
+    #[test]
+    fn unpark_cell_rejects_when_occupied() {
+        static LOT: ParkingLot<u32> = ParkingLot::new();
+        let cell = UnparkTicketCell::new();
+
+        let _park_ticket = cell
+            .put_reservation(LOT.reserve())
+            .expect("filling an empty cell rejected the reservation");
+        let rejected = cell
+            .put_reservation(LOT.reserve())
+            .expect_err("an occupied cell accepted a second reservation");
+        rejected.release();
+        assert!(cell.take().is_some(), "the rejection emptied the cell");
     }
 }
