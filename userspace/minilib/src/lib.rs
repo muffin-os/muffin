@@ -11,11 +11,11 @@ use core::arch::x86_64::_mm_pause;
 use core::ffi::c_int;
 
 pub use kernel_abi::{
-    CLOCK_MONOTONIC, DefaultAction, EFAULT, EINVAL, ENOTTY, ESRCH, Errno, FbScreenInfo,
+    CLOCK_MONOTONIC, DefaultAction, EFAULT, EINTR, EINVAL, ENOTTY, ESRCH, Errno, FbScreenInfo,
     IoctlRequest, MapFlags, ProtFlags, SYS_CLOCK_GETTIME, SYS_EXE_PATH, SYS_EXIT, SYS_FSTAT,
-    SYS_FSYNC, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_OPEN, SYS_READ,
-    SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WRITE, SaFlags, SigAction,
-    SigHandler, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence,
+    SYS_FSYNC, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN,
+    SYS_READ, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WRITE, SaFlags,
+    SigAction, SigHandler, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence,
 };
 pub use panic::catch_unwind;
 
@@ -57,6 +57,11 @@ pub fn fsync(fd: c_int) -> c_int {
 
 pub fn clock_gettime(clockid: usize, tp: &mut Timespec) -> c_int {
     syscall2(SYS_CLOCK_GETTIME, clockid, tp as *mut Timespec as usize) as c_int
+}
+
+pub fn nanosleep(req: &Timespec, rem: Option<&mut Timespec>) -> c_int {
+    let rem_ptr = rem.map_or(0, |r| r as *mut Timespec as usize);
+    syscall2(SYS_NANOSLEEP, req as *const Timespec as usize, rem_ptr) as c_int
 }
 
 pub fn exe_path(buf: &mut [u8]) -> isize {

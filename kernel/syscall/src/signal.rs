@@ -185,6 +185,23 @@ impl SignalState {
             .any(|s| matches!(self.disposition(s), Disposition::DefaultTerminate))
     }
 
+    /// Whether any deliverable signal should abort a blocked kernel wait with
+    /// `EINTR`. This is the predicate an interruptible wait re-checks after
+    /// being woken.
+    ///
+    /// Ignored signals must not cause `EINTR`, and a stop leaves the sleeper
+    /// parked, so only a handler or a default-terminate disposition counts.
+    #[must_use]
+    pub fn has_interrupting_deliverable(&self) -> bool {
+        let deliverable = self.pending & !self.blocked;
+        Self::signals_in(deliverable).any(|s| {
+            matches!(
+                self.disposition(s),
+                Disposition::Handler(_) | Disposition::DefaultTerminate
+            )
+        })
+    }
+
     /// Resolve the disposition of a signal. `Kill` is always terminate, its
     /// action can never be changed.
     #[must_use]
@@ -1330,6 +1347,71 @@ mod tests {
         assert!(
             !state.has_fatal_deliverable(),
             "a blocked signal is not deliverable, so not fatal"
+        );
+    }
+
+    #[test]
+    fn has_interrupting_deliverable_false_when_empty() {
+        let state = SignalState::default();
+        assert!(
+            !state.has_interrupting_deliverable(),
+            "no pending signal interrupts a wait"
+        );
+    }
+
+    #[test]
+    fn has_interrupting_deliverable_false_when_blocked() {
+        let mut state = SignalState::default();
+        state
+            .sigprocmask(SigMaskHow::Block, Some(Signal::Terminate.bit()))
+            .unwrap();
+        state.set_pending(Signal::Terminate);
+        assert!(
+            !state.has_interrupting_deliverable(),
+            "a blocked signal is not deliverable, so it does not interrupt"
+        );
+    }
+
+    #[test]
+    fn has_interrupting_deliverable_false_for_default_ignore() {
+        let mut state = SignalState::default();
+        state.set_pending(Signal::Continue);
+        assert!(
+            !state.has_interrupting_deliverable(),
+            "an ignored signal must not cause EINTR"
+        );
+    }
+
+    #[test]
+    fn has_interrupting_deliverable_false_for_default_stop() {
+        let mut state = SignalState::default();
+        state.set_pending(Signal::TerminalStop);
+        assert!(
+            !state.has_interrupting_deliverable(),
+            "a stop leaves the sleeper parked, it does not interrupt"
+        );
+    }
+
+    #[test]
+    fn has_interrupting_deliverable_true_for_handler() {
+        let mut state = SignalState::default();
+        state
+            .sigaction(Signal::Urgent, Some(custom_action(0x1000)))
+            .unwrap();
+        state.set_pending(Signal::Urgent);
+        assert!(
+            state.has_interrupting_deliverable(),
+            "a caught signal interrupts the wait"
+        );
+    }
+
+    #[test]
+    fn has_interrupting_deliverable_true_for_kill() {
+        let mut state = SignalState::default();
+        state.set_pending(Signal::Kill);
+        assert!(
+            state.has_interrupting_deliverable(),
+            "SIGKILL always interrupts the wait"
         );
     }
 

@@ -10,7 +10,6 @@ use tracing::info;
 
 use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::process::{ExitOutcome, Process};
-use crate::mcore::mtask::scheduler::stopped::StoppedTasks;
 use crate::syscall::access::KernelAccess;
 
 /// Local wrapper so the foreign `ProcessAccess` trait can be implemented
@@ -83,7 +82,9 @@ impl SignalAccess for KernelAccess<'_> {
         }
         if effect.resume_tasks {
             info!("continuing process {pid}");
-            StoppedTasks::resume_all(&guard);
+            guard.resume_stopped_task();
         }
+        // Spurious wakes are by design, the woken task re-checks its condition.
+        process.wake_interruptible();
     }
 }

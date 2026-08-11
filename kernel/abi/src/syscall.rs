@@ -64,4 +64,5 @@ n! {
     SYS_FSYNC = 49,
     SYS_CLOCK_GETTIME = 50,
     SYS_EXE_PATH = 51,
+    SYS_NANOSLEEP = 52,
 }

@@ -20,6 +20,7 @@ package(default_visibility = ["//visibility:public"])
         "mmap": "mmap",
         "signals_edge": "signals-edge",
         "signals_init": "signals-init",
+        "sleep": "sleep",
         "unwind": "unwind",
     }.items()
 ]

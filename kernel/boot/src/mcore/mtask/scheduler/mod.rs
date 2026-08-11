@@ -12,20 +12,19 @@ use x86_64::registers::model_specific::FsBase;
 
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
-use crate::mcore::mtask::scheduler::stopped::StoppedTasks;
 use crate::mcore::mtask::scheduler::switch::switch_impl;
 use crate::mcore::mtask::task::Task;
+use crate::mcore::mtask::wait::TaskParkTicket;
 
 pub mod cleanup;
 pub mod global;
-pub mod stopped;
 mod switch;
 
 /// Where an outgoing task goes once it is off the CPU.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug)]
 enum Disposal {
     Enqueue,
-    Park,
+    Park(TaskParkTicket),
     Terminate,
 }
 
@@ -60,14 +59,11 @@ impl Scheduler {
             Self::route(zombie_task, disposal);
         }
 
-        let requested = if self.current_task.take_should_park() {
-            Disposal::Park
-        } else {
-            Disposal::Enqueue
-        };
         // A parking task cannot stay on the CPU, so an idle task is an
-        // acceptable target even while the run queue is empty.
-        let must_switch = matches!(requested, Disposal::Park);
+        // acceptable target even while the run queue is empty. The ticket is
+        // taken only after a switch target exists, because an early return
+        // with a taken ticket would drop it and leak its slot.
+        let must_switch = self.current_task.has_park_ticket();
 
         let Some(next_task) = self.next_task(must_switch) else {
             return;
@@ -75,7 +71,15 @@ impl Scheduler {
         let cr3_value = next_task.process().address_space().cr3_value();
 
         let mut old_task = self.swap_current_task(next_task);
-        let disposal = if old_task.should_terminate() {
+        let requested = match old_task.take_park_ticket() {
+            Some(ticket) => Disposal::Park(ticket),
+            None => Disposal::Enqueue,
+        };
+        // A pending park ticket wins over termination. Every ticket has a
+        // live wake source, and `should_terminate` can only be set while the
+        // task runs, so a parked task is always woken first and terminated at
+        // its next reschedule. Dropping the ticket here would leak the slot.
+        let disposal = if old_task.should_terminate() && !matches!(requested, Disposal::Park(_)) {
             Disposal::Terminate
         } else {
             requested
@@ -125,18 +129,11 @@ impl Scheduler {
     fn route(task: Pin<Box<Task>>, disposal: Disposal) {
         match disposal {
             Disposal::Enqueue => GlobalTaskQueue::enqueue(task),
-            Disposal::Park => Self::park(task),
+            Disposal::Park(ticket) => match ticket.park(task) {
+                Ok(()) => {}
+                Err(err) => GlobalTaskQueue::enqueue(err.into_inner()),
+            },
             Disposal::Terminate => TaskCleanup::enqueue(task),
-        }
-    }
-
-    /// SIGCONT clears the flag and drains the lot under the signals write
-    /// guard, so the flag is read here with the guard held across the insert.
-    fn park(task: Pin<Box<Task>>) {
-        let process = task.process().clone();
-        match process.try_signals_read() {
-            Some(guard) if guard.stopped() => StoppedTasks::park(task),
-            _ => GlobalTaskQueue::enqueue(task),
         }
     }
 

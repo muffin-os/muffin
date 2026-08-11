@@ -10,13 +10,15 @@ use core::sync::atomic::{AtomicBool, AtomicU64};
 
 use cordyceps::Linked;
 use cordyceps::mpsc_queue::Links;
+use kernel_park::ParkTicketCell;
 use spin::RwLock;
 use tracing::trace;
-use x86_64::instructions::hlt;
+use x86_64::instructions::interrupts;
 
 use crate::U64Ext;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::Process;
+use crate::mcore::mtask::wait::{TaskParkTicket, TaskReservation, TaskUnparkTicket};
 use crate::mem::memapi::{LowerHalfAllocation, Writable};
 
 mod id;
@@ -40,10 +42,15 @@ pub struct Task {
     /// Whether this task should be terminated upon the next reschedule.
     /// This can be set at any point.
     should_terminate: AtomicBool,
-    /// Set only by tick signal delivery on a Ring 3 frame, where the task
-    /// holds no kernel locks. Consumed by the next reschedule, which parks
-    /// the task.
-    should_park: AtomicBool,
+    /// Set by the task itself before it blocks or by tick signal delivery on
+    /// this task's own Ring 3 frame. Consumed by the next reschedule on the
+    /// CPU running this task.
+    ///
+    /// The parked value is always this task's own `Pin<Box<Task>>`. The
+    /// scheduler takes the ticket from the task it switches away from and
+    /// parks that same box, so an unpark from a wake source always
+    /// yields the task that carried the ticket.
+    park_ticket: ParkTicketCell<Pin<Box<Task>>>,
     pending_fault_addr: AtomicU64,
     /// Whether this task may only run when no ordinary task is runnable.
     ///
@@ -120,7 +127,7 @@ impl Task {
             name,
             process,
             should_terminate,
-            should_park: AtomicBool::new(false),
+            park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
             idle: AtomicBool::new(false),
             last_stack_ptr,
@@ -146,7 +153,7 @@ impl Task {
             name,
             process,
             should_terminate,
-            should_park: AtomicBool::new(false),
+            park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
             idle: AtomicBool::new(false),
             last_stack_ptr,
@@ -160,7 +167,8 @@ impl Task {
     }
 
     pub(crate) extern "C" fn exit() {
-        let task = ExecutionContext::load().current_task();
+        let ctx = ExecutionContext::load();
+        let task = ctx.current_task();
         trace!(name = %task.name(), "exiting task");
 
         unsafe {
@@ -175,9 +183,16 @@ impl Task {
             task.set_should_terminate(true);
         }
 
-        loop {
-            hlt();
+        // A terminated task is disposed without saving its context, so the
+        // current stack is simply abandoned. That covers the page fault IST
+        // stack on the fault termination path.
+        interrupts::disable();
+        unsafe {
+            ctx.scheduler_mut().reschedule();
         }
+        unreachable!(
+            "scheduler must not reschedule an exited task, there must always be a switch target available, at least the idle task"
+        );
     }
 
     /// Creates a Task struct for the current state of the CPU.
@@ -201,7 +216,7 @@ impl Task {
             name,
             process,
             should_terminate,
-            should_park: AtomicBool::new(false),
+            park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
             idle: AtomicBool::new(false),
             last_stack_ptr,
@@ -234,12 +249,31 @@ impl Task {
         self.should_terminate.store(should_terminate, Relaxed);
     }
 
-    pub fn set_should_park(&self) {
-        self.should_park.store(true, Relaxed);
+    /// Leaves the ticket the next reschedule parks this task with.
+    ///
+    /// A held ticket is never overwritten, because dropping a `ParkTicket`
+    /// leaks its slot for the lifetime of the lot. The offered ticket comes
+    /// back as `Err` in that case, which requires a kernel bug to reach.
+    pub fn set_park_ticket(&self, ticket: TaskParkTicket) -> Result<(), TaskParkTicket> {
+        self.park_ticket.put(ticket)
     }
 
-    pub fn take_should_park(&self) -> bool {
-        self.should_park.swap(false, Relaxed)
+    /// Like [`Task::set_park_ticket`], but from an unsplit reservation, so a
+    /// rejection returns the reservation for release instead of leaking it.
+    /// Success hands back the unpark ticket for the wake source.
+    pub(crate) fn set_park_reservation(
+        &self,
+        reservation: TaskReservation,
+    ) -> Result<TaskUnparkTicket, TaskReservation> {
+        self.park_ticket.put_reservation(reservation)
+    }
+
+    pub(in crate::mcore::mtask) fn has_park_ticket(&self) -> bool {
+        self.park_ticket.has_ticket()
+    }
+
+    pub(in crate::mcore::mtask) fn take_park_ticket(&self) -> Option<TaskParkTicket> {
+        self.park_ticket.take()
     }
 
     pub fn is_idle(&self) -> bool {

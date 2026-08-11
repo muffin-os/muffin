@@ -18,7 +18,7 @@ use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use kernel_syscall::signal::SignalState;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
-use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 use tracing::debug;
 use x86_64::VirtAddr;
@@ -34,6 +34,7 @@ use crate::mcore::mtask::process::telemetry::Telemetry;
 use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::{FxArea, HigherHalfStack, StackAllocationError, Task};
+use crate::mcore::mtask::wait::{TaskUnparkTicket, TaskWaker, unpark_and_enqueue, wake};
 use crate::mem::address_space::AddressSpace;
 use crate::mem::memapi::{LowerHalfAllocation, LowerHalfMemoryApi, Writable};
 use crate::mem::virt::VirtualMemoryAllocator;
@@ -53,6 +54,47 @@ pub fn new_process_id() -> ProcessId {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     ProcessId::from(COUNTER.fetch_add(1, Ordering::Relaxed))
 }
+
+/// Everything the process signals lock protects.
+///
+/// `stop_unpark` lives behind the same lock as the signal state, so stop
+/// parking (tick delivery) and resume (signal generation) are serialized by
+/// construction.
+#[derive(Default)]
+pub struct Signals {
+    state: SignalState,
+    stop_unpark: Option<TaskUnparkTicket>,
+}
+
+impl Signals {
+    /// Keeps the unpark ticket of the stop-parked task, so a later
+    /// `Continue` or `Kill` can release it.
+    pub fn store_stop_unpark(&mut self, ticket: TaskUnparkTicket) {
+        self.stop_unpark = Some(ticket);
+    }
+
+    pub fn resume_stopped_task(&mut self) {
+        if let Some(ticket) = self.stop_unpark.take() {
+            unpark_and_enqueue(ticket);
+        }
+    }
+}
+
+impl Deref for Signals {
+    type Target = SignalState;
+
+    fn deref(&self) -> &SignalState {
+        &self.state
+    }
+}
+
+impl DerefMut for Signals {
+    fn deref_mut(&mut self) -> &mut SignalState {
+        &mut self.state
+    }
+}
+
+pub type SignalsWriteGuard<'a> = RwLockWriteGuard<'a, Signals>;
 
 /// How a process ended. Recorded once on the first terminating event.
 #[derive(Debug, Copy, Clone)]
@@ -78,7 +120,13 @@ pub struct Process {
 
     memory_regions: MemoryRegions,
 
-    signals: RwLock<SignalState>,
+    signals: RwLock<Signals>,
+
+    /// Never held across any other lock acquisition. The kill path takes it
+    /// while holding the signals write guard, the sleeping task takes it
+    /// bare, so no inversion exists as long as every accessor is a
+    /// self-contained lock-store-unlock.
+    interruptible_waker: Mutex<Option<TaskWaker>>,
 
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
 
@@ -103,7 +151,8 @@ impl Process {
                 ))),
                 telemetry: Telemetry::default(),
                 memory_regions: MemoryRegions::new(),
-                signals: RwLock::new(SignalState::default()),
+                signals: RwLock::new(Signals::default()),
+                interruptible_waker: Mutex::new(None),
                 file_descriptors: RwLock::new(BTreeMap::new()),
                 exit_outcome: OnceCell::uninit(),
             });
@@ -139,7 +188,8 @@ impl Process {
             ))),
             telemetry: Telemetry::default(),
             memory_regions: MemoryRegions::new(),
-            signals: RwLock::new(SignalState::default()),
+            signals: RwLock::new(Signals::default()),
+            interruptible_waker: Mutex::new(None),
             file_descriptors: RwLock::new(BTreeMap::new()),
             exit_outcome: OnceCell::uninit(),
         };
@@ -233,26 +283,34 @@ impl Process {
         &self.telemetry
     }
 
-    pub fn signals_read(&self) -> RwLockReadGuard<'_, SignalState> {
+    pub fn signals_read(&self) -> RwLockReadGuard<'_, Signals> {
         self.signals.read()
     }
 
-    pub fn try_signals_read(&self) -> Option<RwLockReadGuard<'_, SignalState>> {
+    pub fn try_signals_read(&self) -> Option<RwLockReadGuard<'_, Signals>> {
         self.signals.try_read()
     }
 
     pub fn signals_write(&self) -> SignalsWriteGuard<'_> {
-        SignalsWriteGuard {
-            pid: self.pid,
-            guard: self.signals.write(),
-        }
+        self.signals.write()
     }
 
     pub fn try_signals_write(&self) -> Option<SignalsWriteGuard<'_>> {
-        Some(SignalsWriteGuard {
-            pid: self.pid,
-            guard: self.signals.try_write()?,
-        })
+        self.signals.try_write()
+    }
+
+    pub fn register_interruptible_waker(&self, waker: TaskWaker) {
+        *self.interruptible_waker.lock() = Some(waker);
+    }
+
+    pub fn clear_interruptible_waker(&self) {
+        self.interruptible_waker.lock().take();
+    }
+
+    pub fn wake_interruptible(&self) {
+        if let Some(waker) = self.interruptible_waker.lock().take() {
+            wake(&waker);
+        }
     }
 
     /// Records the first terminating event. A process that exits while being
@@ -274,32 +332,6 @@ impl Debug for Process {
             .field("name", &self.name)
             .field("address_space", self.address_space())
             .finish_non_exhaustive()
-    }
-}
-
-pub struct SignalsWriteGuard<'a> {
-    pid: ProcessId,
-    guard: RwLockWriteGuard<'a, SignalState>,
-}
-
-impl SignalsWriteGuard<'_> {
-    #[must_use]
-    pub fn pid(&self) -> ProcessId {
-        self.pid
-    }
-}
-
-impl Deref for SignalsWriteGuard<'_> {
-    type Target = SignalState;
-
-    fn deref(&self) -> &SignalState {
-        &self.guard
-    }
-}
-
-impl DerefMut for SignalsWriteGuard<'_> {
-    fn deref_mut(&mut self) -> &mut SignalState {
-        &mut self.guard
     }
 }
 

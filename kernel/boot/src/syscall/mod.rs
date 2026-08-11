@@ -3,8 +3,8 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use access::KernelAccess;
 use kernel_abi::{
-    EFAULT, EINVAL, EIO, ENOENT, ENOMEM, ERANGE, ESRCH, Errno, IoctlRequest, ProcessId, SigAction,
-    SigMaskHow, SigSet, Signal, Stat, Timespec, Whence, syscall_name,
+    EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ERANGE, ESRCH, Errno, IoctlRequest, ProcessId,
+    SigAction, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence, syscall_name,
 };
 use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
@@ -21,6 +21,7 @@ use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::ExitOutcome;
 use crate::mcore::mtask::process::mem::PageInError;
 use crate::mcore::mtask::task::Task;
+use crate::mcore::mtask::wait::{block_current, reserve, sleep_until, wake};
 
 mod access;
 
@@ -52,6 +53,7 @@ pub fn dispatch_syscall(
         kernel_abi::SYS_LSEEK => dispatch_sys_lseek(arg1, arg2, arg3),
         kernel_abi::SYS_CLOCK_GETTIME => dispatch_sys_clock_gettime(arg1, arg2),
         kernel_abi::SYS_EXE_PATH => dispatch_sys_exe_path(arg1, arg2),
+        kernel_abi::SYS_NANOSLEEP => dispatch_sys_nanosleep(arg1, arg2),
         _ => {
             error!("unimplemented syscall: {} ({n})", syscall_name(n));
             loop {
@@ -75,7 +77,7 @@ fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
     ctx.current_process()
         .set_exit_outcome(ExitOutcome::Exited(code));
     Task::exit();
-    // Task::exit never returns, it parks the task until the scheduler reaps it.
+    // Task::exit never returns, it switches away and the scheduler reaps the task.
     Ok(0)
 }
 
@@ -395,6 +397,55 @@ fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno>
     let tv_sec = i64::try_from(total_secs).map_err(|_| EINVAL)?;
     write_user::<Timespec>(tp, Timespec { tv_sec, tv_nsec })?;
     Ok(0)
+}
+
+/// POSIX nanosleep backed by the HPET main counter and the timer tick sweep,
+/// so wake precision is one LAPIC tick.
+fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
+    let ts = read_user::<Timespec>(req)?;
+    if ts.tv_sec < 0 || !(0..1_000_000_000).contains(&ts.tv_nsec) {
+        return Err(EINVAL);
+    }
+    let duration_ns = (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64);
+    let deadline = hpet().read().elapsed_ns().saturating_add(duration_ns);
+    let process = ExecutionContext::load().current_process().clone();
+
+    loop {
+        let now = hpet().read().elapsed_ns();
+        if now >= deadline {
+            return Ok(0);
+        }
+        if process.signals_read().has_interrupting_deliverable() {
+            // POSIX allows a null rem, which skips the remainder writeback.
+            if rem != 0 {
+                let left = deadline - now;
+                write_user::<Timespec>(
+                    rem,
+                    Timespec {
+                        tv_sec: (left / 1_000_000_000) as i64,
+                        tv_nsec: (left % 1_000_000_000) as i64,
+                    },
+                )?;
+            }
+            return Err(EINTR);
+        }
+        // The re-check plus self-wake closes the lost-wakeup window. A kill
+        // before the registration found no waker, but its pending bit is
+        // visible here, and the self-wake makes the park fail so the
+        // scheduler bounces the task straight back. There is no way to skip
+        // the park, an unconsumed park ticket would leak its slot.
+        let (park_ticket, unpark_ticket) = reserve().split();
+        let waker = unpark_ticket.into_waker();
+        sleep_until(deadline, waker.clone());
+        process.register_interruptible_waker(waker.clone());
+        if process.signals_read().has_interrupting_deliverable() {
+            wake(&waker);
+        }
+        block_current(park_ticket);
+        process.clear_interruptible_waker();
+    }
 }
 
 fn dispatch_sys_exe_path(buf: usize, len: usize) -> Result<usize, Errno> {

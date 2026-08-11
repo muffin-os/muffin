@@ -13,8 +13,9 @@ use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::arch::idt::SyscallRegisters;
 use crate::mcore::context::ExecutionContext;
-use crate::mcore::mtask::process::ExitOutcome;
+use crate::mcore::mtask::process::{ExitOutcome, Signals};
 use crate::mcore::mtask::task::Task;
+use crate::mcore::mtask::wait::try_reserve;
 
 /// Marker written into every signal frame so `sigreturn` can reject a frame the
 /// userspace program corrupted or forged.
@@ -138,6 +139,23 @@ fn write_sigframe(
     base
 }
 
+/// Reserves a lot slot for the current task and keeps the unpark ticket
+/// in the signal state, so a later `Continue` or `Kill` can release it.
+fn request_stop_park(ctx: &ExecutionContext, signals: &mut Signals) {
+    assert!(!interrupts::are_enabled());
+
+    let Some(reservation) = try_reserve() else {
+        return;
+    };
+    match ctx.current_task().set_park_reservation(reservation) {
+        Ok(unpark_ticket) => signals.store_stop_unpark(unpark_ticket),
+        // A ticket from an earlier tick is still pending, because that tick's
+        // reschedule found no task to switch to. The fresh reservation goes
+        // back to the lot.
+        Err(reservation) => reservation.release(),
+    }
+}
+
 /// Act on pending signals for the current task. Called from the timer tick
 /// with interrupts off and a Ring 3 frame. Contention means this tick
 /// delivers nothing and the next retries.
@@ -149,7 +167,7 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
     };
     loop {
         if guard.stopped() {
-            ctx.current_task().set_should_park();
+            request_stop_park(ctx, &mut guard);
             return;
         }
         let Some(signo) = guard.take_next_deliverable() else {
@@ -159,7 +177,7 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
             Disposition::Ignore => {}
             Disposition::DefaultStop => {
                 guard.set_stopped(true);
-                ctx.current_task().set_should_park();
+                request_stop_park(ctx, &mut guard);
                 return;
             }
             Disposition::DefaultTerminate => {
@@ -261,11 +279,12 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
 /// Terminate the current process on `signo` and never return. Shared by default
 /// terminate delivery, unhandled faults, and `SYS_EXIT`.
 pub fn terminate_current(signo: Signal) -> ! {
-    // The fault path arrives with interrupts disabled, and the exit hlt loop
-    // needs the timer to eventually reap the task.
-    if !interrupts::are_enabled() {
-        interrupts::enable();
-    }
+    // The fault path runs on the page fault IST stack. A context switch would
+    // save the task's registers there, and the next page fault on this CPU
+    // starts again at the fixed IST top, clobbering them. Interrupts stay off
+    // until `Task::exit` marks the task terminated, because the scheduler
+    // reaps a terminated task without saving its context.
+    interrupts::disable();
     let ctx = ExecutionContext::load();
     let pid = ctx.pid();
     ctx.current_process()

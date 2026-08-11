@@ -18,6 +18,7 @@ use crate::arch::{gdt, signal};
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::mem::{MemoryRegion, PageInError};
 use crate::mcore::mtask::task::Task;
+use crate::mcore::mtask::wait::wake_expired_sleepers;
 use crate::syscall::dispatch_syscall;
 
 #[derive(Debug, Clone, Copy)]
@@ -178,6 +179,8 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
     unsafe {
         end_of_interrupt();
     }
+
+    wake_expired_sleepers();
 
     // only deliver signals when we're in userspace
     if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
