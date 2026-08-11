@@ -35,9 +35,6 @@ pub struct Scheduler {
     /// global queue, so it cannot migrate and a reschedule that must switch
     /// always finds a target.
     idle_task: Option<Pin<Box<Task>>>,
-    /// `None` until the bootstrap task enters its idle loop. Until then it
-    /// schedules like any other task, so kernel init is not demoted to idle
-    /// priority.
     idle_tid: Option<TaskId>,
     /// The task last switched away from, with the disposal decided when its
     /// RSP save slot was picked, so routing matches whether RSP was saved.
@@ -151,6 +148,12 @@ impl Scheduler {
             },
             Disposal::Terminate => TaskCleanup::enqueue(task),
         }
+    }
+
+    pub fn set_idle_task(&mut self, task: Pin<Box<Task>>) {
+        assert!(!interrupts::are_enabled());
+        self.idle_tid = Some(task.id());
+        self.idle_task = Some(task);
     }
 
     pub fn adopt_current_as_idle(&mut self) {

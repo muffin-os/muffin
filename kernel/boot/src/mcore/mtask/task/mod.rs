@@ -160,6 +160,10 @@ impl Task {
     }
 
     pub(crate) extern "C" fn exit() {
+        Self::exit_current()
+    }
+
+    pub(crate) fn exit_current() -> ! {
         let ctx = ExecutionContext::load();
         let task = ctx.current_task();
         trace!(name = %task.name(), "exiting task");

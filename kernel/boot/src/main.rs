@@ -53,7 +53,7 @@ unsafe extern "C" fn main() -> ! {
         info!(pid = %proc.pid(), "started process");
     }
 
-    mcore::turn_idle()
+    mcore::exit_bootstrap()
 }
 
 #[panic_handler]

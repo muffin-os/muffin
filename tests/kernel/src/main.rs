@@ -126,7 +126,7 @@ unsafe extern "C" fn main() -> ! {
         }
     }
 
-    mcore::turn_idle()
+    mcore::exit_bootstrap()
 }
 
 #[panic_handler]

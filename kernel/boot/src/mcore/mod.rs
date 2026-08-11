@@ -1,4 +1,6 @@
 use alloc::boxed::Box;
+use core::ffi::c_void;
+use core::ptr;
 use core::sync::atomic::Ordering::{Acquire, Release};
 
 use tracing::{Level, info, instrument, trace};
@@ -16,8 +18,10 @@ use crate::arch::gdt::create_gdt_and_tss;
 use crate::arch::idt::create_idt;
 use crate::limine::MP_REQUEST;
 use crate::mcore::context::ExecutionContext;
+use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::scheduler::cleanup::TaskCleanup;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
+use crate::mcore::mtask::task::Task;
 use crate::sse;
 
 pub mod context;
@@ -52,6 +56,9 @@ pub fn init() {
 
     // then call the `cpu_init` function on the bootstrap CPU
     unsafe { cpu_init_and_return(resp.cpus()[0]) };
+    interrupts::enable();
+
+    install_idle_task();
 
     TaskCleanup::init();
 }
@@ -98,8 +105,6 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
     // load it back and print a message
     let ctx = ExecutionContext::load();
     info!("cpu {} initialized", ctx.cpu_id());
-
-    interrupts::enable();
 }
 
 unsafe extern "C" fn cpu_init_and_idle(cpu: &limine::mp::Cpu) -> ! {
@@ -109,8 +114,7 @@ unsafe extern "C" fn cpu_init_and_idle(cpu: &limine::mp::Cpu) -> ! {
 }
 
 /// Parks the current task as this core's idle task, never returning.
-pub fn turn_idle() -> ! {
-    interrupts::disable();
+fn turn_idle() -> ! {
     unsafe {
         ExecutionContext::load()
             .scheduler_mut()
@@ -120,6 +124,28 @@ pub fn turn_idle() -> ! {
     loop {
         hlt();
     }
+}
+
+fn install_idle_task() {
+    let idle_task = Task::create_new(Process::root(), idle, ptr::null_mut())
+        .expect("should be able to create the idle task");
+    interrupts::disable();
+    unsafe {
+        ExecutionContext::load()
+            .scheduler_mut()
+            .set_idle_task(Box::pin(idle_task));
+    }
+    interrupts::enable();
+}
+
+extern "C" fn idle(_: *mut c_void) {
+    loop {
+        hlt();
+    }
+}
+
+pub fn exit_bootstrap() -> ! {
+    Task::exit_current()
 }
 
 fn init_interrupts() {
