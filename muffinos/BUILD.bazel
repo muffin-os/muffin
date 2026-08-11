@@ -37,6 +37,10 @@ ext2_image(
         "//userspace/utilities/false": "bin/false",
         "//userspace/utilities/true": "bin/true",
     },
+    image_size = "4G",
+    random_files = {
+        "var/large.bin": "3072",
+    },
 )
 
 limine_iso(
