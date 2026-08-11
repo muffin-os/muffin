@@ -11,8 +11,9 @@ use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::mcore::mtask::process::Process;
+use crate::mem::address_space::AddressSpace;
 use crate::mem::phys::PhysicalMemory;
-use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator};
+use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use crate::{U64Ext, UsizeExt};
 
 #[derive(Clone)]
@@ -27,6 +28,7 @@ impl LowerHalfMemoryApi {
 }
 
 impl MemoryApi for LowerHalfMemoryApi {
+    type AllocOptions = UserAccessible;
     type ReadonlyAllocation = LowerHalfAllocation<Readonly>;
     type WritableAllocation = LowerHalfAllocation<Writable>;
     type ExecutableAllocation = LowerHalfAllocation<Executable>;
@@ -266,6 +268,216 @@ impl Drop for Inner {
     fn drop(&mut self) {
         self.process
             .address_space()
+            .unmap_range::<Size4KiB>(&self.mapped_segment, PhysicalMemory::deallocate_frame);
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum FrameContiguity {
+    NonContiguous,
+    Contiguous,
+}
+
+#[derive(Clone)]
+pub struct HigherHalfMemoryApi;
+
+impl MemoryApi for HigherHalfMemoryApi {
+    type AllocOptions = FrameContiguity;
+    type ReadonlyAllocation = HigherHalfAllocation<Readonly>;
+    type WritableAllocation = HigherHalfAllocation<Writable>;
+    type ExecutableAllocation = HigherHalfAllocation<Executable>;
+
+    fn allocate(
+        &mut self,
+        location: Location,
+        layout: Layout,
+        contiguity: FrameContiguity,
+        guarded: Guarded,
+    ) -> Option<Self::WritableAllocation> {
+        assert!(layout.align() <= Size4KiB::SIZE.into_usize());
+
+        let interior_pages = layout.size().div_ceil(Size4KiB::SIZE.into_usize());
+        let num_pages = interior_pages
+            + match guarded {
+                Guarded::Yes => 2,
+                Guarded::No => 0,
+            };
+
+        let segment = match location {
+            Location::Anywhere => VirtualMemoryHigherHalf.reserve(num_pages)?,
+            Location::Fixed(_) => return None,
+        };
+
+        let mapped_segment = match guarded {
+            Guarded::Yes => Segment::new(
+                segment.start + Size4KiB::SIZE,
+                segment.len - (2 * Size4KiB::SIZE),
+            ),
+            Guarded::No => *segment,
+        };
+
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
+
+        match contiguity {
+            FrameContiguity::NonContiguous => AddressSpace::kernel()
+                .map_range::<Size4KiB>(
+                    &mapped_segment,
+                    PhysicalMemory::allocate_frames_non_contiguous(),
+                    flags,
+                )
+                .ok()?,
+            FrameContiguity::Contiguous => {
+                let owned = PhysicalMemory::allocate_frames::<Size4KiB>(interior_pages)?;
+                AddressSpace::kernel()
+                    .map_range::<Size4KiB>(&mapped_segment, *owned, flags)
+                    .ok()?;
+                let _ = owned.leak();
+            }
+        }
+
+        Some(HigherHalfAllocation {
+            start: mapped_segment.start,
+            layout,
+            inner: HigherHalfInner {
+                segment,
+                mapped_segment,
+            },
+            _typ: PhantomData,
+        })
+    }
+
+    fn make_executable(
+        &mut self,
+        allocation: Self::WritableAllocation,
+    ) -> Result<Self::ExecutableAllocation, Self::WritableAllocation> {
+        let res = AddressSpace::kernel().remap_range::<Size4KiB, _>(
+            &allocation.inner.mapped_segment,
+            |mut flags| {
+                flags.remove(PageTableFlags::WRITABLE);
+                flags.remove(PageTableFlags::NO_EXECUTE);
+                flags
+            },
+        );
+        if res.is_err() {
+            return Err(allocation);
+        }
+
+        Ok(HigherHalfAllocation {
+            start: allocation.start,
+            layout: allocation.layout,
+            inner: allocation.inner,
+            _typ: PhantomData,
+        })
+    }
+
+    fn make_writable(
+        &mut self,
+        allocation: Self::ExecutableAllocation,
+    ) -> Result<Self::WritableAllocation, Self::ExecutableAllocation> {
+        let res = AddressSpace::kernel().remap_range::<Size4KiB, _>(
+            &allocation.inner.mapped_segment,
+            |mut flags| {
+                flags.insert(PageTableFlags::WRITABLE);
+                flags.insert(PageTableFlags::NO_EXECUTE);
+                flags
+            },
+        );
+        if res.is_err() {
+            return Err(allocation);
+        }
+
+        Ok(HigherHalfAllocation {
+            start: allocation.start,
+            layout: allocation.layout,
+            inner: allocation.inner,
+            _typ: PhantomData,
+        })
+    }
+
+    fn make_readonly(
+        &mut self,
+        allocation: Self::WritableAllocation,
+    ) -> Result<Self::ReadonlyAllocation, Self::WritableAllocation> {
+        let res = AddressSpace::kernel().remap_range::<Size4KiB, _>(
+            &allocation.inner.mapped_segment,
+            |mut flags| {
+                flags.remove(PageTableFlags::WRITABLE);
+                flags.insert(PageTableFlags::NO_EXECUTE);
+                flags
+            },
+        );
+        if res.is_err() {
+            return Err(allocation);
+        }
+
+        Ok(HigherHalfAllocation {
+            start: allocation.start,
+            layout: allocation.layout,
+            inner: allocation.inner,
+            _typ: PhantomData,
+        })
+    }
+}
+
+pub struct HigherHalfAllocation<T> {
+    start: VirtAddr,
+    layout: Layout,
+    inner: HigherHalfInner,
+    _typ: PhantomData<T>,
+}
+
+impl<T: AllocationType> HigherHalfAllocation<T> {
+    #[must_use]
+    pub fn start(&self) -> VirtAddr {
+        self.start
+    }
+
+    #[allow(clippy::len_without_is_empty)]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.layout.size()
+    }
+}
+
+struct HigherHalfInner {
+    segment: OwnedSegment<'static>,
+    mapped_segment: Segment,
+}
+
+impl<T: AllocationType> Debug for HigherHalfAllocation<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("HigherHalfAllocation")
+            .field("segment", &self.inner.segment)
+            .field("typ", &self._typ)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: AllocationType> AsRef<[u8]> for HigherHalfAllocation<T> {
+    fn as_ref(&self) -> &[u8] {
+        let ptr = self.start.as_ptr();
+        unsafe { from_raw_parts(ptr, self.layout.size()) }
+    }
+}
+
+impl<T: AllocationType> Allocation for HigherHalfAllocation<T> {
+    fn layout(&self) -> Layout {
+        self.layout
+    }
+}
+
+impl AsMut<[u8]> for HigherHalfAllocation<Writable> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        let ptr = self.start.as_mut_ptr();
+        unsafe { from_raw_parts_mut(ptr, self.layout.size()) }
+    }
+}
+
+impl WritableAllocation for HigherHalfAllocation<Writable> {}
+
+impl Drop for HigherHalfInner {
+    fn drop(&mut self) {
+        AddressSpace::kernel()
             .unmap_range::<Size4KiB>(&self.mapped_segment, PhysicalMemory::deallocate_frame);
     }
 }

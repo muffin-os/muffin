@@ -30,13 +30,14 @@ pub enum Guarded {
 /// The [`MemoryApi::Allocation`] type is a type that will free the allocated memory
 /// upon drop.
 pub trait MemoryApi {
+    type AllocOptions;
     type ReadonlyAllocation: Allocation;
     type WritableAllocation: WritableAllocation;
     type ExecutableAllocation: Allocation;
 
     /// Allocates memory at the given location with the given layout (size and align).
-    /// If the allocation should be accessible from user space, the caller must pass
-    /// `UserAccessible::Yes`.
+    /// The `options` value carries the implementation defined properties of the allocation,
+    /// such as whether the memory is reachable from user space.
     /// By default, the returned memory region is writable and *not* executable.
     /// To change this, the caller must convert the allocation with [`MemoryApi::make_executable`].
     ///
@@ -56,7 +57,7 @@ pub trait MemoryApi {
         &mut self,
         location: Location,
         layout: Layout,
-        user_accessible: UserAccessible,
+        options: Self::AllocOptions,
         guarded: Guarded,
     ) -> Option<Self::WritableAllocation>;
 

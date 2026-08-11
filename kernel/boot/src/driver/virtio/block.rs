@@ -1,11 +1,12 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use core::alloc::Layout;
 use core::error::Error;
 use core::fmt::{Debug, Formatter};
-use core::slice;
 
 use kernel_device::Device;
 use kernel_device::block::BlockDevice;
+use kernel_memapi::{Guarded, Location, MemoryApi};
 use kernel_pci::PciAddress;
 use kernel_pci::config::ConfigurationAccess;
 use linkme::distributed_slice;
@@ -13,16 +14,14 @@ use spin::Mutex;
 use spin::rwlock::RwLock;
 use virtio_drivers::device::blk::VirtIOBlk;
 use virtio_drivers::transport::pci::PciTransport;
-use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::U64Ext;
 use crate::driver::KernelDeviceId;
 use crate::driver::block::BlockDevices;
 use crate::driver::pci::{PCI_DRIVERS, PciDriverDescriptor, PciDriverType};
 use crate::driver::virtio::hal::{HalImpl, transport};
-use crate::mem::address_space::AddressSpace;
-use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
-use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
+use crate::mem::memapi::{FrameContiguity, HigherHalfAllocation, HigherHalfMemoryApi, Writable};
 
 const PAGE_SIZE: usize = Size4KiB::SIZE as usize;
 const SECTOR_SIZE: usize = 512;
@@ -49,7 +48,15 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
     let transport = transport(addr, cam);
 
     let blk = VirtIOBlk::<HalImpl, _>::new(transport)?;
-    let bounce = BounceBuffer::new()?;
+    let layout = Layout::from_size_align(BOUNCE_LEN, PAGE_SIZE)?;
+    let bounce = HigherHalfMemoryApi
+        .allocate(
+            Location::Anywhere,
+            layout,
+            FrameContiguity::Contiguous,
+            Guarded::No,
+        )
+        .ok_or(BounceBufferError::AllocationFailed)?;
 
     let id = KernelDeviceId::new();
     let device = VirtioBlockDevice {
@@ -64,71 +71,15 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
 
 #[derive(Debug, thiserror::Error)]
 enum BounceBufferError {
-    #[error("out of physical memory")]
-    OutOfPhysicalMemory,
-    #[error("out of virtual memory")]
-    OutOfVirtualMemory,
-    #[error("failed to map the bounce buffer")]
-    MapFailed,
+    #[error("failed to allocate the bounce buffer")]
+    AllocationFailed,
     #[error("buffer of {0} bytes exceeds the bounce buffer")]
     BufferTooLarge(usize),
 }
 
-/// A region of physically contiguous, permanently mapped memory used as the
-/// only DMA target for this device. The virtio descriptors built by
-/// `virtio-drivers` cover the full length of a buffer while `HalImpl::share`
-/// translates the start address only, so any buffer handed to
-/// `read_blocks`/`write_blocks` must be physically contiguous. Kernel heap
-/// allocations are not, not even single sectors, which may straddle a page.
-struct BounceBuffer {
-    segment: OwnedSegment<'static>,
-    _frames: OwnedPhysicalMemory,
-}
-
-impl BounceBuffer {
-    fn new() -> Result<Self, BounceBufferError> {
-        let frames = PhysicalMemory::allocate_frames::<Size4KiB>(BOUNCE_PAGES)
-            .ok_or(BounceBufferError::OutOfPhysicalMemory)?;
-        let segment = VirtualMemoryHigherHalf
-            .reserve(BOUNCE_PAGES)
-            .ok_or(BounceBufferError::OutOfVirtualMemory)?;
-
-        AddressSpace::kernel()
-            .map_range::<Size4KiB>(
-                &*segment,
-                *frames,
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
-            )
-            .map_err(|_| BounceBufferError::MapFailed)?;
-
-        Ok(Self {
-            segment,
-            _frames: frames,
-        })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { slice::from_raw_parts_mut(self.segment.start.as_mut_ptr::<u8>(), BOUNCE_LEN) }
-    }
-
-    fn staging(&mut self, len: usize) -> Result<&mut [u8], BounceBufferError> {
-        self.as_mut_slice()
-            .get_mut(..len)
-            .ok_or(BounceBufferError::BufferTooLarge(len))
-    }
-}
-
-impl Drop for BounceBuffer {
-    fn drop(&mut self) {
-        // The owned fields release the virtual range and deallocate the frames
-        // when they drop afterwards, so the mapping must go away here first.
-        AddressSpace::kernel().unmap_range::<Size4KiB>(&*self.segment, |_| {});
-    }
-}
-
 struct Inner {
     blk: VirtIOBlk<HalImpl, PciTransport>,
-    bounce: BounceBuffer,
+    bounce: HigherHalfAllocation<Writable>,
 }
 
 #[derive(Clone)]
@@ -164,7 +115,10 @@ impl BlockDevice for VirtioBlockDevice {
 
     fn read_sector(&self, sector_index: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
         let Inner { blk, bounce } = &mut *self.inner.lock();
-        let staging = bounce.staging(buf.len())?;
+        let staging = bounce
+            .as_mut()
+            .get_mut(..buf.len())
+            .ok_or(BounceBufferError::BufferTooLarge(buf.len()))?;
         blk.read_blocks(sector_index, staging)?;
         buf.copy_from_slice(staging);
         Ok(buf.len())
@@ -172,7 +126,10 @@ impl BlockDevice for VirtioBlockDevice {
 
     fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error> {
         let Inner { blk, bounce } = &mut *self.inner.lock();
-        let staging = bounce.staging(buf.len())?;
+        let staging = bounce
+            .as_mut()
+            .get_mut(..buf.len())
+            .ok_or(BounceBufferError::BufferTooLarge(buf.len()))?;
         staging.copy_from_slice(buf);
         blk.write_blocks(sector_index, staging)?;
         Ok(buf.len())
@@ -195,7 +152,11 @@ impl BlockDevice for VirtioBlockDevice {
                 .div_ceil(SECTOR_SIZE)
                 .min(BOUNCE_SECTORS);
 
-            let staging = bounce.staging(sectors * SECTOR_SIZE)?;
+            let len = sectors * SECTOR_SIZE;
+            let staging = bounce
+                .as_mut()
+                .get_mut(..len)
+                .ok_or(BounceBufferError::BufferTooLarge(len))?;
             blk.read_blocks(sector_index, staging)?;
 
             let take = remaining.min(staging.len() - intra_sector);

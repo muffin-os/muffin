@@ -1,44 +1,36 @@
+use core::alloc::Layout;
 use core::ffi::c_void;
 use core::fmt::{Debug, Formatter};
-use core::slice::from_raw_parts_mut;
 
+use kernel_memapi::{Guarded, Location, MemoryApi};
 use kernel_virtual_memory::Segment;
 use thiserror::Error;
 use x86_64::VirtAddr;
 use x86_64::registers::rflags::RFlags;
-use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
-use crate::mem::address_space::AddressSpace;
-use crate::mem::phys::PhysicalMemory;
-use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
+use crate::mem::memapi::{FrameContiguity, HigherHalfAllocation, HigherHalfMemoryApi, Writable};
 use crate::{U64Ext, UsizeExt};
 
 #[derive(Debug, Copy, Clone, Error)]
 pub enum StackAllocationError {
-    #[error("out of virtual memory")]
-    OutOfVirtualMemory,
-    #[error("out of physical memory")]
-    OutOfPhysicalMemory,
+    #[error("invalid stack page count")]
+    InvalidPageCount,
+    #[error("out of memory")]
+    OutOfMemory,
 }
 
 pub struct HigherHalfStack {
-    segment: OwnedSegment<'static>,
-    mapped_segment: Segment,
+    alloc: HigherHalfAllocation<Writable>,
     rsp: VirtAddr,
 }
 
 impl Debug for HigherHalfStack {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Stack")
-            .field("segment", &self.segment)
+            .field("alloc", &self.alloc)
+            .field("rsp", &self.rsp)
             .finish_non_exhaustive()
-    }
-}
-
-impl Drop for HigherHalfStack {
-    fn drop(&mut self) {
-        let address_space = AddressSpace::kernel();
-        address_space.unmap_range::<Size4KiB>(&*self.segment, PhysicalMemory::deallocate_frame);
     }
 }
 
@@ -55,16 +47,10 @@ impl HigherHalfStack {
         exit_fn: extern "C" fn(),
     ) -> Result<Self, StackAllocationError> {
         let mut stack = Self::allocate_plain(pages)?;
-        let mapped_segment = stack.mapped_segment;
 
         // set up stack
         let entry_point = (entry_point as *const ()).cast::<usize>();
-        let slice = unsafe {
-            from_raw_parts_mut(
-                mapped_segment.start.as_mut_ptr::<u8>(),
-                mapped_segment.len.into_usize(),
-            )
-        };
+        let slice = stack.alloc.as_mut();
         slice.fill(0xCD);
 
         let mut writer = StackWriter::new(slice);
@@ -83,42 +69,38 @@ impl HigherHalfStack {
             ..Default::default()
         });
 
-        stack.rsp = mapped_segment.start + rsp.into_u64();
+        stack.rsp = stack.alloc.start() + rsp.into_u64();
         Ok(stack)
     }
 
     /// Allocates a plain, unmodified stack with the given number of 4KiB pages.
-    /// The stack will be mapped according to the given arguments.
     ///
-    /// One page is reserved for the guard page, which is not mapped. It is at the
-    /// bottom of the stack. This implies that for `pages` pages, the usable stack
-    /// size is `pages - 1`.
+    /// One page of the given count is reserved for the guard page below the stack,
+    /// so that for `pages` pages, the usable stack size is `pages - 1`. The allocation
+    /// is guarded, which additionally reserves an unmapped page above the stack.
     ///
     /// # Errors
     /// Returns an error if stack memory couldn't be allocated, either
     /// physical or virtual, or if mapping failed.
     pub fn allocate_plain(pages: usize) -> Result<Self, StackAllocationError> {
-        let segment = VirtualMemoryHigherHalf
-            .reserve(pages)
-            .ok_or(StackAllocationError::OutOfVirtualMemory)?;
+        let usable_bytes = pages
+            .checked_sub(1)
+            .and_then(|usable_pages| usable_pages.checked_mul(Size4KiB::SIZE.into_usize()))
+            .ok_or(StackAllocationError::InvalidPageCount)?;
+        let layout = Layout::from_size_align(usable_bytes, Size4KiB::SIZE.into_usize())
+            .map_err(|_| StackAllocationError::InvalidPageCount)?;
 
-        let mapped_segment =
-            Segment::new(segment.start + Size4KiB::SIZE, segment.len - Size4KiB::SIZE);
-
-        AddressSpace::kernel()
-            .map_range::<Size4KiB>(
-                &mapped_segment,
-                PhysicalMemory::allocate_frames_non_contiguous(),
-                // FIXME: must be user accessible for user tasks, but can only be user accessible if in lower half, otherwise it can be modified by unrelated tasks/processes
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+        let alloc = HigherHalfMemoryApi
+            .allocate(
+                Location::Anywhere,
+                layout,
+                FrameContiguity::NonContiguous,
+                Guarded::Yes,
             )
-            .map_err(|_| StackAllocationError::OutOfPhysicalMemory)?;
-        let rsp = mapped_segment.start + mapped_segment.len;
-        Ok(Self {
-            segment,
-            mapped_segment,
-            rsp,
-        })
+            .ok_or(StackAllocationError::OutOfMemory)?;
+
+        let rsp = alloc.start() + alloc.len().into_u64();
+        Ok(Self { alloc, rsp })
     }
 }
 
@@ -132,24 +114,19 @@ impl HigherHalfStack {
     /// value to load into RSP on a fresh entry. Use this for `TSS.RSP0`.
     #[must_use]
     pub fn top(&self) -> VirtAddr {
-        self.mapped_segment.start + self.mapped_segment.len
+        self.alloc.start() + self.alloc.len().into_u64()
     }
 
-    /// Returns the segment of the guard page, which is the lowest page of the stack segment.
+    /// Returns the segment of the guard page directly below the usable stack.
     #[must_use]
     pub fn guard_page(&self) -> Segment {
-        Segment::new(self.segment.start, Size4KiB::SIZE)
-    }
-
-    /// Returns the full stack segment, including the guard page (which is not mapped).
-    pub fn segment(&self) -> &OwnedSegment<'_> {
-        &self.segment
+        Segment::new(self.alloc.start() - Size4KiB::SIZE, Size4KiB::SIZE)
     }
 
     /// Returns the mapped segment, which is the part of the stack that is actually mapped in memory.
     #[must_use]
     pub fn mapped_segment(&self) -> Segment {
-        self.mapped_segment
+        Segment::new(self.alloc.start(), self.alloc.len().into_u64())
     }
 }
 
