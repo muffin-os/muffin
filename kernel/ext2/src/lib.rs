@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(iter_array_chunks)]
 
 extern crate alloc;
 
@@ -10,9 +9,11 @@ pub use dir::*;
 pub use error::*;
 pub use inode::*;
 use kernel_device::block::BlockDevice;
+use spin::Mutex;
 pub use superblock::*;
 
 use crate::block_group::{BlockGroupDescriptor, BlockGroupDescriptorTable};
+use crate::read::IndirectCache;
 
 mod address;
 mod block_group;
@@ -32,6 +33,7 @@ pub struct Ext2Fs<T> {
     block_device: T,
     superblock: Superblock,
     bgdt: BlockGroupDescriptorTable,
+    indirect_cache: Mutex<IndirectCache>,
 }
 
 const SUPERBLOCK_OFFSET: usize = 1024;
@@ -75,6 +77,7 @@ where
             block_device,
             superblock,
             bgdt,
+            indirect_cache: Mutex::new(IndirectCache::new()),
         })
     }
 
@@ -140,6 +143,7 @@ where
     }
 
     pub fn write_block(&mut self, addr: BlockAddress, buf: &[u8]) -> Result<usize, Error> {
+        self.indirect_cache.lock().invalidate(addr);
         let offset = self.resolve_block_offset(addr);
         self.block_device
             .write_at(offset, buf)

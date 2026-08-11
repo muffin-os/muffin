@@ -36,3 +36,19 @@ rust_test(
         "//kernel/device",
     ],
 )
+
+rust_test(
+    name = "large_test",
+    srcs = [
+        "tests/common.rs",
+        "tests/large.rs",
+    ],
+    crate_root = "tests/large.rs",
+    data = glob(["tests/filesystems/*.img"]),
+    edition = "2024",
+    size = "small",
+    deps = [
+        ":ext2",
+        "//kernel/device",
+    ],
+)

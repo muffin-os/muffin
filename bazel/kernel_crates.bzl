@@ -25,7 +25,7 @@ KERNEL_CRATES = {
     ),
     "device": struct(deps = [], crates = ["spin", "thiserror", "x86_64"]),
     "elfloader": struct(deps = [], crates = ["thiserror", "zerocopy"]),
-    "ext2": struct(deps = ["device"], crates = ["bitflags"]),
+    "ext2": struct(deps = ["device"], crates = ["bitflags", "spin"]),
     "log": struct(deps = [], crates = ["conquer-once", "spin", "tracing"]),
     "memapi": struct(deps = [], crates = ["x86_64"]),
     "park": struct(deps = [], crates = ["thiserror"]),

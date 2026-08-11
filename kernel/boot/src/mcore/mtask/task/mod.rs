@@ -8,18 +8,18 @@ use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicBool, AtomicU64};
 
-use cordyceps::mpsc_queue::Links;
 use cordyceps::Linked;
+use cordyceps::mpsc_queue::Links;
 use kernel_park::ParkTicketCell;
 use spin::RwLock;
 use tracing::trace;
-use x86_64::instructions::interrupts;
+use x86_64::instructions::{hlt, interrupts};
 
+use crate::U64Ext;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::wait::{TaskParkTicket, TaskReservation, TaskUnparkTicket};
 use crate::mem::memapi::{LowerHalfAllocation, Writable};
-use crate::U64Ext;
 
 mod id;
 pub use id::*;

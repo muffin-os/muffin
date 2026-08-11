@@ -141,4 +141,99 @@ where
     fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error> {
         self.write().write_sector(sector_index, buf)
     }
+
+    fn read_at(&self, offset: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.read().read_at(offset, buf)
+    }
+
+    fn write_at(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.write().write_at(offset, buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::sync::Arc;
+
+    use spin::RwLock;
+
+    use crate::block::BlockDevice;
+
+    const READ_MARKER: u8 = 0xAB;
+    const WRITE_MARKER: u8 = 0xCD;
+
+    struct MarkerDevice {
+        stored: [u8; 8],
+    }
+
+    impl BlockDevice for MarkerDevice {
+        type Error = ();
+
+        fn sector_size(&self) -> usize {
+            2
+        }
+
+        fn sector_count(&self) -> usize {
+            4
+        }
+
+        fn read_sector(&self, sector_index: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            let start = sector_index * 2;
+            buf.copy_from_slice(&self.stored[start..start + 2]);
+            Ok(2)
+        }
+
+        fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error> {
+            let start = sector_index * 2;
+            self.stored[start..start + 2].copy_from_slice(buf);
+            Ok(2)
+        }
+
+        fn read_at(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            buf.fill(READ_MARKER);
+            Ok(buf.len())
+        }
+
+        fn write_at(&mut self, _offset: usize, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.stored.fill(WRITE_MARKER);
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn arc_rwlock_forwards_to_device_override() {
+        let mut device = Arc::new(RwLock::new(MarkerDevice { stored: [1; 8] }));
+
+        let mut buf = [0_u8; 5];
+        let read = device.read_at(3, &mut buf).unwrap();
+        assert_eq!(5, read, "wrapper must return the override's read length");
+        assert_eq!(
+            [READ_MARKER; 5], buf,
+            "wrapper read_at must reach the device override, not the per-sector default"
+        );
+
+        let written = device.write_at(3, &[7_u8; 5]).unwrap();
+        assert_eq!(
+            5, written,
+            "wrapper must return the override's write length"
+        );
+        assert_eq!(
+            [WRITE_MARKER; 8],
+            device.read().stored,
+            "wrapper write_at must reach the device override, not the per-sector default"
+        );
+    }
+
+    #[test]
+    fn arc_rwlock_dyn_forwards_to_device_override() {
+        let device: Arc<RwLock<dyn BlockDevice<Error = ()>>> =
+            Arc::new(RwLock::new(MarkerDevice { stored: [1; 8] }));
+
+        let mut buf = [0_u8; 5];
+        device.read_at(3, &mut buf).unwrap();
+        assert_eq!(
+            [READ_MARKER; 5], buf,
+            "vtable dispatch must reach the device read_at override"
+        );
+    }
 }
