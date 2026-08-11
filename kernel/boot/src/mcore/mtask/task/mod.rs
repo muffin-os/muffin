@@ -8,18 +8,18 @@ use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicBool, AtomicU64};
 
-use cordyceps::Linked;
 use cordyceps::mpsc_queue::Links;
+use cordyceps::Linked;
 use kernel_park::ParkTicketCell;
 use spin::RwLock;
 use tracing::trace;
 use x86_64::instructions::interrupts;
 
-use crate::U64Ext;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::wait::{TaskParkTicket, TaskReservation, TaskUnparkTicket};
 use crate::mem::memapi::{LowerHalfAllocation, Writable};
+use crate::U64Ext;
 
 mod id;
 pub use id::*;
@@ -180,12 +180,14 @@ impl Task {
         // current stack is simply abandoned. That covers the page fault IST
         // stack on the fault termination path.
         interrupts::disable();
-        unsafe {
-            ctx.scheduler_mut().reschedule();
+        loop {
+            unsafe {
+                ctx.scheduler_mut().reschedule();
+            }
+            interrupts::enable();
+            hlt();
+            interrupts::disable();
         }
-        unreachable!(
-            "scheduler must not reschedule an exited task, there must always be a switch target available, at least the idle task"
-        );
     }
 
     /// Creates a Task struct for the current state of the CPU.
