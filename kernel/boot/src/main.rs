@@ -1,18 +1,13 @@
 #![no_std]
 #![no_main]
-extern crate alloc;
-
-use alloc::vec;
 
 use kernel::driver::block::BlockDevices;
 use kernel::file::ext2::VirtualExt2Fs;
 use kernel::file::vfs;
-use kernel::hpet::hpet;
 use kernel::limine::BASE_REVISION;
 use kernel::mcore;
 use kernel::mcore::mtask::process::Process;
 use kernel_ext2::Ext2Fs;
-use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
 use tracing::{Level, info, span};
 
@@ -58,39 +53,14 @@ unsafe extern "C" fn main() -> ! {
     }
 
     {
-        const CHUNK_LEN: usize = 64 * 1024;
-
-        info!("reading large file");
-        let large_path = AbsolutePath::try_new("/var/large.bin").unwrap();
-        let node = vfs()
+        info!("starting sandbox process...");
+        let sandbox_path = AbsolutePath::try_new("/bin/sandbox").unwrap();
+        let _ = vfs()
             .read()
-            .open(large_path)
-            .expect("should have /var/large.bin");
-
-        let mut stat = Stat::default();
-        node.stat(&mut stat)
-            .expect("should be able to stat /var/large.bin");
-
-        let mut buf = vec![0_u8; CHUNK_LEN];
-        let start_ns = hpet().read().elapsed_ns();
-        let mut total = 0;
-        while total < stat.size {
-            match node
-                .read(&mut buf, total)
-                .expect("should be able to read /var/large.bin")
-            {
-                0 => break,
-                n => total += n,
-            }
-        }
-        let elapsed_ns = (hpet().read().elapsed_ns() - start_ns).max(1);
-
-        let rate = (total as f64 / 1024.0 / 1024.0) / (elapsed_ns as f64 / 1e9);
-        info!(
-            bytes = total,
-            elapsed_ms = elapsed_ns / 1_000_000,
-            "read large file at {rate:.1} MiB/s",
-        );
+            .open(sandbox_path)
+            .expect("should have /bin/sandbox");
+        let proc = Process::create_from_executable(Process::root(), sandbox_path).unwrap();
+        info!(pid = %proc.pid(), "started process");
     }
 
     mcore::exit_bootstrap()
