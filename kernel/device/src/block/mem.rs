@@ -1,4 +1,4 @@
-use crate::BlockDevice;
+use crate::block::BlockDevice;
 
 pub struct MemoryBlockDevice<T> {
     sector_size: usize,
@@ -59,8 +59,8 @@ where
 mod tests {
     use alloc::vec;
 
+    use crate::block::BlockDevice;
     use crate::block::mem::MemoryBlockDevice;
-    use crate::BlockDevice;
 
     #[test]
     fn test_read_at_short() {
@@ -123,7 +123,12 @@ mod tests {
         let mut device = MemoryBlockDevice::try_new(4, data).unwrap();
 
         device.write_at(0, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-        assert_eq!(&[1, 2, 3, 4, 5, 6, 7, 8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], device.data().as_slice());
+        assert_eq!(
+            &[
+                1, 2, 3, 4, 5, 6, 7, 8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+            ],
+            device.data().as_slice()
+        );
     }
 
     #[test]
@@ -132,7 +137,12 @@ mod tests {
         let mut device = MemoryBlockDevice::try_new(4, data).unwrap();
 
         device.write_at(1, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
-        assert_eq!(&[0xFF, 1, 2, 3, 4, 5, 6, 7, 8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], device.data().as_slice());
+        assert_eq!(
+            &[
+                0xFF, 1, 2, 3, 4, 5, 6, 7, 8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+            ],
+            device.data().as_slice()
+        );
     }
 
     #[test]
@@ -141,9 +151,21 @@ mod tests {
         let mut device = MemoryBlockDevice::try_new(4, data).unwrap();
 
         device.write_at(0, &[1, 2]).unwrap();
-        assert_eq!(&[1, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], device.data().as_slice());
+        assert_eq!(
+            &[
+                1, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF
+            ],
+            device.data().as_slice()
+        );
         device.write_at(0, &[1, 2, 3]).unwrap();
-        assert_eq!(&[1, 2, 3, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], device.data().as_slice());
+        assert_eq!(
+            &[
+                1, 2, 3, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF
+            ],
+            device.data().as_slice()
+        );
     }
 
     #[test]
@@ -152,9 +174,21 @@ mod tests {
         let mut device = MemoryBlockDevice::try_new(4, data).unwrap();
 
         device.write_at(1, &[1, 2]).unwrap();
-        assert_eq!(&[0xFF, 1, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], device.data().as_slice());
+        assert_eq!(
+            &[
+                0xFF, 1, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF
+            ],
+            device.data().as_slice()
+        );
         device.write_at(1, &[1, 2, 3]).unwrap();
-        assert_eq!(&[0xFF, 1, 2, 3, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], device.data().as_slice());
+        assert_eq!(
+            &[
+                0xFF, 1, 2, 3, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF
+            ],
+            device.data().as_slice()
+        );
     }
 
     #[test]
@@ -163,6 +197,11 @@ mod tests {
         let mut device = MemoryBlockDevice::try_new(4, data).unwrap();
 
         device.write_at(0, &[1, 2, 3, 4]).unwrap();
-        assert_eq!(&[1, 2, 3, 4, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], device.data().as_slice());
+        assert_eq!(
+            &[
+                1, 2, 3, 4, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+            ],
+            device.data().as_slice()
+        );
     }
 }

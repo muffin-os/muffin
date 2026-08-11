@@ -3,8 +3,8 @@ use core::ops::{Deref, DerefMut};
 use bitflags::bitflags;
 
 use crate::{
-    BlockAddress, bytefield, bytefield_field_read, bytefield_field_write, check_is_implemented,
-    InodeAddress,
+    BlockAddress, InodeAddress, bytefield, bytefield_field_read, bytefield_field_write,
+    check_is_implemented,
 };
 
 macro_rules! inode_type {
@@ -216,8 +216,10 @@ impl Inode {
         &mut self.creation_time
     }
 
-    pub fn direct_ptrs(&self) -> impl Iterator<Item=Option<BlockAddress>> + '_ {
-        self.direct_block_ptr.iter().map(|&ptr| BlockAddress::new(ptr))
+    pub fn direct_ptrs(&self) -> impl Iterator<Item = Option<BlockAddress>> + '_ {
+        self.direct_block_ptr
+            .iter()
+            .map(|&ptr| BlockAddress::new(ptr))
     }
 
     pub fn set_direct_ptr(&mut self, index: usize, ptr: Option<BlockAddress>) {

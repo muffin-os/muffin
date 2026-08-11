@@ -1,6 +1,8 @@
+use alloc::sync::Arc;
 use alloc::vec;
 
 pub use mem::*;
+use spin::RwLock;
 
 mod mem;
 
@@ -42,35 +44,17 @@ pub trait BlockDevice {
         }
 
         let sector_size = self.sector_size();
-
-        if offset % buf.len() == 0 && buf.len() == sector_size {
-            // if we read exactly one sector, and that read is aligned, delegate to the device impl
+        if offset.is_multiple_of(sector_size) && buf.len() == sector_size {
             return self.read_sector(offset / sector_size, buf);
         }
 
         let start_sector = offset / sector_size;
         let relative_offset = offset % sector_size;
-        let end_sector = if relative_offset + buf.len() <= sector_size {
-            start_sector
-        } else {
-            (offset + buf.len()) / sector_size
-        };
-        let sector_count = end_sector - start_sector
-            + if relative_offset == 0 && buf.len() % sector_size == 0 && start_sector != end_sector
-        {
-            0
-        } else {
-            1
-        };
+        let end_sector = (offset + buf.len() - 1) / sector_size;
 
-        // read sectors
-        let mut data = vec![0_u8; sector_count * sector_size];
-        for i in 0..sector_count {
-            let start_index = i * sector_size;
-            let end_index = start_index + sector_size;
-            let read_sector_index = start_sector + i;
-
-            self.read_sector(read_sector_index, &mut data[start_index..end_index])?;
+        let mut data = vec![0_u8; (end_sector - start_sector + 1) * sector_size];
+        for (index, sector) in data.chunks_exact_mut(sector_size).enumerate() {
+            self.read_sector(start_sector + index, sector)?;
         }
         buf.copy_from_slice(&data[relative_offset..relative_offset + buf.len()]);
 
@@ -88,61 +72,73 @@ pub trait BlockDevice {
         }
 
         let sector_size = self.sector_size();
-
-        if offset % buf.len() == 0 && buf.len() == sector_size {
-            // if we write exactly one sector, and that write is aligned, delegate to the device impl
+        if offset.is_multiple_of(sector_size) && buf.len() == sector_size {
             return self.write_sector(offset / sector_size, buf);
         }
 
         let start_sector = offset / sector_size;
-        let relative_start_offset = offset % sector_size;
-        let end_sector = if relative_start_offset + buf.len() <= sector_size {
-            start_sector
-        } else {
-            (offset + buf.len()) / sector_size
-        };
-        let relative_end_offset = (relative_start_offset + buf.len()) % sector_size;
-
-        // The write is not aligned, so we have to read the first and last sector, merge
-        // the data with the given buffer, and write the merged data back to the device.
-        // For all other sectors in between, we can write the data directly to the device.
+        let start_offset = offset % sector_size;
+        let end_sector = (offset + buf.len() - 1) / sector_size;
+        let end_offset = offset + buf.len() - end_sector * sector_size;
 
         if start_sector == end_sector {
-            // If we have a read that is shorter than a single sector, read that sector, merge the data
-            // and write it back.
-            let mut first_sector = vec![0_u8; sector_size];
-            self.read_sector(start_sector, &mut first_sector)?;
-            // if we have a 1 sector write and a relative_end_offset of 0, that means we need to write until the end of the sector
-            let actual_end_offset = if relative_end_offset == 0 { sector_size } else { relative_end_offset };
-            first_sector.as_mut_slice()[relative_start_offset..actual_end_offset].copy_from_slice(&buf);
-            return self.write_sector(start_sector, &first_sector);
+            let mut sector = vec![0_u8; sector_size];
+            self.read_sector(start_sector, &mut sector)?;
+            sector[start_offset..end_offset].copy_from_slice(buf);
+            self.write_sector(start_sector, &sector)?;
+            return Ok(buf.len());
         }
 
-        let (mut first_sector, mut last_sector) = {
-            let mut first = vec![0_u8; sector_size];
-            self.read_sector(start_sector, &mut first)?;
-            let mut last = vec![0_u8; sector_size];
-            self.read_sector(end_sector, &mut last)?;
-            (first, last)
-        };
+        let head_len = sector_size - start_offset;
+        if start_offset == 0 {
+            self.write_sector(start_sector, &buf[..sector_size])?;
+        } else {
+            let mut sector = vec![0_u8; sector_size];
+            self.read_sector(start_sector, &mut sector)?;
+            sector[start_offset..].copy_from_slice(&buf[..head_len]);
+            self.write_sector(start_sector, &sector)?;
+        }
 
-        // merge the write data into first[relative_offset..]
-        first_sector.as_mut_slice()[relative_start_offset..].copy_from_slice(&buf[..sector_size - relative_start_offset]);
-        // merge the write data into last[..relative_end_offset]
-        last_sector.as_mut_slice()[..relative_end_offset].copy_from_slice(&buf[buf.len() - relative_end_offset..]);
-        let in_between_data = &buf[sector_size - relative_start_offset..buf.len() - relative_end_offset];
+        let tail_start = buf.len() - end_offset;
+        for (index, chunk) in buf[head_len..tail_start]
+            .chunks_exact(sector_size)
+            .enumerate()
+        {
+            self.write_sector(start_sector + index + 1, chunk)?;
+        }
 
-        // write the first sector
-        self.write_sector(start_sector, &first_sector)?;
-
-        // write the in-between sectors
-        in_between_data.chunks_exact(sector_size).enumerate().try_for_each(|(i, chunk)| {
-            self.write_sector(start_sector + i + 1, chunk).map(|_| ())
-        })?;
-
-        // write the last sector
-        self.write_sector(end_sector, &last_sector)?;
+        if end_offset == sector_size {
+            self.write_sector(end_sector, &buf[tail_start..])?;
+        } else {
+            let mut sector = vec![0_u8; sector_size];
+            self.read_sector(end_sector, &mut sector)?;
+            sector[..end_offset].copy_from_slice(&buf[tail_start..]);
+            self.write_sector(end_sector, &sector)?;
+        }
 
         Ok(buf.len())
+    }
+}
+
+impl<T> BlockDevice for Arc<RwLock<T>>
+where
+    T: BlockDevice + ?Sized,
+{
+    type Error = T::Error;
+
+    fn sector_size(&self) -> usize {
+        self.read().sector_size()
+    }
+
+    fn sector_count(&self) -> usize {
+        self.read().sector_count()
+    }
+
+    fn read_sector(&self, sector_index: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.read().read_sector(sector_index, buf)
+    }
+
+    fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.write().write_sector(sector_index, buf)
     }
 }

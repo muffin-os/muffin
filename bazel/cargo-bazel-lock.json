@@ -1,5 +1,5 @@
 {
-  "checksum": "f6db8b7794057412ecea801d0c89a06b14ce6170615b0a50c9e4a11c632385c0",
+  "checksum": "07276235d6cddb1e660efe87830fb3e73fea2329475c692a70bd6c6ca099b354",
   "crates": {
     "acpi 5.2.0": {
       "name": "acpi",
@@ -1842,16 +1842,6 @@
               "target": "linkme"
             },
             {
-              "id": "mkfs-ext2 0.1.0",
-              "target": "ext2",
-              "alias": "mkfs_ext2"
-            },
-            {
-              "id": "mkfs-filesystem 0.1.0",
-              "target": "filesystem",
-              "alias": "mkfs_filesystem"
-            },
-            {
               "id": "raw-cpuid 11.6.0",
               "target": "raw_cpuid"
             },
@@ -3422,103 +3412,6 @@
         "Unlicense"
       ],
       "license_file": "LICENSE-MIT"
-    },
-    "mkfs-ext2 0.1.0": {
-      "name": "mkfs-ext2",
-      "version": "0.1.0",
-      "package_url": "https://github.com/tsatke/mkfs",
-      "repository": {
-        "Git": {
-          "remote": "https://github.com/tsatke/mkfs",
-          "commitish": {
-            "Rev": "24c1cfba44f360c8d4936f08cee49a34a5e4f916"
-          },
-          "strip_prefix": "ext2"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "ext2",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "ext2",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "bitflags 2.13.1",
-              "target": "bitflags"
-            },
-            {
-              "id": "mkfs-filesystem 0.1.0",
-              "target": "filesystem"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.1.0"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": null
-    },
-    "mkfs-filesystem 0.1.0": {
-      "name": "mkfs-filesystem",
-      "version": "0.1.0",
-      "package_url": "https://github.com/tsatke/mkfs",
-      "repository": {
-        "Git": {
-          "remote": "https://github.com/tsatke/mkfs",
-          "commitish": {
-            "Rev": "24c1cfba44f360c8d4936f08cee49a34a5e4f916"
-          },
-          "strip_prefix": "filesystem"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "filesystem",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "filesystem",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2021",
-        "version": "0.1.0"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": null
     },
     "nu-ansi-term 0.50.3": {
       "name": "nu-ansi-term",
@@ -6781,8 +6674,6 @@
     "limine 0.5.0",
     "linked_list_allocator 0.10.6",
     "linkme 0.3.37",
-    "mkfs-ext2 0.1.0",
-    "mkfs-filesystem 0.1.0",
     "raw-cpuid 11.6.0",
     "rustc-demangle 0.1.28",
     "sha3 0.11.0",

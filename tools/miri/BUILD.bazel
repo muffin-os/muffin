@@ -17,6 +17,7 @@ load(
     "KERNEL_CRATES",
     "MIRI_WORKSPACE_DEPENDENCIES",
     "kernel_crate_closure",
+    "kernel_crate_label",
     "kernel_crate_name",
 )
 
@@ -78,10 +79,10 @@ _CLOSURES = {name: kernel_crate_closure(name) for name in KERNEL_CRATES}
             kernel_crate_name(name),
             "$(rootpath :{}_workspace)".format(name),
         ] + [
-            "{}=$(rootpath :{}_manifest)=kernel/{}".format(
+            "{}=$(rootpath :{}_manifest)={}".format(
                 kernel_crate_name(member),
                 member,
-                member,
+                kernel_crate_label(member)[2:],
             )
             for member in closure
         ],
@@ -92,7 +93,7 @@ _CLOSURES = {name: kernel_crate_closure(name) for name in KERNEL_CRATES}
             ":{}_manifest".format(member)
             for member in closure
         ] + [
-            "//kernel/{}:srcs".format(member)
+            kernel_crate_label(member) + ":srcs"
             for member in closure
         ],
         tags = [

@@ -21,7 +21,7 @@ The project uses a modular Bazel build:
 ├── kernel/
 │   ├── boot/                   # //kernel/boot, the bootable ELF + kernel lib
 │   │   └── linker-x86_64.ld    # Custom linker script
-│   └── <subsystem>/            # //kernel/vfs, //kernel/abi, ... crate kernel_<name>
+│   └── <subsystem>/            # //kernel/abi, //kernel/pci, ... crate kernel_<name>
 ├── userspace/                  # init, fbdemo, minilib, libs/gfx
 ├── tests/                      # QEMU integration tests, test-kernel, test bins
 ├── platforms/                  # The x86_64-unknown-none target platform

@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use filesystem::BlockDevice;
+use kernel_device::block::BlockDevice;
 
 use crate::{BlockAddress, Error, Ext2Fs, Inode, RegularFile};
 
@@ -32,18 +32,28 @@ where
 
         // read blocks
         let mut data: Vec<u8> = vec![0_u8; block_count * block_size as usize]; // TODO: avoid allocation - maybe try to only allocate the first and last block if the read is not aligned, but read the rest directly into the buffer
-        let res = self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?;
+        let res =
+            self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?;
         // copy the data into buf, but only the requested part and only up to the file size
         let total_read = res.min(file_size - offset as usize).min(buf.len());
         buf[..total_read].copy_from_slice(&data[relative_offset..relative_offset + total_read]);
 
-
         Ok(total_read)
     }
 
-    pub(crate) fn read_blocks_from_inode(&self, inode: &Inode, start_block: usize, end_block: usize, buf: &mut [u8]) -> Result<usize, Error> {
+    pub(crate) fn read_blocks_from_inode(
+        &self,
+        inode: &Inode,
+        start_block: usize,
+        end_block: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, Error> {
         let block_size = self.superblock.block_size() as usize;
-        assert_eq!(buf.len(), (end_block - start_block + 1) * block_size, "buf.len() must be equal to the number of blocks you want to read");
+        assert_eq!(
+            buf.len(),
+            (end_block - start_block + 1) * block_size,
+            "buf.len() must be equal to the number of blocks you want to read"
+        );
 
         let (direct_limit, indirect_limit, double_indirect_limit) = self.indirect_pointer_limits();
 
@@ -56,9 +66,15 @@ where
             } else if block < indirect_limit as usize {
                 self.resolve_indirect_ptr(inode.single_indirect_ptr(), block as u32 - direct_limit)?
             } else if block < double_indirect_limit as usize {
-                self.resolve_double_indirect_ptr(inode.double_indirect_ptr(), block as u32 - indirect_limit)?
+                self.resolve_double_indirect_ptr(
+                    inode.double_indirect_ptr(),
+                    block as u32 - indirect_limit,
+                )?
             } else {
-                self.resolve_triple_indirect_ptr(inode.triple_indirect_ptr(), block as u32 - double_indirect_limit)?
+                self.resolve_triple_indirect_ptr(
+                    inode.triple_indirect_ptr(),
+                    block as u32 - double_indirect_limit,
+                )?
             };
             if let Some(block_pointer) = block_pointer {
                 total_read += self.read_block(block_pointer, block_data)?;
@@ -83,23 +99,35 @@ where
             .map(|block| block.is_some())
     }
 
-    pub fn resolve_block_index(&self, inode: &Inode, block_index: u32) -> Result<Option<BlockAddress>, Error> {
+    pub fn resolve_block_index(
+        &self,
+        inode: &Inode,
+        block_index: u32,
+    ) -> Result<Option<BlockAddress>, Error> {
         let (direct_limit, indirect_limit, double_indirect_limit) = self.indirect_pointer_limits();
 
-        Ok(
-            if block_index < direct_limit {
-                inode.direct_ptrs().nth(block_index as usize).flatten()
-            } else if block_index < indirect_limit {
-                self.resolve_indirect_ptr(inode.single_indirect_ptr(), block_index - direct_limit)?
-            } else if block_index < double_indirect_limit {
-                self.resolve_double_indirect_ptr(inode.double_indirect_ptr(), block_index - indirect_limit)?
-            } else {
-                self.resolve_triple_indirect_ptr(inode.triple_indirect_ptr(), block_index - double_indirect_limit)?
-            }
-        )
+        Ok(if block_index < direct_limit {
+            inode.direct_ptrs().nth(block_index as usize).flatten()
+        } else if block_index < indirect_limit {
+            self.resolve_indirect_ptr(inode.single_indirect_ptr(), block_index - direct_limit)?
+        } else if block_index < double_indirect_limit {
+            self.resolve_double_indirect_ptr(
+                inode.double_indirect_ptr(),
+                block_index - indirect_limit,
+            )?
+        } else {
+            self.resolve_triple_indirect_ptr(
+                inode.triple_indirect_ptr(),
+                block_index - double_indirect_limit,
+            )?
+        })
     }
 
-    pub fn resolve_indirect_ptr(&self, indirect_ptr: Option<BlockAddress>, block_index: u32) -> Result<Option<BlockAddress>, Error> {
+    pub fn resolve_indirect_ptr(
+        &self,
+        indirect_ptr: Option<BlockAddress>,
+        block_index: u32,
+    ) -> Result<Option<BlockAddress>, Error> {
         if indirect_ptr.is_none() {
             return Ok(None);
         }
@@ -115,27 +143,45 @@ where
                 .map(u32::from_le_bytes)
                 .map(BlockAddress::new)
                 .nth(block_index as usize)
-                .unwrap() // the amount of pointers is fixed, so this is fine
+                .unwrap(), // the amount of pointers is fixed, so this is fine
         )
     }
 
-    pub fn resolve_double_indirect_ptr(&self, double_indirect_block: Option<BlockAddress>, block_index: u32) -> Result<Option<BlockAddress>, Error> {
+    pub fn resolve_double_indirect_ptr(
+        &self,
+        double_indirect_block: Option<BlockAddress>,
+        block_index: u32,
+    ) -> Result<Option<BlockAddress>, Error> {
         let block_size = self.superblock.block_size();
 
         let single_indirect_block_size = block_size / 4;
         let single_indirect_index = block_index / single_indirect_block_size;
 
         self.resolve_indirect_ptr(double_indirect_block, single_indirect_index)
-            .and_then(|single_indirect_block_ptr| self.resolve_indirect_ptr(single_indirect_block_ptr, block_index % single_indirect_block_size))
+            .and_then(|single_indirect_block_ptr| {
+                self.resolve_indirect_ptr(
+                    single_indirect_block_ptr,
+                    block_index % single_indirect_block_size,
+                )
+            })
     }
 
-    pub fn resolve_triple_indirect_ptr(&self, triple_indirect_block: Option<BlockAddress>, block_index: u32) -> Result<Option<BlockAddress>, Error> {
+    pub fn resolve_triple_indirect_ptr(
+        &self,
+        triple_indirect_block: Option<BlockAddress>,
+        block_index: u32,
+    ) -> Result<Option<BlockAddress>, Error> {
         let block_size = self.superblock.block_size();
 
         let double_indirect_block_size = block_size / 4;
         let double_indirect_index = block_index / double_indirect_block_size;
 
         self.resolve_indirect_ptr(triple_indirect_block, double_indirect_index)
-            .and_then(|double_indirect_block_ptr| self.resolve_double_indirect_ptr(double_indirect_block_ptr, block_index % double_indirect_block_size))
+            .and_then(|double_indirect_block_ptr| {
+                self.resolve_double_indirect_ptr(
+                    double_indirect_block_ptr,
+                    block_index % double_indirect_block_size,
+                )
+            })
     }
 }

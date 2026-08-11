@@ -1,9 +1,8 @@
-use std::env;
 use std::fs::File;
 use std::io::Read;
 
-use ext2::{DirType, Ext2Fs, RegularFile, Type};
-use filesystem::MemoryBlockDevice;
+use kernel_device::block::MemoryBlockDevice;
+use kernel_ext2::{DirType, Ext2Fs, RegularFile, Type};
 
 #[test]
 fn test_list_directory() {
@@ -31,12 +30,11 @@ fn test_list_directory_huge_device_block_size() {
 }
 
 fn do_test_list_directory(sector_size: usize) {
-    let mut image = env::current_dir().unwrap();
-    image.push(&"tests/filesystems/read.img");
+    let image = "kernel/ext2/tests/filesystems/read.img";
 
     let mut data = Vec::new();
 
-    let mut file = File::open(&image).unwrap();
+    let mut file = File::open(image).unwrap();
     assert_eq!(1048576_u64, file.metadata().unwrap().len());
     file.read_to_end(&mut data).unwrap();
 
@@ -45,7 +43,7 @@ fn do_test_list_directory(sector_size: usize) {
     let device = MemoryBlockDevice::try_new(sector_size, data).unwrap();
 
     let fs = Ext2Fs::try_new(device).unwrap();
-    let root = fs.read_root_inode().unwrap().try_into().unwrap();
+    let root = fs.read_root_inode().unwrap().into();
     let entries = fs.list_dir(&root).unwrap();
 
     let expected_entries = [
@@ -57,14 +55,16 @@ fn do_test_list_directory(sector_size: usize) {
     ];
     assert_eq!(expected_entries.len(), entries.len());
     for (inode, name, typ) in expected_entries {
-        assert!(entries
-            .iter()
-            .find(|&entry| {
-                entry.inode().get() == inode
-                    && entry.name().is_some_and(|n| n == name)
-                    && entry.typ() == Some(typ)
-            })
-            .is_some());
+        assert!(
+            entries
+                .iter()
+                .find(|&entry| {
+                    entry.inode().get() == inode
+                        && entry.name().is_some_and(|n| n == name)
+                        && entry.typ() == Some(typ)
+                })
+                .is_some()
+        );
     }
 }
 
@@ -94,19 +94,18 @@ fn test_read_file_huge_device_block_size() {
 }
 
 fn do_test_read_file(sector_size: usize) {
-    let mut image = env::current_dir().unwrap();
-    image.push(&"tests/filesystems/read.img");
+    let image = "kernel/ext2/tests/filesystems/read.img";
 
     let mut data = Vec::new();
 
-    let mut file = File::open(&image).unwrap();
+    let mut file = File::open(image).unwrap();
     assert_eq!(1048576_u64, file.metadata().unwrap().len());
     file.read_to_end(&mut data).unwrap();
 
     let device = MemoryBlockDevice::try_new(sector_size, data).unwrap();
 
     let fs = Ext2Fs::try_new(device).unwrap();
-    let root = fs.read_root_inode().unwrap().try_into().unwrap();
+    let root = fs.read_root_inode().unwrap();
 
     let hello_txt: RegularFile = fs
         .find_and_resolve_entry(&root, |e| e.name().is_some_and(|n| n == "hello.txt"))

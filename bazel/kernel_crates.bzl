@@ -1,24 +1,19 @@
 """Single source of truth for the kernel subsystem crate graph.
 
-Package directory and Rust crate name deliberately differ: //kernel/devfs builds
-crate `kernel_devfs`, because that is what the sources refer to each other by.
-Renaming a directory must not change a crate name.
+Package directory and Rust crate name deliberately differ: //kernel/devfs
+builds crate `kernel_devfs`, because that is what the sources refer to each
+other by. Renaming a directory must not change a crate name.
 """
 
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
-# crate_universe exposes registry packages under their Cargo package name but
-# rewrites git-sourced ones into Rust identifiers, so the label and the package
-# name diverge for exactly these two. Everything below keys off Cargo package
-# names because the Miri shim in //tools/miri writes them into real manifests.
-_GIT_CRATE_LABELS = {
-    "mkfs-ext2": "mkfs_ext2",
-    "mkfs-filesystem": "mkfs_filesystem",
-}
+# crate_universe exposes registry packages under their Cargo package name.
+# Everything below keys off Cargo package names because the Miri shim in
+# //tools/miri writes them into real manifests.
 
 def crate_label(package):
     """Returns the @crates label for a Cargo package name."""
-    return "@crates//" + _GIT_CRATE_LABELS.get(package, package)
+    return "@crates//" + package
 
 # `deps` are sibling kernel crates named by their package name, `crates` are
 # external packages in @crates.
@@ -30,6 +25,7 @@ KERNEL_CRATES = {
     ),
     "device": struct(deps = [], crates = ["spin", "thiserror", "x86_64"]),
     "elfloader": struct(deps = [], crates = ["thiserror", "zerocopy"]),
+    "ext2": struct(deps = ["device"], crates = ["bitflags"]),
     "log": struct(deps = [], crates = ["conquer-once", "spin", "tracing"]),
     "memapi": struct(deps = [], crates = ["x86_64"]),
     "park": struct(deps = [], crates = ["thiserror"]),
@@ -39,7 +35,7 @@ KERNEL_CRATES = {
         deps = ["abi", "vfs"],
         crates = ["spin", "thiserror", "tracing", "x86_64"],
     ),
-    "vfs": struct(deps = ["abi"], crates = ["mkfs-filesystem", "spin", "thiserror"]),
+    "vfs": struct(deps = ["abi"], crates = ["spin", "thiserror"]),
     "virtual_memory": struct(deps = [], crates = ["thiserror", "tracing", "x86_64"]),
 }
 
@@ -139,8 +135,6 @@ jiff = { version = "0.2", default-features = false, features = ["alloc"] }
 limine = "0.5"
 linked_list_allocator = "0.10"
 linkme = "0.3"
-mkfs-ext2 = { git = "https://github.com/tsatke/mkfs", rev = "24c1cfba44f360c8d4936f08cee49a34a5e4f916" }
-mkfs-filesystem = { git = "https://github.com/tsatke/mkfs", rev = "24c1cfba44f360c8d4936f08cee49a34a5e4f916" }
 rustc-demangle = "0.1"
 sha3 = { version = "0.11.0-rc.8", default-features = false }
 spin = "0.10"

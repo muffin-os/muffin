@@ -3,15 +3,14 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 
 use bitflags::bitflags;
+use kernel_device::block::BlockDevice;
 
-use filesystem::BlockDevice;
-
-use crate::{
-    bytefield, bytefield_field_read, bytefield_field_write, check_is_implemented, Directory,
-    Ext2Fs, Inode, InodeAddress, Type,
-};
 use crate::error::Error;
 use crate::superblock::RequiredFeatures;
+use crate::{
+    Directory, Ext2Fs, Inode, InodeAddress, Type, bytefield, bytefield_field_read,
+    bytefield_field_write, check_is_implemented,
+};
 
 impl<T> Ext2Fs<T>
 where
@@ -30,7 +29,7 @@ where
             .required_features()
             .contains(RequiredFeatures::DIRECTORY_ENTRIES_HAVE_TYPE);
 
-        for addr in dir.direct_ptrs().filter_map(|v| v) {
+        for addr in dir.direct_ptrs().flatten() {
             let mut data = vec![0_u8; block_size];
             self.read_block(addr, &mut data)
                 .map_err(|_| Error::DeviceRead)?;
@@ -49,17 +48,11 @@ where
         Ok(entries)
     }
 
-    pub fn find_entry<P>(
-        &self,
-        dir: &Directory,
-        p: P,
-    ) -> Result<Option<DirEntry>, Error>
+    pub fn find_entry<P>(&self, dir: &Directory, p: P) -> Result<Option<DirEntry>, Error>
     where
         P: FnMut(&DirEntry) -> bool,
     {
-        Ok(self.list_dir(dir)?
-            .into_iter()
-            .find(p))
+        Ok(self.list_dir(dir)?.into_iter().find(p))
     }
 
     pub fn find_and_resolve_entry<P>(
@@ -103,7 +96,7 @@ where
         let required_size = DirEntry::size(name.len() as u16);
 
         // find a free slot and insert the entry
-        for block in inode.direct_ptrs().filter_map(|v| v) {
+        for block in inode.direct_ptrs().flatten() {
             let mut block_data = vec![0_u8; block_size];
             self.read_block(block, &mut block_data)?;
 
@@ -124,7 +117,8 @@ where
 
                     // merge the old entry back into the block data
                     let entry_serialized = entry.serialize(dir_entries_have_type);
-                    block_data[offset..offset + entry_serialized.len()].copy_from_slice(&entry_serialized);
+                    block_data[offset..offset + entry_serialized.len()]
+                        .copy_from_slice(&entry_serialized);
 
                     let new_entry_total_size = old_total_size - entry_size;
                     let new_entry_offset = offset + entry_size as usize;
@@ -134,13 +128,18 @@ where
                         inode: inode_address,
                         total_size: new_entry_total_size,
                         name_length: name.len() as u16,
-                        type_indicator: if dir_entries_have_type { Some(typ) } else { None },
+                        type_indicator: if dir_entries_have_type {
+                            Some(typ)
+                        } else {
+                            None
+                        },
                         name_bytes: name.as_bytes().to_vec(),
                     };
 
                     // merge the new entry into the block data
                     let new_entry_serialized = new_entry.serialize(dir_entries_have_type);
-                    block_data[new_entry_offset..new_entry_offset + new_entry_serialized.len()].copy_from_slice(&new_entry_serialized);
+                    block_data[new_entry_offset..new_entry_offset + new_entry_serialized.len()]
+                        .copy_from_slice(&new_entry_serialized);
 
                     // write the block back to the device
                     self.write_block(block, &block_data)?;
@@ -197,8 +196,13 @@ impl DirEntry {
         };
 
         let required_size = Self::size(name_length); // now that we have the name length, we can compute the actual required size
-        debug_assert!(value.len() >= Self::size(name_length) as usize, "need at least {} byte, but have only {}", required_size, value.len());
-        
+        debug_assert!(
+            value.len() >= Self::size(name_length) as usize,
+            "need at least {} byte, but have only {}",
+            required_size,
+            value.len()
+        );
+
         let name_bytes = value[8..8 + name_length as usize].to_vec();
         Self {
             inode: InodeAddress::new(arr.inode).unwrap(),
@@ -228,10 +232,7 @@ impl DirEntry {
     }
 
     pub fn name(&self) -> Option<&str> {
-        match core::str::from_utf8(&self.name_bytes) {
-            Ok(s) => Some(s),
-            Err(_) => None,
-        }
+        core::str::from_utf8(&self.name_bytes).ok()
     }
 
     pub fn typ(&self) -> Option<DirType> {
@@ -295,7 +296,7 @@ impl From<Type> for DirType {
             Type::FIFO => Self::FIFO,
             Type::UnixSocket => Self::UnixSocket,
             Type::SymLink => Self::SymLink,
-            _ => panic!("invalid type")
+            _ => panic!("invalid type"),
         }
     }
 }

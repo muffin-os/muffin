@@ -1,5 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary")
-load("//bazel:kernel_crates.bzl", "crate_label")
+load("//bazel:kernel_crates.bzl", "crate_label", "kernel_crate_label")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -12,10 +12,9 @@ rust_binary(
     platform = "//platforms:x86_64-none",
     deps = [
         "//kernel/boot:lib",
-        "//kernel/device",
-        "//kernel/vfs",
-        crate_label("mkfs-ext2"),
-        crate_label("mkfs-filesystem"),
+        kernel_crate_label("device"),
+        kernel_crate_label("ext2"),
+        kernel_crate_label("vfs"),
         crate_label("spin"),
         crate_label("tracing"),
         crate_label("x86_64"),

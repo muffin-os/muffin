@@ -4,7 +4,7 @@ use core::error::Error;
 use core::fmt::{Debug, Formatter};
 
 use kernel_device::Device;
-use kernel_device::block::{BlockBuf, BlockDevice};
+use kernel_device::block::BlockDevice;
 use kernel_pci::PciAddress;
 use kernel_pci::config::ConfigurationAccess;
 use linkme::distributed_slice;
@@ -70,32 +70,8 @@ impl Device<KernelDeviceId> for VirtioBlockDevice {
     }
 }
 
-impl BlockDevice<KernelDeviceId, 512> for VirtioBlockDevice {
-    fn block_count(&self) -> usize {
-        self.inner.lock().capacity().into_usize()
-    }
-
-    fn read_block(
-        &mut self,
-        block_num: usize,
-        buf: &mut BlockBuf<512>,
-    ) -> Result<(), Box<dyn Error>> {
-        self.inner.lock().read_blocks(block_num, &mut buf[..])?;
-        Ok(())
-    }
-
-    fn write_block(&mut self, block_num: usize, buf: &BlockBuf<512>) -> Result<(), Box<dyn Error>> {
-        self.inner.lock().write_blocks(block_num, &buf[..])?;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<(), Box<dyn Error>> {
-        todo!()
-    }
-}
-
-impl filesystem::BlockDevice for VirtioBlockDevice {
-    type Error = ();
+impl BlockDevice for VirtioBlockDevice {
+    type Error = Box<dyn Error>;
 
     fn sector_size(&self) -> usize {
         512
@@ -106,18 +82,12 @@ impl filesystem::BlockDevice for VirtioBlockDevice {
     }
 
     fn read_sector(&self, sector_index: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.inner
-            .lock()
-            .read_blocks(sector_index, buf)
-            .map(|()| buf.len())
-            .map_err(|_| ())
+        self.inner.lock().read_blocks(sector_index, buf)?;
+        Ok(buf.len())
     }
 
     fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error> {
-        self.inner
-            .lock()
-            .write_blocks(sector_index, buf)
-            .map(|()| buf.len())
-            .map_err(|_| ())
+        self.inner.lock().write_blocks(sector_index, buf)?;
+        Ok(buf.len())
     }
 }

@@ -1,6 +1,6 @@
 use alloc::vec;
 
-use filesystem::BlockDevice;
+use kernel_device::block::BlockDevice;
 
 use crate::{Error, Ext2Fs, RegularFile};
 
@@ -27,7 +27,7 @@ where
         // back to disk (block aligned) as is.
         let data = {
             let mut data = vec![0_u8; block_count * block_size as usize];
-            self.read_blocks_from_inode(&file, start_block as usize, end_block as usize, &mut data)?; // TODO: we don't need to read what will be overwritten anyways
+            self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?; // TODO: we don't need to read what will be overwritten anyways
             // overwrite the part that should be written
             data[relative_offset..relative_offset + buf.len()].copy_from_slice(buf);
             data
@@ -49,7 +49,8 @@ where
                     num_new_allocated_blocks += 1;
 
                     let inode = file.inode_mut();
-                    let free_slot = inode.direct_ptrs()
+                    let free_slot = inode
+                        .direct_ptrs()
                         .enumerate()
                         .find(|(_, ptr)| ptr.is_none())
                         .map(|(i, _)| i);
@@ -65,7 +66,11 @@ where
 
             self.write_block(block_address, chunk)?;
         }
-        debug_assert_eq!(chunks.remainder().len(), 0, "data to write was not block aligned");
+        debug_assert_eq!(
+            chunks.remainder().len(),
+            0,
+            "data to write was not block aligned"
+        );
 
         if file.len() < offset as usize + buf.len() {
             let new_size = offset as usize + buf.len();

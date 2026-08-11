@@ -1,5 +1,5 @@
-use ext2::{Error, Ext2Fs};
-use filesystem::MemoryBlockDevice;
+use kernel_device::block::MemoryBlockDevice;
+use kernel_ext2::{Error, Ext2Fs};
 
 mod common;
 
@@ -13,18 +13,27 @@ generate_tests!(
 );
 
 fn test_create_and_write_file(sector_size: usize) {
-    let mut fs = cow_fs!("tests/filesystems/empty.img", sector_size);
+    let mut fs = cow_fs!("kernel/ext2/tests/filesystems/empty.img", sector_size);
 
     let file_name = "my_file.txt";
     let mut root = fs.read_root_inode().unwrap();
     let mut file = fs.create_regular_file(&mut root, file_name).unwrap();
-    assert!(fs.list_dir(&root).unwrap().iter().find(|e| e.name() == Some(file_name)).is_some());
+    assert!(
+        fs.list_dir(&root)
+            .unwrap()
+            .iter()
+            .find(|e| e.name() == Some(file_name))
+            .is_some()
+    );
     assert_eq!(file.len(), 0);
 
     let data = b"Hello, world!";
     // write `data` until all direct pointers are used
     for i in 0..((1024 * 12) / data.len()) {
-        assert_eq!(fs.write_to_file(&mut file, i * data.len(), data).unwrap(), data.len());
+        assert_eq!(
+            fs.write_to_file(&mut file, i * data.len(), data).unwrap(),
+            data.len()
+        );
     }
 }
 
@@ -38,13 +47,19 @@ generate_tests!(
 );
 
 fn test_create_files(sector_size: usize) {
-    let mut fs = cow_fs!("tests/filesystems/empty.img", sector_size);
+    let mut fs = cow_fs!("kernel/ext2/tests/filesystems/empty.img", sector_size);
 
     let mut root = fs.read_root_inode().unwrap();
     for i in 0..25 {
         let file_name = format!("file_{}.txt", i);
         let file = fs.create_regular_file(&mut root, &file_name).unwrap();
-        assert!(fs.list_dir(&root).unwrap().iter().find(|e| e.name() == Some(&file_name)).is_some());
+        assert!(
+            fs.list_dir(&root)
+                .unwrap()
+                .iter()
+                .find(|e| e.name() == Some(&file_name))
+                .is_some()
+        );
         assert_eq!(file.len(), 0);
     }
 }
@@ -59,12 +74,18 @@ generate_tests!(
 );
 
 fn test_create_file_collision(sector_size: usize) {
-    let mut fs = cow_fs!("tests/filesystems/empty.img", sector_size);
+    let mut fs = cow_fs!("kernel/ext2/tests/filesystems/empty.img", sector_size);
 
     let mut root = fs.read_root_inode().unwrap();
     let file_name = "file.txt";
     let file = fs.create_regular_file(&mut root, file_name).unwrap();
-    assert!(fs.list_dir(&root).unwrap().iter().find(|e| e.name() == Some(file_name)).is_some());
+    assert!(
+        fs.list_dir(&root)
+            .unwrap()
+            .iter()
+            .find(|e| e.name() == Some(file_name))
+            .is_some()
+    );
     assert_eq!(file.len(), 0);
 
     let mut root = fs.read_root_inode().unwrap();

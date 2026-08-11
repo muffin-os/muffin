@@ -1,0 +1,38 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//bazel:kernel_crates.bzl", "kernel_crate")
+
+package(default_visibility = ["//visibility:public"])
+
+kernel_crate("ext2")
+
+rust_test(
+    name = "read_test",
+    srcs = [
+        "tests/common.rs",
+        "tests/read.rs",
+    ],
+    crate_root = "tests/read.rs",
+    data = glob(["tests/filesystems/*.img"]),
+    edition = "2024",
+    size = "small",
+    deps = [
+        ":ext2",
+        "//kernel/device",
+    ],
+)
+
+rust_test(
+    name = "write_test",
+    srcs = [
+        "tests/common.rs",
+        "tests/write.rs",
+    ],
+    crate_root = "tests/write.rs",
+    data = glob(["tests/filesystems/*.img"]),
+    edition = "2024",
+    size = "small",
+    deps = [
+        ":ext2",
+        "//kernel/device",
+    ],
+)

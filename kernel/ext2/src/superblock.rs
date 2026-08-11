@@ -412,7 +412,9 @@ mod tests {
                 optional_features: 0x38,
                 required_features: 2,
                 write_required_features: 3,
-                fsid: [119, 75, 148, 206, 61, 5, 75, 113, 152, 252, 252, 246, 55, 253, 43, 72],
+                fsid: [
+                    119, 75, 148, 206, 61, 5, 75, 113, 152, 252, 252, 246, 55, 253, 43, 72
+                ],
                 volume_name: [0_u8; 16],
                 last_mount_path: [0_u8; 16],
                 compression: 0,

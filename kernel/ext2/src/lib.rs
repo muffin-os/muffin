@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(const_option)]
 #![feature(iter_array_chunks)]
 
 extern crate alloc;
@@ -9,8 +8,8 @@ use alloc::vec;
 pub use address::*;
 pub use dir::*;
 pub use error::*;
-use filesystem::BlockDevice;
 pub use inode::*;
+use kernel_device::block::BlockDevice;
 pub use superblock::*;
 
 use crate::block_group::{BlockGroupDescriptor, BlockGroupDescriptorTable};
@@ -49,10 +48,15 @@ where
             .map_err(|_| Error::UnableToReadSuperblock)?;
 
         let superblock = Superblock::try_from(SuperblockArray::from(superblock_data)).unwrap();
-        let number_of_block_groups = (superblock.num_blocks() + superblock.blocks_per_group() - 1)
-            / superblock.blocks_per_group();
+        let number_of_block_groups = superblock
+            .num_blocks()
+            .div_ceil(superblock.blocks_per_group());
 
-        let bgdt_offset = if superblock.block_size() == 1024 { 2048 } else { superblock.block_size() } as usize;
+        let bgdt_offset = if superblock.block_size() == 1024 {
+            2048
+        } else {
+            superblock.block_size()
+        } as usize;
 
         let mut bgdt_data = vec![0_u8; superblock.block_size() as usize];
         block_device
@@ -76,11 +80,7 @@ where
 
     fn bgdt_offset(&self) -> usize {
         let block_size = self.superblock.block_size() as usize;
-        if block_size == 1024 {
-            2048
-        } else {
-            block_size
-        }
+        if block_size == 1024 { 2048 } else { block_size }
     }
 
     pub fn superblock(&self) -> &Superblock {
@@ -127,7 +127,7 @@ where
 
         let inode_raw = InodeRawArray::from(inode);
         self.block_device
-            .write_at(address, &inode_raw.as_slice())
+            .write_at(address, inode_raw.as_slice())
             .map_err(|_| Error::DeviceWrite)
             .map(|_| ())
     }
@@ -153,16 +153,20 @@ where
     pub fn allocate_block(&mut self) -> Result<Option<BlockAddress>, Error> {
         let blocks_per_group = self.superblock.blocks_per_group();
         self.allocate_resource(blocks_per_group, Self::try_reserve_block_in_group)
-            .map(|block| block.map(BlockAddress::new).flatten())
+            .map(|block| block.and_then(BlockAddress::new))
     }
 
     pub fn allocate_inode(&mut self) -> Result<Option<InodeAddress>, Error> {
         let inodes_per_group = self.superblock.inodes_per_group();
         self.allocate_resource(inodes_per_group, Self::try_reserve_inode_in_group)
-            .map(|inode| inode.map(InodeAddress::new).flatten())
+            .map(|inode| inode.and_then(InodeAddress::new))
     }
 
-    fn allocate_resource<F>(&mut self, resource_per_group: u32, try_reserve_in_group: F) -> Result<Option<u32>, Error>
+    fn allocate_resource<F>(
+        &mut self,
+        resource_per_group: u32,
+        try_reserve_in_group: F,
+    ) -> Result<Option<u32>, Error>
     where
         F: Fn(&mut Self, usize) -> Result<Option<usize>, Error>,
     {
@@ -201,7 +205,8 @@ where
                 .write_at(SUPERBLOCK_OFFSET, superblock_data.as_slice())
                 .map_err(|_| Error::UnableToWriteSuperblock)?;
 
-            let global_resource_num = group_index as u32 * resource_per_group + first_free_resource_index as u32;
+            let global_resource_num =
+                group_index as u32 * resource_per_group + first_free_resource_index as u32;
             return Ok(Some(global_resource_num));
         }
 
@@ -210,17 +215,22 @@ where
 
     fn try_reserve_block_in_group(&mut self, group_index: usize) -> Result<Option<usize>, Error> {
         let bitmap_block = self.bgdt[group_index].block_usage_bitmap_block();
-        let bitmap_block_address = BlockAddress::new(bitmap_block).expect("bgdt does not have valid block address for bitmap block");
+        let bitmap_block_address = BlockAddress::new(bitmap_block)
+            .expect("bgdt does not have valid block address for bitmap block");
         self.try_reserve_in_group_with_bitmap(bitmap_block_address)
     }
 
     fn try_reserve_inode_in_group(&mut self, group_index: usize) -> Result<Option<usize>, Error> {
         let bitmap_block = self.bgdt[group_index].inode_usage_bitmap_block();
-        let bitmap_block_address = BlockAddress::new(bitmap_block).expect("bgdt does not have valid block address for bitmap block");
+        let bitmap_block_address = BlockAddress::new(bitmap_block)
+            .expect("bgdt does not have valid block address for bitmap block");
         self.try_reserve_in_group_with_bitmap(bitmap_block_address)
     }
 
-    fn try_reserve_in_group_with_bitmap(&mut self, bitmap_block: BlockAddress) -> Result<Option<usize>, Error> {
+    fn try_reserve_in_group_with_bitmap(
+        &mut self,
+        bitmap_block: BlockAddress,
+    ) -> Result<Option<usize>, Error> {
         let mut inode_bitmap = vec![0_u8; self.superblock.block_size() as usize];
         self.read_block(bitmap_block, &mut inode_bitmap)?;
 

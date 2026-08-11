@@ -5,8 +5,8 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
-use ext2::{Ext2Fs, Inode, InodeAddress, Type};
-use filesystem::BlockDevice;
+use kernel_device::block::BlockDevice;
+use kernel_ext2::{Ext2Fs, Inode, InodeAddress, Type};
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
 use kernel_vfs::{
@@ -126,7 +126,7 @@ impl<T> VirtualExt2Fs<T>
 where
     T: BlockDevice + Send + Sync,
 {
-    fn find_inode(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, ext2::Error> {
+    fn find_inode(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, kernel_ext2::Error> {
         let root_inode = self.ext2fs.read_root_inode()?;
         self.find_inode_from(path, root_inode.into_inner())
     }
@@ -135,7 +135,7 @@ where
         &self,
         path: &Path,
         starting_point: (InodeAddress, Inode),
-    ) -> Result<Option<(InodeAddress, Inode)>, ext2::Error> {
+    ) -> Result<Option<(InodeAddress, Inode)>, kernel_ext2::Error> {
         let components = path.filenames();
 
         let (mut current_num, mut current) = starting_point;
@@ -194,8 +194,8 @@ impl VirtualExt2Inode {
 }
 
 enum Inner {
-    RegularFile(ext2::RegularFile),
-    Directory(ext2::Directory),
+    RegularFile(kernel_ext2::RegularFile),
+    Directory(kernel_ext2::Directory),
 }
 
 impl AsRef<Inode> for Inner {
