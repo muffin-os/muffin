@@ -28,6 +28,7 @@ jobs:
         with:
           bazelisk-cache: true
           repository-cache: true
+          disk-cache: ${{ github.job }}
       - name: Rustfmt
         run: bazel build --config=rustfmt //...
       - name: Clippy
@@ -50,6 +51,7 @@ jobs:
         with:
           bazelisk-cache: true
           repository-cache: true
+          disk-cache: ${{ github.job }}-${{ matrix.compilation_mode }}
       - name: Install dependencies
         run: |
           sudo apt update
@@ -91,6 +93,7 @@ jobs:
         with:
           bazelisk-cache: true
           repository-cache: true
+          disk-cache: ${{ github.job }}
       # The Miri shim drives rustup, not the Bazel toolchain, and run_miri.sh
       # copies rust-toolchain.toml into the synthesized workspace. The toolchain
       # that actually runs is therefore the pinned one, not floating nightly.
@@ -117,6 +120,7 @@ jobs:
         with:
           bazelisk-cache: true
           repository-cache: true
+          disk-cache: ${{ github.job }}
       - name: Install dependencies
         run: |
           sudo apt update
