@@ -1,12 +1,10 @@
 #![no_std]
 #![no_main]
 
-use core::ffi::c_int;
-
 use minilib::{ENOTTY, FbScreenInfo, IoctlRequest, exit, ioctl, open, write};
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 fn put_u32(n: u32) {
@@ -21,19 +19,19 @@ fn put_u32(n: u32) {
             break;
         }
     }
-    write(1, &buf[i..]);
+    let _ = write(1, &buf[i..]);
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
-    let fd = open("/dev/fb0");
-    if fd < 0 {
+minilib::entry!(main);
+
+fn main() -> i32 {
+    let Ok(fd) = open("/dev/fb0") else {
         puts("fb-ioctl: FAIL open\n");
         exit(1);
-    }
+    };
 
     let mut info = FbScreenInfo::default();
-    if ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info) != 0 {
+    if ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info).is_err() {
         puts("fb-ioctl: FAIL ioctl\n");
         exit(1);
     }
@@ -48,18 +46,17 @@ pub extern "C" fn _start() {
     put_u32(info.bpp);
     puts("\n");
 
-    let spawn_fd = open("/spawn");
-    if spawn_fd < 0 {
+    let Ok(spawn_fd) = open("/spawn") else {
         puts("fb-ioctl: FAIL enotty\n");
         exit(1);
-    }
+    };
     let mut enotty_info = FbScreenInfo::default();
-    if ioctl(spawn_fd, IoctlRequest::FbGetScreenInfo, &mut enotty_info) == -c_int::from(ENOTTY) {
+    if ioctl(spawn_fd, IoctlRequest::FbGetScreenInfo, &mut enotty_info) == Err(ENOTTY) {
         puts("fb-ioctl: enotty ok\n");
     } else {
         puts("fb-ioctl: FAIL enotty\n");
         exit(1);
     }
 
-    exit(0);
+    exit(0)
 }

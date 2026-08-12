@@ -4,18 +4,18 @@
 use minilib::{Stat, Whence, exit, fstat, lseek, open, read, write};
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 const EXPECTED: &[u8] = b"muffin says hi\n";
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
-    let fd = open("/data/hello.txt");
-    if fd < 0 {
+minilib::entry!(main);
+
+fn main() -> i32 {
+    let Ok(fd) = open("/data/hello.txt") else {
         puts("fileio: FAIL\n");
         exit(1);
-    }
+    };
 
     let mut buf = [0u8; 64];
     let mut filled = 0usize;
@@ -25,15 +25,14 @@ pub extern "C" fn _start() {
             puts("fileio: FAIL\n");
             exit(1);
         }
-        let n = read(fd, &mut buf[filled..]);
-        if n < 0 {
+        let Ok(n) = read(fd, &mut buf[filled..]) else {
             puts("fileio: FAIL\n");
             exit(1);
-        }
+        };
         if n == 0 {
             break;
         }
-        filled += n as usize;
+        filled += n;
     }
 
     if &buf[..filled] != EXPECTED {
@@ -43,20 +42,20 @@ pub extern "C" fn _start() {
     puts("fileio: content ok\n");
 
     let mut stat = Stat::default();
-    if fstat(fd, &mut stat) < 0 || stat.size != EXPECTED.len() as u64 {
+    if fstat(fd, &mut stat).is_err() || stat.size != EXPECTED.len() as u64 {
         puts("fileio: FAIL\n");
         exit(1);
     }
 
     // The reads above stopped at end of file, so the offset is the file size.
-    if lseek(fd, 0, Whence::Cur) != EXPECTED.len() as i64 {
+    if lseek(fd, 0, Whence::Cur) != Ok(EXPECTED.len() as u64) {
         puts("fileio: FAIL\n");
         exit(1);
     }
 
     let mut last = [0u8; 1];
-    if lseek(fd, -1, Whence::End) != EXPECTED.len() as i64 - 1
-        || read(fd, &mut last) != 1
+    if lseek(fd, -1, Whence::End) != Ok(EXPECTED.len() as u64 - 1)
+        || read(fd, &mut last) != Ok(1)
         || last[0] != b'\n'
     {
         puts("fileio: FAIL\n");
@@ -64,17 +63,17 @@ pub extern "C" fn _start() {
     }
 
     let mut word = [0u8; 2];
-    if lseek(fd, 12, Whence::Set) != 12 || read(fd, &mut word) != 2 || &word != b"hi" {
+    if lseek(fd, 12, Whence::Set) != Ok(12) || read(fd, &mut word) != Ok(2) || &word != b"hi" {
         puts("fileio: FAIL\n");
         exit(1);
     }
 
     // An offset before the start of the file has no byte to land on.
-    if lseek(fd, -1, Whence::Set) >= 0 {
+    if lseek(fd, -1, Whence::Set).is_ok() {
         puts("fileio: FAIL\n");
         exit(1);
     }
 
     puts("fileio: seek ok\n");
-    exit(0);
+    exit(0)
 }

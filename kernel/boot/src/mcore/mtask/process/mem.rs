@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::slice;
+use core::{mem, slice};
 
 use kernel_vfs::node::VfsNode;
 use kernel_virtual_memory::Segment;
@@ -88,6 +88,31 @@ impl MemoryRegions {
             }
         }
         Ok(())
+    }
+
+    /// Unmaps and drops every region.
+    ///
+    /// # Safety
+    /// Call only while no page of any region
+    /// can fault concurrently, which holds while the process's single task
+    /// runs this.
+    pub unsafe fn clear(&self, address_space: &AddressSpace) {
+        let regions = interrupts::without_interrupts(|| mem::take(&mut *self.regions.lock()));
+        for region in regions {
+            let size = region.size();
+            if size == 0 {
+                continue;
+            }
+            let start = region.addr();
+            let end = start + (size - 1).into_u64();
+            address_space.unmap_range::<Size4KiB>(
+                Page::range_inclusive(
+                    Page::containing_address(start),
+                    Page::containing_address(end),
+                ),
+                |_| {},
+            );
+        }
     }
 }
 

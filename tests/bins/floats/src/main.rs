@@ -20,7 +20,7 @@ use minilib::{SYS_KILL, Signal, exit, getpid, install_handler, write};
 const SPIN: u64 = 20_000_000;
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 fn write_u32(buf: &mut [u8], at: usize, value: u32) -> usize {
@@ -60,7 +60,7 @@ fn print_marker(pid: u32, suffix: &[u8]) {
     len = write_bytes(&mut buf, len, suffix);
     buf[len] = b'\n';
     len += 1;
-    write(1, &buf[..len]);
+    let _ = write(1, &buf[..len]);
 }
 
 fn expect(ok: bool, pass: &str, fail: &str) {
@@ -398,9 +398,10 @@ fn check_signal(pid: u64) -> bool {
     true
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
-    install_handler(Signal::Usr1, clobber_handler);
+minilib::entry!(main);
+
+fn main() -> i32 {
+    let _ = install_handler(Signal::Usr1, clobber_handler);
 
     let pid = getpid() as u64;
     print_marker(pid as u32, b" start");
@@ -426,5 +427,5 @@ pub extern "C" fn _start() {
     );
 
     print_marker(pid as u32, b" done");
-    exit(0);
+    exit(0)
 }

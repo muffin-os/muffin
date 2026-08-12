@@ -14,7 +14,7 @@ use minilib::{
 };
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 fn put_u32(n: u32) {
@@ -29,7 +29,7 @@ fn put_u32(n: u32) {
             break;
         }
     }
-    write(1, &buf[i..]);
+    let _ = write(1, &buf[i..]);
 }
 
 fn put_u64(n: u64) {
@@ -44,13 +44,13 @@ fn put_u64(n: u64) {
             break;
         }
     }
-    write(1, &buf[i..]);
+    let _ = write(1, &buf[i..]);
 }
 
 // monotonic timestamp in microseconds; on failure the zeroed timespec yields 0
 fn now_us() -> u64 {
     let mut tp = Timespec::default();
-    clock_gettime(CLOCK_MONOTONIC, &mut tp);
+    let _ = clock_gettime(CLOCK_MONOTONIC, &mut tp);
     (tp.tv_sec as u64) * 1_000_000 + (tp.tv_nsec as u64) / 1000
 }
 
@@ -105,28 +105,29 @@ fn color_frag(interp: &[f32]) -> u32 {
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
+minilib::entry!(main);
+
+fn main() -> i32 {
     let t = now_us();
     let fd = open("/dev/fb0");
     report("open", t, now_us());
-    if fd < 0 {
+    let Ok(fd) = fd else {
         puts("fbdemo: FAIL open\n");
         exit(1);
-    }
+    };
 
     let mut info = FbScreenInfo::default();
     let t = now_us();
     let ioctl_rc = ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info);
     report("ioctl", t, now_us());
-    if ioctl_rc != 0 {
+    if ioctl_rc.is_err() {
         puts("fbdemo: FAIL ioctl\n");
         exit(1);
     }
 
     let len = info.pitch as usize * info.height as usize;
     let t = now_us();
-    let addr = mmap(
+    let mapped = mmap(
         0,
         len,
         ProtFlags::READ | ProtFlags::WRITE,
@@ -135,10 +136,10 @@ pub extern "C" fn _start() {
         0,
     );
     report("mmap", t, now_us());
-    if addr <= 0 {
+    let Ok(addr) = mapped else {
         puts("fbdemo: FAIL mmap\n");
         exit(1);
-    }
+    };
 
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
     let t = now_us();
@@ -183,7 +184,7 @@ pub extern "C" fn _start() {
     // SAFETY: the mmap covers `len` bytes and is page-aligned, hence u32-aligned.
     // `stride * (height - 1) + width` u32 words stay within that mapping.
     let fb_u32 = unsafe {
-        core::slice::from_raw_parts_mut(addr as usize as *mut u32, stride * (height - 1) + width)
+        core::slice::from_raw_parts_mut(addr.cast::<u32>(), stride * (height - 1) + width)
     };
     // The mapped framebuffer's initial content is undefined and `SoftQueue::new`
     // never clears its target, so uncovered pixels would keep whatever the device
@@ -205,7 +206,7 @@ pub extern "C" fn _start() {
         let t1 = now_us();
         let fsync_rc = fsync(fd);
         let t2 = now_us();
-        if fsync_rc != 0 {
+        if fsync_rc.is_err() {
             puts("fbdemo: FAIL fsync\n");
             exit(1);
         }
@@ -223,5 +224,5 @@ pub extern "C" fn _start() {
     puts("x");
     put_u32(info.height);
     puts("\n");
-    exit(0);
+    exit(0)
 }

@@ -3,12 +3,13 @@
 
 use minilib::{exit, write};
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
+minilib::entry!(main);
+
+fn main() -> i32 {
     let bytes = b"hello from init!\n";
-    write(1, bytes);
+    let _ = write(1, bytes);
     foo();
-    exit(0);
+    exit(0)
 }
 
 fn foo() {

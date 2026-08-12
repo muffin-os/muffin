@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod access;
+pub mod exec;
 pub mod fcntl;
 pub mod mman;
 pub mod signal;

@@ -244,6 +244,16 @@ impl SignalState {
         Ok(old)
     }
 
+    /// POSIX exec semantics. Ignored signals stay ignored, every other action
+    /// falls back to default. The blocked and pending sets survive the exec.
+    pub fn exec_reset(&mut self) {
+        for action in &mut self.actions {
+            if !action.handler.is_ignore() {
+                *action = SigAction::default();
+            }
+        }
+    }
+
     /// Apply a mask change and return the previous mask. `Kill`/`Stop` can
     /// never be blocked, so their bits are always cleared afterwards.
     pub fn sigprocmask(&mut self, how: SigMaskHow, set: Option<SigSet>) -> Result<SigSet, Errno> {
@@ -2023,6 +2033,61 @@ mod tests {
             state.blocked() & Signal::Kill.bit(),
             0,
             "SIGKILL is never in the blocked mask"
+        );
+    }
+
+    #[test]
+    fn exec_reset_drops_caught_handler() {
+        let mut state = SignalState::default();
+        state
+            .sigaction(Signal::Usr1, Some(custom_action(0x1000)))
+            .unwrap();
+        state.exec_reset();
+        assert_eq!(
+            state.sigaction(Signal::Usr1, None).unwrap(),
+            SigAction::default(),
+            "a caught signal returns to its default action across exec"
+        );
+    }
+
+    #[test]
+    fn exec_reset_keeps_ignored() {
+        let mut state = SignalState::default();
+        let ignore = SigAction {
+            handler: SigHandler::IGNORE,
+            mask: 0,
+            flags: SaFlags::default(),
+            restorer: 0,
+        };
+        state.sigaction(Signal::Usr2, Some(ignore)).unwrap();
+        state.exec_reset();
+        assert_eq!(
+            state.sigaction(Signal::Usr2, None).unwrap().handler,
+            SigHandler::IGNORE,
+            "an ignored signal stays ignored across exec"
+        );
+    }
+
+    #[test]
+    fn exec_reset_preserves_blocked_and_pending() {
+        let mut state = SignalState::default();
+        state
+            .sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()))
+            .unwrap();
+        state.set_pending(Signal::Terminate);
+        state
+            .sigaction(Signal::Usr1, Some(custom_action(0x1000)))
+            .unwrap();
+        state.exec_reset();
+        assert_eq!(
+            state.blocked(),
+            Signal::Interrupt.bit(),
+            "the blocked mask survives exec"
+        );
+        assert_eq!(
+            state.sigpending(),
+            Signal::Terminate.bit(),
+            "pending signals survive exec"
         );
     }
 }

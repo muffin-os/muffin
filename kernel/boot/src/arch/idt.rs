@@ -152,22 +152,12 @@ pub extern "sysv64" fn syscall_handler_impl(
     stack_frame: &mut InterruptStackFrame,
     regs: &mut SyscallRegisters,
 ) {
-    // The registers order follow the System V ABI convention
-    let n = regs.rax;
-
-    if n == kernel_abi::SYS_SIGRETURN {
+    if regs.rax == kernel_abi::SYS_SIGRETURN {
         signal::sys_sigreturn(stack_frame, regs);
         return;
     }
 
-    let arg1 = regs.rdi;
-    let arg2 = regs.rsi;
-    let arg3 = regs.rdx;
-    let arg4 = regs.rcx;
-    let arg5 = regs.r8;
-    let arg6 = regs.r9;
-
-    let result = dispatch_syscall(n, arg1, arg2, arg3, arg4, arg5, arg6);
+    let result = dispatch_syscall(stack_frame, regs);
 
     regs.rax = result as usize;
 }

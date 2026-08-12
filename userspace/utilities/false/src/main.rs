@@ -3,7 +3,8 @@
 
 use minilib::exit;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
-    exit(1);
+minilib::entry!(main);
+
+fn main() -> i32 {
+    exit(1)
 }

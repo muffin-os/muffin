@@ -125,28 +125,19 @@ fn map_own_image() -> Option<&'static [u8]> {
     }
 
     let mut path = [0u8; PATH_MAX];
-    let written = crate::exe_path(&mut path);
-    if written <= 0 {
-        return None;
-    }
-    let path = core::str::from_utf8(&path[..written as usize]).ok()?;
+    let written = crate::exe_path(&mut path).ok()?;
+    let path = core::str::from_utf8(&path[..written]).ok()?;
 
-    let fd = crate::open(path);
-    if fd < 0 {
-        return None;
-    }
+    let fd = crate::open(path).ok()?;
 
     let mut stat = Stat::default();
-    if crate::fstat(fd, &mut stat) < 0 || stat.size == 0 {
+    crate::fstat(fd, &mut stat).ok()?;
+    if stat.size == 0 {
         return None;
     }
     let len = stat.size as usize;
 
-    let mapped = crate::mmap(0, len, ProtFlags::READ, MapFlags::PRIVATE, fd as usize, 0);
-    if mapped <= 0 {
-        return None;
-    }
-    let ptr = mapped as usize as *mut u8;
+    let ptr = crate::mmap(0, len, ProtFlags::READ, MapFlags::PRIVATE, fd as usize, 0).ok()?;
 
     LEN.store(len, Relaxed);
     IMAGE.store(ptr, Release);

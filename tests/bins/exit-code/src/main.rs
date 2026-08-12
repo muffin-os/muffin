@@ -4,11 +4,12 @@
 use minilib::{exit, write};
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
+minilib::entry!(main);
+
+fn main() -> i32 {
     puts("exitcode: exiting 42\n");
-    exit(42);
+    exit(42)
 }

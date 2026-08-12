@@ -9,7 +9,7 @@ use minilib::{
 };
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 fn busy_delay_n(n: u64) {
@@ -86,7 +86,7 @@ extern "C" fn on_ack(_signo: Signal) {
 /// Runs in the victim when the driver pings it. The reply is what proves the
 /// victim was scheduled and able to take a signal.
 extern "C" fn on_ping(_signo: Signal) {
-    kill(1, ACK);
+    let _ = kill(1, ACK);
 }
 
 extern "C" fn segv_handler(_signo: Signal) {
@@ -115,19 +115,19 @@ const REPORT_CLAMP: u32 = 99;
 fn role_a() {
     puts("A: start\n");
 
-    install_handler(Signal::Usr1, usr1_handler);
+    let _ = install_handler(Signal::Usr1, usr1_handler);
 
     let usr1_set: SigSet = Signal::Usr1.bit();
-    sigprocmask(SigMaskHow::Block, Some(&usr1_set), None);
-    kill(0, Signal::Usr1);
+    let _ = sigprocmask(SigMaskHow::Block, Some(&usr1_set), None);
+    let _ = kill(0, Signal::Usr1);
 
     let mut pending: SigSet = 0;
-    sigpending(&mut pending);
+    let _ = sigpending(&mut pending);
     if pending & Signal::Usr1.bit() != 0 {
         puts("A: pending ok\n");
     }
 
-    sigprocmask(SigMaskHow::Unblock, Some(&usr1_set), None);
+    let _ = sigprocmask(SigMaskHow::Unblock, Some(&usr1_set), None);
     puts("A: after unblock\n");
 
     let ready = if wait_acks(1, READY_BUDGET) { 1 } else { 0 };
@@ -135,31 +135,31 @@ fn role_a() {
     // A ping answered while B runs normally is the baseline the later phases
     // are compared against.
     let before = acks();
-    kill(2, PING);
+    let _ = kill(2, PING);
     wait_acks(before + 1, ACK_BUDGET);
     let pre = acks().saturating_sub(before).min(REPORT_CLAMP);
 
     // Stop B, let the tick park it, then ping. A stopped process is never
     // scheduled, so the ping stays pending and no ack must arrive.
-    kill(2, Signal::Stop);
+    let _ = kill(2, Signal::Stop);
     spin(SETTLE_BUDGET);
     let before = acks();
-    kill(2, PING);
+    let _ = kill(2, PING);
     spin(NEG_BUDGET);
     let stop = acks().saturating_sub(before).min(REPORT_CLAMP);
 
     // Continue B. The ping left pending across the stop is delivered on resume,
     // so exactly one ack must arrive.
     let before = acks();
-    kill(2, Signal::Continue);
+    let _ = kill(2, Signal::Continue);
     wait_acks(before + 1, ACK_BUDGET);
     let cont = acks().saturating_sub(before).min(REPORT_CLAMP);
 
     // Terminate B, then ping the dead process. No ack must arrive.
-    kill(2, Signal::Terminate);
+    let _ = kill(2, Signal::Terminate);
     spin(SETTLE_BUDGET);
     let before = acks();
-    kill(2, PING);
+    let _ = kill(2, PING);
     spin(NEG_BUDGET);
     let term = acks().saturating_sub(before).min(REPORT_CLAMP);
 
@@ -174,7 +174,7 @@ fn role_a() {
         puts("A: efault ok\n");
     }
 
-    install_handler(Signal::Segfault, segv_handler);
+    let _ = install_handler(Signal::Segfault, segv_handler);
     let null = core::ptr::null::<u8>();
     let _ = unsafe { core::ptr::read_volatile(null) };
 
@@ -184,7 +184,7 @@ fn role_a() {
 fn role_b() -> ! {
     // The ping handler is already armed by `_start`. pid 1 is created before
     // pid 2, so the driver always exists to receive this announcement.
-    kill(1, ACK);
+    let _ = kill(1, ACK);
 
     // Spin in user mode so ticks can deliver the ping handler.
     loop {
@@ -239,7 +239,7 @@ fn print_report(ready: u32, pre: u32, stop: u32, cont: u32, term: u32) {
     len = write_u32(&mut buf, len, term);
     buf[len] = b'\n';
     len += 1;
-    write(1, &buf[..len]);
+    let _ = write(1, &buf[..len]);
 }
 
 fn print_pid(pid: i64) {
@@ -252,19 +252,20 @@ fn print_pid(pid: i64) {
     len = write_u32(&mut buf, len, pid.unsigned_abs() as u32);
     buf[len] = b'\n';
     len += 1;
-    write(1, &buf[..len]);
+    let _ = write(1, &buf[..len]);
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
+minilib::entry!(main);
+
+fn main() -> i32 {
     // Both handshake handlers are armed before any other syscall, and before
     // the role is even known, because the peer may already be running. Signals
     // are delivered at timer ticks, so a peer signal that arrived first
     // reaches the handler this call installs and never the default action.
     // Ordering the ack first matters, it is the only one of the two that can
     // already be pending here.
-    install_handler(ACK, on_ack);
-    install_handler(PING, on_ping);
+    let _ = install_handler(ACK, on_ack);
+    let _ = install_handler(PING, on_ping);
 
     let pid = getpid();
     print_pid(pid);
@@ -277,5 +278,5 @@ pub extern "C" fn _start() {
         }
     }
 
-    exit(0);
+    exit(0)
 }

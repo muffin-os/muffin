@@ -89,6 +89,19 @@ ext2_image(
 )
 
 ext2_image(
+    name = "execve_disk",
+    contents = {
+        "data/hello.txt": _HELLO,
+        "data/notelf.txt": "definitely not an ELF\n",
+        "spawn": "/bin/execve\n",
+    },
+    files = {
+        "//tests/bins:exec_target": "bin/exec-target",
+        "//tests/bins:execve": "bin/execve",
+    },
+)
+
+ext2_image(
     name = "true_false_disk",
     contents = {"spawn": "/bin/true\n/bin/false\n"},
     files = {
@@ -128,6 +141,7 @@ ext2_image(
     )
     for name in [
         "exit_codes",
+        "execve",
         "fb_ioctl",
         "fb_mmap",
         "file_read",

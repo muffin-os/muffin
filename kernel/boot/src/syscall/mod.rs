@@ -15,7 +15,9 @@ use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use tracing::{debug, error};
 use x86_64::VirtAddr;
 use x86_64::instructions::hlt;
+use x86_64::structures::idt::InterruptStackFrame;
 
+use crate::arch::idt::SyscallRegisters;
 use crate::hpet::hpet;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::ExitOutcome;
@@ -24,17 +26,21 @@ use crate::mcore::mtask::task::Task;
 use crate::mcore::mtask::wait::{block_current, reserve, sleep_until, wake};
 
 mod access;
+mod exec;
 
 #[must_use]
-pub fn dispatch_syscall(
-    n: usize,
-    arg1: usize,
-    arg2: usize,
-    arg3: usize,
-    arg4: usize,
-    arg5: usize,
-    arg6: usize,
+pub(crate) fn dispatch_syscall(
+    frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
 ) -> isize {
+    let n = regs.rax;
+    let arg1 = regs.rdi;
+    let arg2 = regs.rsi;
+    let arg3 = regs.rdx;
+    let arg4 = regs.rcx;
+    let arg5 = regs.r8;
+    let arg6 = regs.r9;
+
     let result = match n {
         kernel_abi::SYS_GETCWD => dispatch_sys_getcwd(arg1, arg2),
         kernel_abi::SYS_MMAP => dispatch_sys_mmap(arg1, arg2, arg3, arg4, arg5, arg6),
@@ -54,6 +60,9 @@ pub fn dispatch_syscall(
         kernel_abi::SYS_CLOCK_GETTIME => dispatch_sys_clock_gettime(arg1, arg2),
         kernel_abi::SYS_EXE_PATH => dispatch_sys_exe_path(arg1, arg2),
         kernel_abi::SYS_NANOSLEEP => dispatch_sys_nanosleep(arg1, arg2),
+        kernel_abi::SYS_EXECVE => {
+            exec::dispatch_sys_execve(arg1, arg2, arg3, arg4, arg5, arg6, frame, regs)
+        }
         _ => {
             error!("unimplemented syscall: {} ({n})", syscall_name(n));
             loop {

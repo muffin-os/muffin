@@ -12,7 +12,7 @@ const CHUNK_LEN: usize = 64 * 1024;
 const MIB: u64 = 1024 * 1024;
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 fn put_u64(n: u64) {
@@ -27,12 +27,12 @@ fn put_u64(n: u64) {
             break;
         }
     }
-    write(1, &buf[i..]);
+    let _ = write(1, &buf[i..]);
 }
 
 fn now_us() -> u64 {
     let mut tp = Timespec::default();
-    clock_gettime(CLOCK_MONOTONIC, &mut tp);
+    let _ = clock_gettime(CLOCK_MONOTONIC, &mut tp);
     (tp.tv_sec as u64) * 1_000_000 + (tp.tv_nsec as u64) / 1000
 }
 
@@ -43,15 +43,15 @@ fn fail(what: &str) -> ! {
     exit(1)
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
-    let fd = open(PATH);
-    if fd < 0 {
+minilib::entry!(main);
+
+fn main() -> i32 {
+    let Ok(fd) = open(PATH) else {
         fail("open");
-    }
+    };
 
     let mut stat = Stat::default();
-    if fstat(fd, &mut stat) < 0 {
+    if fstat(fd, &mut stat).is_err() {
         fail("fstat");
     }
 
@@ -59,11 +59,13 @@ pub extern "C" fn _start() {
     let start_us = now_us();
     let mut total = 0_u64;
     while total < stat.size {
-        match read(fd, &mut buf) {
-            0 => break,
-            n if n < 0 => fail("read"),
-            n => total += n as u64,
+        let Ok(n) = read(fd, &mut buf) else {
+            fail("read");
+        };
+        if n == 0 {
+            break;
         }
+        total += n as u64;
     }
     let elapsed_us = now_us().saturating_sub(start_us).max(1);
 
@@ -78,5 +80,5 @@ pub extern "C" fn _start() {
     put_u64(tenth_mib_per_s % 10);
     puts(" MiB/s\n");
 
-    exit(0);
+    exit(0)
 }

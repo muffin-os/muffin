@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use minilib::{catch_unwind, exit, write};
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 static DROPPED: AtomicBool = AtomicBool::new(false);
@@ -27,8 +27,9 @@ impl Drop for DropGuard {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
+minilib::entry!(main);
+
+fn main() -> i32 {
     // Annotating the result keeps `Ok` inhabited. Left to inference the closure
     // returns `!`, and the checks below hold vacuously.
     let result: Result<(), _> = catch_unwind(|| {
@@ -60,5 +61,5 @@ pub extern "C" fn _start() {
         exit(1);
     }
 
-    panic!("escape");
+    panic!("escape")
 }

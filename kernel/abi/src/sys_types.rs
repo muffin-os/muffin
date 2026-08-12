@@ -41,3 +41,10 @@ impl ProcessId {
         self.0
     }
 }
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct StrSlice {
+    pub ptr: usize,
+    pub len: usize,
+}

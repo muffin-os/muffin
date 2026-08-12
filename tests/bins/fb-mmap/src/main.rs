@@ -9,41 +9,39 @@ use minilib::{
 const PATTERN_LEN: usize = 256;
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
-    let fd = open("/dev/fb0");
-    if fd < 0 {
+minilib::entry!(main);
+
+fn main() -> i32 {
+    let Ok(fd) = open("/dev/fb0") else {
         puts("fb-mmap: FAIL open\n");
         exit(1);
-    }
+    };
 
     let mut info = FbScreenInfo::default();
-    if ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info) != 0 {
+    if ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info).is_err() {
         puts("fb-mmap: FAIL ioctl\n");
         exit(1);
     }
 
     let len = info.pitch as usize * info.height as usize;
-    let base = mmap(
+    let Ok(ptr) = mmap(
         0,
         len,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::SHARED,
         fd as usize,
         0,
-    );
-    if base <= 0 {
+    ) else {
         puts("fb-mmap: FAIL mmap\n");
         exit(1);
-    }
+    };
 
     // Stamp a recognizable pattern directly through the user mapping. If the
     // mapping aliases the real device memory, reading the same offsets back
     // through the read syscall must observe these exact bytes.
-    let ptr = base as *mut u8;
     for i in 0..PATTERN_LEN {
         unsafe {
             ptr.add(i).write_volatile((i as u8) ^ 0x5A);
@@ -51,7 +49,7 @@ pub extern "C" fn _start() {
     }
 
     let mut buf = [0u8; PATTERN_LEN];
-    if read(fd, &mut buf) != PATTERN_LEN as i32 {
+    if read(fd, &mut buf) != Ok(PATTERN_LEN) {
         puts("fb-mmap: FAIL readback\n");
         exit(1);
     }
@@ -64,7 +62,10 @@ pub extern "C" fn _start() {
 
     // Shared mapping of a regular ext2 file is unsupported (FileSystem::mmap
     // default rejects it), so the syscall must fail.
-    let spawn_fd = open("/spawn");
+    let Ok(spawn_fd) = open("/spawn") else {
+        puts("fb-mmap: FAIL shared-regular\n");
+        exit(1);
+    };
     if mmap(
         0,
         4096,
@@ -72,7 +73,8 @@ pub extern "C" fn _start() {
         MapFlags::SHARED,
         spawn_fd as usize,
         0,
-    ) >= 0
+    )
+    .is_ok()
     {
         puts("fb-mmap: FAIL shared-regular\n");
         exit(1);
@@ -80,19 +82,17 @@ pub extern "C" fn _start() {
 
     // A private mapping is served by a lazy page-in that reads the device, so
     // the pattern held in the framebuffer must be visible through it.
-    let private = mmap(
+    let Ok(private_ptr) = mmap(
         0,
         4096,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::PRIVATE,
         fd as usize,
         0,
-    );
-    if private <= 0 {
+    ) else {
         puts("fb-mmap: FAIL private-file\n");
         exit(1);
-    }
-    let private_ptr = private as *mut u8;
+    };
     for i in 0..PATTERN_LEN {
         if unsafe { private_ptr.add(i).read_volatile() } != (i as u8) ^ 0x5A {
             puts("fb-mmap: FAIL private-file\n");
@@ -106,11 +106,11 @@ pub extern "C" fn _start() {
         private_ptr.write_volatile(0xFF);
     }
     let mut first = [0u8; 1];
-    if lseek(fd, 0, Whence::Set) != 0 || read(fd, &mut first) != 1 || first[0] != 0x5A {
+    if lseek(fd, 0, Whence::Set) != Ok(0) || read(fd, &mut first) != Ok(1) || first[0] != 0x5A {
         puts("fb-mmap: FAIL private-writeback\n");
         exit(1);
     }
 
     puts("fb-mmap: ok\n");
-    exit(0);
+    exit(0)
 }

@@ -65,4 +65,5 @@ n! {
     SYS_CLOCK_GETTIME = 50,
     SYS_EXE_PATH = 51,
     SYS_NANOSLEEP = 52,
+    SYS_EXECVE = 53,
 }

@@ -15,13 +15,16 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use conquer_once::spin::OnceCell;
 use kernel_abi::ProcessId;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
+use kernel_syscall::exec::build_initial_stack;
 use kernel_syscall::signal::SignalState;
+use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 use tracing::debug;
 use x86_64::VirtAddr;
+use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrameValue;
 use x86_64::structures::paging::{PageSize, Size4KiB};
@@ -40,7 +43,7 @@ use crate::mem::memapi::{LowerHalfAllocation, LowerHalfMemoryApi, Writable};
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
-mod elf;
+pub(crate) mod elf;
 
 pub mod fd;
 pub mod mem;
@@ -109,7 +112,7 @@ pub struct Process {
 
     ppid: RwLock<ProcessId>,
 
-    executable_path: Option<AbsoluteOwnedPath>,
+    executable_path: RwLock<Option<AbsoluteOwnedPath>>,
     executable_segments: RwLock<Vec<LowerHalfAllocation<Writable>>>,
     current_working_directory: RwLock<AbsoluteOwnedPath>,
 
@@ -141,7 +144,7 @@ impl Process {
                 pid,
                 name: "root".to_string(),
                 ppid: RwLock::new(pid),
-                executable_path: None,
+                executable_path: RwLock::new(None),
                 executable_segments: RwLock::new(vec![]),
                 current_working_directory: RwLock::new(ROOT.to_owned()),
                 address_space: None,
@@ -174,7 +177,7 @@ impl Process {
             pid,
             name,
             ppid: RwLock::new(parent_pid),
-            executable_path: executable_path.map(|x| x.as_ref().to_owned()),
+            executable_path: RwLock::new(executable_path.map(|x| x.as_ref().to_owned())),
             executable_segments: RwLock::new(vec![]),
             current_working_directory: RwLock::new(parent.current_working_directory.read().clone()),
             address_space: Some(address_space),
@@ -275,8 +278,12 @@ impl Process {
     }
 
     /// The root process has no executable, so this returns `None` for it.
-    pub fn executable_path(&self) -> Option<&AbsolutePath> {
-        self.executable_path.as_ref().map(AsRef::as_ref)
+    pub fn executable_path(&self) -> Option<AbsoluteOwnedPath> {
+        self.executable_path.read().clone()
+    }
+
+    pub(crate) fn set_executable_path(&self, path: AbsoluteOwnedPath) {
+        *self.executable_path.write() = Some(path);
     }
 
     pub fn telemetry(&self) -> &Telemetry {
@@ -386,66 +393,13 @@ extern "C" fn trampoline(_arg: *mut c_void) {
     let current_process = current_task.process().clone();
 
     let executable_path = current_process
-        .executable_path
-        .as_ref()
+        .executable_path()
         .expect("should have an executable path");
     let node = vfs()
         .write()
-        .open(executable_path)
+        .open(&executable_path)
         .expect("should be able to open executable");
-    let code_ptr = elf::load(&current_process, current_task, &node)
-        .expect("should be able to load executable");
-
-    let mut memapi = LowerHalfMemoryApi::new(current_process.clone());
-    let ustack_allocation = memapi
-        .allocate(
-            Location::Anywhere,
-            Layout::from_size_align(
-                Size4KiB::SIZE.into_usize() * 256,
-                Size4KiB::SIZE.into_usize(),
-            )
-            .unwrap(),
-            UserAccessible::Yes,
-            Guarded::Yes,
-        )
-        .expect("should be able to allocate userspace stack");
-
-    let ustack_top = ustack_allocation.start() + ustack_allocation.len().into_u64();
-    {
-        let mut ustack_guard = current_task.ustack().write();
-        assert!(ustack_guard.is_none(), "ustack should not exist yet");
-        *ustack_guard = Some(ustack_allocation);
-    }
-    assert!(ustack_top.is_aligned(16_u64));
-    // The entry point is an ordinary SysV function, so it expects the shape a
-    // `call` leaves behind, a return address pushed onto a 16 byte aligned stack.
-    // Enter one word below the top so `rsp % 16 == 8` holds. Without it every
-    // 16 byte aligned spill slot the entry point computes lands 8 bytes off and
-    // its first `movaps` raises a general protection fault.
-    let ustack_rsp = ustack_top - 8_u64;
-
-    let fx_area = memapi
-        .allocate(
-            Location::Anywhere,
-            Layout::new::<FxArea>(),
-            UserAccessible::Yes,
-            Guarded::No,
-        )
-        .expect("should be able to allocate fx area");
-    let fx_area_ptr = fx_area.start().as_mut_ptr::<u8>();
-    unsafe {
-        fx_area_ptr.copy_from_nonoverlapping(INITIAL_FX_IMAGE.as_ptr(), INITIAL_FX_IMAGE.len());
-    }
-    {
-        let mut guard = current_task.fx_area().write();
-        assert!(guard.is_none(), "fx area should not exist yet");
-        *guard = Some(fx_area);
-    }
-
-    let sel = ctx.selectors();
-
-    debug!("stack_ptr: {:p}", ustack_rsp.as_ptr::<u8>());
-    debug!("code_ptr: {:p}", code_ptr as *const u8);
+    let validated = elf::validate(&node).expect("should be able to validate executable");
 
     {
         let mut guard = current_process.file_descriptors.write();
@@ -483,12 +437,88 @@ extern "C" fn trampoline(_arg: *mut c_void) {
         );
     }
 
+    let (entry, rsp) = setup_user_image(
+        &current_process,
+        current_task,
+        &validated,
+        &node,
+        &[executable_path.as_str().as_bytes()],
+        &[],
+    )
+    .expect("should be able to load executable");
+
+    let sel = ctx.selectors();
+
+    debug!("stack_ptr: {:p}", rsp.as_ptr::<u8>());
+    debug!("code_ptr: {:p}", entry.as_ptr::<u8>());
+
     let isfv = InterruptStackFrameValue::new(
-        VirtAddr::new(code_ptr as u64),
+        entry,
         sel.user_code,
         RFlags::INTERRUPT_FLAG,
-        ustack_rsp,
+        rsp,
         sel.user_data,
     );
     unsafe { isfv.iretq() };
+}
+
+/// Loads `validated` into the process, replacing the task's user stack, TLS,
+/// and FX state. Returns the entry rip and rsp for Ring 3.
+/// `rsp` points at argc and is 16 byte aligned.
+pub(crate) fn setup_user_image(
+    process: &Arc<Process>,
+    task: &Task,
+    validated: &elf::ValidatedExecutable,
+    node: &VfsNode,
+    argv: &[&[u8]],
+    envp: &[&[u8]],
+) -> Result<(VirtAddr, VirtAddr), elf::LoadExecutableError> {
+    let entry = validated.load(process, task, node)?;
+
+    let mut memapi = LowerHalfMemoryApi::new(process.clone());
+    let mut ustack_allocation = memapi
+        .allocate(
+            Location::Anywhere,
+            Layout::from_size_align(
+                Size4KiB::SIZE.into_usize() * 256,
+                Size4KiB::SIZE.into_usize(),
+            )
+            .map_err(|_| elf::LoadExecutableError::InvalidSizeOrAlign)?,
+            UserAccessible::Yes,
+            Guarded::Yes,
+        )
+        .ok_or(elf::LoadExecutableError::AllocationFailed)?;
+
+    let ustack_top = ustack_allocation.start() + ustack_allocation.len().into_u64();
+    assert!(ustack_top.is_aligned(16_u64));
+    let rsp = build_initial_stack(
+        ustack_allocation.as_mut(),
+        ustack_top.as_u64().into_usize(),
+        argv,
+        envp,
+    )
+    .ok_or(elf::LoadExecutableError::AllocationFailed)?;
+    *task.ustack().write() = Some(ustack_allocation);
+
+    let fx_area = memapi
+        .allocate(
+            Location::Anywhere,
+            Layout::new::<FxArea>(),
+            UserAccessible::Yes,
+            Guarded::No,
+        )
+        .ok_or(elf::LoadExecutableError::AllocationFailed)?;
+    let fx_area_ptr = fx_area.start().as_mut_ptr::<u8>();
+    unsafe {
+        fx_area_ptr.copy_from_nonoverlapping(INITIAL_FX_IMAGE.as_ptr(), INITIAL_FX_IMAGE.len());
+    }
+    *task.fx_area().write() = Some(fx_area);
+    // TS parks the seeded image until the first user FPU instruction. Its #NM
+    // handler restores it, and the scheduler skips saving the live FPU state
+    // into the fresh area while TS is set.
+    unsafe {
+        Cr0::update(|cr0| cr0.insert(Cr0Flags::TASK_SWITCHED));
+    }
+
+    Ok((VirtAddr::new(entry as u64), VirtAddr::new(rsp as u64)))
 }

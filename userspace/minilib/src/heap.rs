@@ -67,16 +67,19 @@ fn grow(heap: &mut Heap, need: usize) {
         } else {
             heap.top() as usize
         };
-        let mapped = mmap(
+        let Ok(mapped) = mmap(
             at,
             chunk,
             ProtFlags::READ | ProtFlags::WRITE,
             MapFlags::ANONYMOUS | MapFlags::PRIVATE | MapFlags::FIXED,
             0,
             0,
-        );
-        // `MAP_FIXED` returns the requested address, so anything else is an errno.
-        if mapped != at as isize {
+        ) else {
+            return;
+        };
+        // `MAP_FIXED` returns the requested address, so anything else means the
+        // fixed reservation failed.
+        if mapped as usize != at {
             return;
         }
         // SAFETY: there is no munmap syscall, so the mapping outlives every use,

@@ -4,30 +4,29 @@
 use minilib::{MapFlags, ProtFlags, exit, mmap, write};
 
 fn puts(msg: &str) {
-    write(1, msg.as_bytes());
+    let _ = write(1, msg.as_bytes());
 }
 
 const PAGE: usize = 4096;
 const LEN: usize = 2 * PAGE;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() {
+minilib::entry!(main);
+
+fn main() -> i32 {
     let prot = ProtFlags::READ | ProtFlags::WRITE;
     let flags = MapFlags::ANONYMOUS | MapFlags::PRIVATE;
 
-    // A zero-length mapping is invalid and must be rejected with a negative errno.
-    if mmap(0, 0, prot, flags, 0, 0) >= 0 {
+    // A zero-length mapping is invalid and must be rejected.
+    if mmap(0, 0, prot, flags, 0, 0).is_ok() {
         puts("mmap: FAIL\n");
         exit(1);
     }
 
-    let addr = mmap(0, LEN, prot, flags, 0, 0);
-    if addr <= 0 {
+    let Ok(base) = mmap(0, LEN, prot, flags, 0, 0) else {
         puts("mmap: FAIL\n");
         exit(1);
-    }
+    };
 
-    let base = addr as usize as *mut u8;
     for i in 0..LEN {
         // Safety: the mapping covers LEN writable bytes starting at base.
         unsafe { core::ptr::write_volatile(base.add(i), (i as u8) ^ 0xA5) };
@@ -42,5 +41,5 @@ pub extern "C" fn _start() {
     }
 
     puts("mmap: ok\n");
-    exit(0);
+    exit(0)
 }

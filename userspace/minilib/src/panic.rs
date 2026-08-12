@@ -115,7 +115,7 @@ impl Write for Stderr {
         // The write syscall rejects a zero-length buffer, and formatters emit empty
         // pieces freely. Passing one on would log a kernel error mid-report.
         if !s.is_empty() {
-            crate::write(2, s.as_bytes());
+            let _ = crate::write(2, s.as_bytes());
         }
         Ok(())
     }
