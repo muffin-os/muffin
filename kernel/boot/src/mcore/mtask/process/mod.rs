@@ -10,7 +10,7 @@ use core::ffi::c_void;
 use core::fmt::{Debug, Formatter};
 use core::ops::{Deref, DerefMut};
 use core::ptr;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use conquer_once::spin::OnceCell;
 use kernel_abi::ProcessId;
@@ -36,8 +36,10 @@ use crate::mcore::mtask::process::mem::MemoryRegions;
 use crate::mcore::mtask::process::telemetry::Telemetry;
 use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
-use crate::mcore::mtask::task::{FxArea, HigherHalfStack, StackAllocationError, Task};
-use crate::mcore::mtask::wait::{TaskUnparkTicket, TaskWaker, unpark_and_enqueue, wake};
+use crate::mcore::mtask::task::{FxArea, HigherHalfStack, StackAllocationError, Task, TaskId};
+use crate::mcore::mtask::wait::{
+    TaskUnparkTicket, TaskWaker, block_current, reserve, sleep_until, unpark_and_enqueue, wake,
+};
 use crate::mem::address_space::AddressSpace;
 use crate::mem::memapi::{LowerHalfAllocation, LowerHalfMemoryApi, Writable};
 use crate::mem::virt::VirtualMemoryAllocator;
@@ -61,23 +63,21 @@ pub fn new_process_id() -> ProcessId {
 /// Everything the process signals lock protects.
 ///
 /// `stop_unpark` lives behind the same lock as the signal state, so stop
-/// parking (tick delivery) and resume (signal generation) are serialized by
-/// construction.
+/// parking (tick delivery) and resume (signal generation or an exec reap)
+/// are serialized by construction.
 #[derive(Default)]
 pub struct Signals {
     state: SignalState,
-    stop_unpark: Option<TaskUnparkTicket>,
+    stop_unpark: Vec<TaskUnparkTicket>,
 }
 
 impl Signals {
-    /// Keeps the unpark ticket of the stop-parked task, so a later
-    /// `Continue` or `Kill` can release it.
     pub fn store_stop_unpark(&mut self, ticket: TaskUnparkTicket) {
-        self.stop_unpark = Some(ticket);
+        self.stop_unpark.push(ticket);
     }
 
-    pub fn resume_stopped_task(&mut self) {
-        if let Some(ticket) = self.stop_unpark.take() {
+    pub fn resume_stopped_tasks(&mut self) {
+        for ticket in self.stop_unpark.drain(..) {
             unpark_and_enqueue(ticket);
         }
     }
@@ -106,6 +106,29 @@ pub enum ExitOutcome {
     Signaled(kernel_abi::Signal),
 }
 
+#[must_use]
+pub enum ParkOutcome {
+    Ready,
+    /// An exec reap targets the caller, which must stop waiting and return.
+    Interrupted,
+}
+
+struct TaskAccounting {
+    live: usize,
+    reap: Option<ReapState>,
+}
+
+struct ReapState {
+    keeper: TaskId,
+    waiter: Option<TaskWaker>,
+}
+
+/// Proof that the calling task is the process's only live task. Constructed
+/// only by [`Process::reap_sibling_tasks`].
+pub struct SoleLiveTask<'p> {
+    _process: &'p Process,
+}
+
 pub struct Process {
     pid: ProcessId,
     name: String,
@@ -129,7 +152,13 @@ pub struct Process {
     /// while holding the signals write guard, the sleeping task takes it
     /// bare, so no inversion exists as long as every accessor is a
     /// self-contained lock-store-unlock.
-    interruptible_waker: Mutex<Option<TaskWaker>>,
+    interruptible_wakers: Mutex<Vec<(TaskId, TaskWaker)>>,
+
+    task_accounting: Mutex<TaskAccounting>,
+    /// Mirror of `task_accounting.reap.is_some()`, so the timer tick pays one
+    /// relaxed load instead of a lock when no exec is in progress.
+    // FIXME: find a better solution than mirroring data
+    reap_active: AtomicBool,
 
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
 
@@ -155,7 +184,12 @@ impl Process {
                 telemetry: Telemetry::default(),
                 memory_regions: MemoryRegions::new(),
                 signals: RwLock::new(Signals::default()),
-                interruptible_waker: Mutex::new(None),
+                interruptible_wakers: Mutex::new(vec![]),
+                task_accounting: Mutex::new(TaskAccounting {
+                    live: 0,
+                    reap: None,
+                }),
+                reap_active: AtomicBool::new(false),
                 file_descriptors: RwLock::new(BTreeMap::new()),
                 exit_outcome: OnceCell::uninit(),
             });
@@ -192,7 +226,12 @@ impl Process {
             telemetry: Telemetry::default(),
             memory_regions: MemoryRegions::new(),
             signals: RwLock::new(Signals::default()),
-            interruptible_waker: Mutex::new(None),
+            interruptible_wakers: Mutex::new(vec![]),
+            task_accounting: Mutex::new(TaskAccounting {
+                live: 0,
+                reap: None,
+            }),
+            reap_active: AtomicBool::new(false),
             file_descriptors: RwLock::new(BTreeMap::new()),
             exit_outcome: OnceCell::uninit(),
         };
@@ -306,18 +345,137 @@ impl Process {
         self.signals.try_write()
     }
 
-    pub fn register_interruptible_waker(&self, waker: TaskWaker) {
-        *self.interruptible_waker.lock() = Some(waker);
+    fn register_interruptible_waker(&self, tid: TaskId, waker: TaskWaker) {
+        self.interruptible_wakers.lock().push((tid, waker));
     }
 
-    pub fn clear_interruptible_waker(&self) {
-        self.interruptible_waker.lock().take();
+    fn clear_interruptible_waker(&self, tid: TaskId) {
+        self.interruptible_wakers.lock().retain(|(t, _)| *t != tid);
     }
 
     pub fn wake_interruptible(&self) {
-        if let Some(waker) = self.interruptible_waker.lock().take() {
+        let wakers = core::mem::take(&mut *self.interruptible_wakers.lock());
+        for (_, waker) in wakers {
             wake(&waker);
         }
+    }
+
+    /// Parks the current task until `should_wake` holds or an exec reap
+    /// targets it, reparking on spurious wakeups. A deadline only arms a
+    /// wakeup, the closure must observe it to end the wait. Parking anywhere
+    /// else hides the task from signal generation and the exec reaper, so
+    /// every blocking syscall must wait through here.
+    pub fn park_current_task(
+        &self,
+        deadline_ns: Option<u64>,
+        mut should_wake: impl FnMut() -> bool,
+    ) -> ParkOutcome {
+        let ctx = ExecutionContext::load();
+        let task = ctx.current_task();
+        debug_assert_eq!(
+            task.process().pid(),
+            self.pid,
+            "parking on a foreign process"
+        );
+        let tid = task.id();
+        loop {
+            if self.reap_requested_for(tid) {
+                return ParkOutcome::Interrupted;
+            }
+            if should_wake() {
+                return ParkOutcome::Ready;
+            }
+            let (park_ticket, unpark_ticket) = reserve().split();
+            let waker = unpark_ticket.into_waker();
+            if let Some(deadline_ns) = deadline_ns {
+                sleep_until(deadline_ns, waker.clone());
+            }
+            self.register_interruptible_waker(tid, waker.clone());
+            if should_wake() || self.reap_requested_for(tid) {
+                wake(&waker);
+            }
+            block_current(park_ticket);
+            self.clear_interruptible_waker(tid);
+        }
+    }
+
+    pub(in crate::mcore::mtask) fn register_task(&self) {
+        self.task_accounting.lock().live += 1;
+    }
+
+    pub(in crate::mcore::mtask) fn retire_task(&self) {
+        let mut acc = self.task_accounting.lock();
+        acc.live -= 1;
+        if acc.live == 1
+            && let Some(reap) = &mut acc.reap
+            && let Some(waker) = reap.waiter.take()
+        {
+            wake(&waker);
+        }
+    }
+
+    /// True when an exec reap targets `tid`. An observer must exit at its
+    /// next safe point.
+    pub(crate) fn reap_requested_for(&self, tid: TaskId) -> bool {
+        if !self.reap_active.load(Ordering::Acquire) {
+            return false;
+        }
+        self.task_accounting
+            .lock()
+            .reap
+            .as_ref()
+            .is_some_and(|r| r.keeper != tid)
+    }
+
+    /// Requests termination of every other task of the process and parks
+    /// until the cleanup task has retired them, per POSIX exec semantics.
+    /// A caller that is itself a reap target never returns, it exits here.
+    pub fn reap_sibling_tasks(&self, keeper: TaskId) -> SoleLiveTask<'_> {
+        {
+            let mut acc = self.task_accounting.lock();
+            match &acc.reap {
+                Some(reap) if reap.keeper != keeper => {
+                    drop(acc);
+                    Task::exit();
+                    unreachable!("a reaped task never returns from exit");
+                }
+                Some(_) => {}
+                None => {
+                    acc.reap = Some(ReapState {
+                        keeper,
+                        waiter: None,
+                    });
+                    self.reap_active.store(true, Ordering::Release);
+                }
+            }
+        }
+
+        self.signals_write().resume_stopped_tasks();
+        self.wake_interruptible();
+
+        loop {
+            if self.task_accounting.lock().live == 1 {
+                return SoleLiveTask { _process: self };
+            }
+            let (park_ticket, unpark_ticket) = reserve().split();
+            let waker = unpark_ticket.into_waker();
+            {
+                let mut acc = self.task_accounting.lock();
+                if acc.live == 1 {
+                    wake(&waker);
+                } else if let Some(reap) = &mut acc.reap {
+                    reap.waiter = Some(waker.clone());
+                }
+            }
+            block_current(park_ticket);
+        }
+    }
+
+    /// Skipping this after [`Process::reap_sibling_tasks`] would kill every
+    /// task the process creates later.
+    pub fn finish_reap(&self) {
+        self.reap_active.store(false, Ordering::Release);
+        self.task_accounting.lock().reap = None;
     }
 
     /// Records the first terminating event. A process that exits while being

@@ -50,13 +50,12 @@ pub fn dispatch_sys_execve(
     let process = ctx.current_process().clone();
     let task = ctx.current_task();
 
-    task.tls().write().take();
+    let sole = process.reap_sibling_tasks(task.id());
+
+    task.free_user_allocations();
     FsBase::write(VirtAddr::zero());
-    task.ustack().write().take();
     process.executable_segments().write().clear();
-    unsafe {
-        process.memory_regions().clear(process.address_space());
-    }
+    process.memory_regions().clear(process.address_space(), &sole);
 
     let argv_refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     let envp_refs: Vec<&[u8]> = envp.iter().map(Vec::as_slice).collect();
@@ -67,6 +66,7 @@ pub fn dispatch_sys_execve(
     };
 
     process.set_executable_path(path);
+    process.finish_reap();
     process.signals_write().exec_reset();
 
     let sel = ctx.selectors();

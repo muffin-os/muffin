@@ -102,6 +102,19 @@ ext2_image(
 )
 
 ext2_image(
+    name = "execve_reap_disk",
+    contents = {
+        "data/hello.txt": _HELLO,
+        "exec-sibling": "1\n",
+        "spawn": "/bin/execve-reap\n",
+    },
+    files = {
+        "//tests/bins:exec_target": "bin/exec-target",
+        "//tests/bins:execve_reap": "bin/execve-reap",
+    },
+)
+
+ext2_image(
     name = "true_false_disk",
     contents = {"spawn": "/bin/true\n/bin/false\n"},
     files = {
@@ -142,6 +155,7 @@ ext2_image(
     for name in [
         "exit_codes",
         "execve",
+        "execve_reap",
         "fb_ioctl",
         "fb_mmap",
         "file_read",

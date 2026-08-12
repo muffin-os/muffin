@@ -13,6 +13,7 @@ use x86_64::instructions::interrupts;
 use x86_64::structures::paging::mapper::MapToError;
 use x86_64::structures::paging::{Page, PageSize, PageTableFlags, Size4KiB};
 
+use super::SoleLiveTask;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
 use crate::mem::virt::OwnedSegment;
@@ -90,13 +91,9 @@ impl MemoryRegions {
         Ok(())
     }
 
-    /// Unmaps and drops every region.
-    ///
-    /// # Safety
-    /// Call only while no page of any region
-    /// can fault concurrently, which holds while the process's single task
-    /// runs this.
-    pub unsafe fn clear(&self, address_space: &AddressSpace) {
+    /// `_proof` guarantees no other task of the process is live, so no
+    /// region can fault concurrently while it is torn down.
+    pub fn clear(&self, address_space: &AddressSpace, _proof: &SoleLiveTask<'_>) {
         let regions = interrupts::without_interrupts(|| mem::take(&mut *self.regions.lock()));
         for region in regions {
             let size = region.size();

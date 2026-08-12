@@ -20,10 +20,9 @@ use x86_64::structures::idt::InterruptStackFrame;
 use crate::arch::idt::SyscallRegisters;
 use crate::hpet::hpet;
 use crate::mcore::context::ExecutionContext;
-use crate::mcore::mtask::process::ExitOutcome;
+use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome};
 use crate::mcore::mtask::process::mem::PageInError;
 use crate::mcore::mtask::task::Task;
-use crate::mcore::mtask::wait::{block_current, reserve, sleep_until, wake};
 
 mod access;
 mod exec;
@@ -421,12 +420,17 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
     let deadline = hpet().read().elapsed_ns().saturating_add(duration_ns);
     let process = ExecutionContext::load().current_process().clone();
 
-    loop {
-        let now = hpet().read().elapsed_ns();
-        if now >= deadline {
-            return Ok(0);
-        }
-        if process.signals_read().has_interrupting_deliverable() {
+    let outcome = process.park_current_task(Some(deadline), || {
+        hpet().read().elapsed_ns() >= deadline
+            || process.signals_read().has_interrupting_deliverable()
+    });
+
+    let now = hpet().read().elapsed_ns();
+    if now >= deadline {
+        return Ok(0);
+    }
+    match outcome {
+        ParkOutcome::Ready => {
             // POSIX allows a null rem, which skips the remainder writeback.
             if rem != 0 {
                 let left = deadline - now;
@@ -438,22 +442,9 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
                     },
                 )?;
             }
-            return Err(EINTR);
+            Err(EINTR)
         }
-        // The re-check plus self-wake closes the lost-wakeup window. A kill
-        // before the registration found no waker, but its pending bit is
-        // visible here, and the self-wake makes the park fail so the
-        // scheduler bounces the task straight back. There is no way to skip
-        // the park, an unconsumed park ticket would leak its slot.
-        let (park_ticket, unpark_ticket) = reserve().split();
-        let waker = unpark_ticket.into_waker();
-        sleep_until(deadline, waker.clone());
-        process.register_interruptible_waker(waker.clone());
-        if process.signals_read().has_interrupting_deliverable() {
-            wake(&waker);
-        }
-        block_current(park_ticket);
-        process.clear_interruptible_waker();
+        ParkOutcome::Interrupted => Err(EINTR),
     }
 }
 

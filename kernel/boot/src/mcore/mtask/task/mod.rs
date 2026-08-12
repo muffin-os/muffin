@@ -113,6 +113,7 @@ impl Task {
         let tid = TaskId::new();
         let name = format!("task-{tid}");
         let process = process.clone();
+        process.register_task();
         let should_terminate = AtomicBool::new(false);
         let state = State::Ready;
         let last_stack_ptr = Box::pin(stack.initial_rsp().as_u64().into_usize());
@@ -138,6 +139,7 @@ impl Task {
         let tid = TaskId::new();
         let name = "stub".to_string();
         let process = Process::root().clone();
+        process.register_task();
         let should_terminate = AtomicBool::new(false);
         let last_stack_ptr = Box::pin(0);
         let state = State::Finished;
@@ -159,6 +161,14 @@ impl Task {
         }
     }
 
+    /// The drops unmap lower-half pages, so the owning process's address
+    /// space must be active on this CPU.
+    pub fn free_user_allocations(&self) {
+        let _ = self.fx_area.write().take();
+        let _ = self.tls.write().take();
+        let _ = self.ustack.write().take();
+    }
+
     pub(crate) extern "C" fn exit() {
         Self::exit_current()
     }
@@ -173,9 +183,7 @@ impl Task {
             task.tls.force_write_unlock();
             task.fx_area.force_write_unlock();
 
-            let _ = task.fx_area.write().take();
-            let _ = task.tls.write().take();
-            let _ = task.ustack.write().take();
+            task.free_user_allocations();
 
             task.set_should_terminate(true);
         }
@@ -207,6 +215,7 @@ impl Task {
         let tid = TaskId::new();
         let name = format!("task-{tid}");
         let process = Process::root().clone();
+        process.register_task();
         let should_terminate = AtomicBool::new(false);
         let last_stack_ptr = Box::pin(0);
         let state = State::Running;
@@ -300,5 +309,11 @@ impl Task {
 
     pub fn last_stack_ptr(&mut self) -> &mut usize {
         self.last_stack_ptr.as_mut().get_mut()
+    }
+}
+
+impl Drop for Task {
+    fn drop(&mut self) {
+        self.process.retire_task();
     }
 }

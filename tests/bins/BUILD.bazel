@@ -14,6 +14,7 @@ package(default_visibility = ["//visibility:public"])
     for name, directory in {
         "exec_target": "exec-target",
         "execve": "execve",
+        "execve_reap": "execve-reap",
         "exit_code": "exit-code",
         "fb_ioctl": "fb-ioctl",
         "fb_mmap": "fb-mmap",

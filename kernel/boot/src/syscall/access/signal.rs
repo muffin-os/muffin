@@ -82,7 +82,7 @@ impl SignalAccess for KernelAccess<'_> {
         }
         if effect.resume_tasks {
             info!("continuing process {pid}");
-            guard.resume_stopped_task();
+            guard.resume_stopped_tasks();
         }
         // Spurious wakes are by design, the woken task re-checks its condition.
         process.wake_interruptible();

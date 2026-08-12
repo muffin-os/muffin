@@ -183,9 +183,7 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
                 drop(guard);
                 // free the user allocations while this address space is active
                 let task = ctx.current_task();
-                let _ = task.fx_area().write().take();
-                let _ = task.tls().write().take();
-                let _ = task.ustack().write().take();
+                task.free_user_allocations();
                 task.set_should_terminate(true);
                 return;
             }
@@ -207,6 +205,16 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
             }
         }
     }
+}
+
+pub fn reap_current_if_requested(ctx: &ExecutionContext) -> bool {
+    let task = ctx.current_task();
+    if !task.process().reap_requested_for(task.id()) {
+        return false;
+    }
+    task.free_user_allocations();
+    task.set_should_terminate(true);
+    true
 }
 
 /// Restore the context a handler was entered from. Reads the frame the handler

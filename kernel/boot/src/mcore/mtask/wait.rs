@@ -47,7 +47,7 @@ pub fn unpark_and_enqueue(ticket: TaskUnparkTicket) {
 /// # Panics
 /// Panics when the task already holds a park ticket. Only a kernel bug can
 /// park one task twice.
-pub fn block_current(ticket: TaskParkTicket) {
+pub(in crate::mcore::mtask) fn block_current(ticket: TaskParkTicket) {
     let ctx = ExecutionContext::load();
     let parked = ctx.current_task().set_park_ticket(ticket);
     assert!(

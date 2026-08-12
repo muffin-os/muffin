@@ -160,6 +160,12 @@ pub extern "sysv64" fn syscall_handler_impl(
     let result = dispatch_syscall(stack_frame, regs);
 
     regs.rax = result as usize;
+
+    let ctx = ExecutionContext::load();
+    let task = ctx.current_task();
+    if task.process().reap_requested_for(task.id()) {
+        Task::exit();
+    }
 }
 
 pub extern "sysv64" fn timer_interrupt_handler_impl(
@@ -172,13 +178,17 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
 
     wake_expired_sleepers();
 
+    let ctx = ExecutionContext::load();
+
     // only deliver signals when we're in userspace
-    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3
+        && !signal::reap_current_if_requested(ctx)
+    {
         signal::deliver_pending(stack_frame, regs);
     }
 
     unsafe {
-        ExecutionContext::load().scheduler_mut().reschedule();
+        ctx.scheduler_mut().reschedule();
     }
 }
 

@@ -13,7 +13,7 @@ use kernel::file::ext2::VirtualExt2Fs;
 use kernel::file::vfs;
 use kernel::limine::BASE_REVISION;
 use kernel::mcore;
-use kernel::mcore::mtask::process::{ExitOutcome, Process};
+use kernel::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use kernel::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use kernel::mcore::mtask::task::Task;
 use kernel_ext2::Ext2Fs;
@@ -98,6 +98,21 @@ unsafe extern "C" fn main() -> ! {
         }
         kernel::serial_println!("test-kernel: spawn complete count={}", pending.len());
 
+        // No thread syscall exists, so the reap target is attached here,
+        // opt-in through the marker file.
+        if let Ok(marker) = AbsolutePath::try_new("/exec-sibling")
+            && vfs().write().open(marker).is_ok()
+        {
+            let target = pending
+                .first()
+                .expect("manifest must spawn a process")
+                .clone();
+            let task = Task::create_new(&target, exec_sibling, ptr::null_mut())
+                .expect("should be able to create the exec sibling task");
+            kernel::serial_println!("test-kernel: sibling attached pid={}", target.pid());
+            GlobalTaskQueue::enqueue(Box::pin(task));
+        }
+
         // The other CPUs run the scheduler, so CPU 0 can poll here without
         // stalling user tasks.
         while !pending.is_empty() {
@@ -177,4 +192,21 @@ extern "C" fn overflow_kernel_stack(_: *mut c_void) {
     }
 
     core::hint::black_box(recurse(0));
+}
+
+/// Parks like a task blocked in a syscall, so the execve reaper must wake it
+/// before it can observe the termination request. Returning falls into
+/// `Task::exit`, which the task stack seeds as the return address.
+extern "C" fn exec_sibling(_: *mut c_void) {
+    let ctx = kernel::mcore::context::ExecutionContext::load();
+    let task = ctx.current_task();
+    let process = task.process().clone();
+    match process.park_current_task(None, || false) {
+        ParkOutcome::Interrupted => {
+            kernel::serial_println!("test-kernel: sibling terminating");
+        }
+        ParkOutcome::Ready => {
+            kernel::serial_println!("test-kernel: sibling woke without a reap");
+        }
+    }
 }
