@@ -42,10 +42,7 @@ pub fn run() {
     check::group("execve");
 
     let arg = "x";
-    let argv = [StrSlice {
-        ptr: arg.as_ptr() as usize,
-        len: arg.len(),
-    }];
+    let argv = [StrSlice::from(arg)];
     let argv_ptr = argv.as_ptr() as usize;
 
     let long = vec![b'a'; 256];
@@ -70,7 +67,7 @@ pub fn run() {
         elapsed_nanos(&start, &end) <= SLOW_LIMIT_NANOS,
     );
 
-    let empty = vec![StrSlice { ptr: 0, len: 0 }; 10_000];
+    let empty = vec![unsafe { StrSlice::from_raw(0, 0) }; 10_000];
     check::expect_errno(
         "execve/many_empty_args_within_budget",
         raw_execve(MISSING, empty.as_ptr() as usize, empty.len(), 0, 0),
@@ -97,10 +94,7 @@ pub fn run() {
     );
 
     let nul = "a\0b";
-    let nul_argv = [StrSlice {
-        ptr: nul.as_ptr() as usize,
-        len: nul.len(),
-    }];
+    let nul_argv = [StrSlice::from(nul)];
     check::expect_errno(
         "execve/embedded_nul",
         raw_execve(MISSING, nul_argv.as_ptr() as usize, 1, 0, 0),
@@ -108,13 +102,7 @@ pub fn run() {
     );
 
     let blob = vec![b'a'; 2000];
-    let fat = vec![
-        StrSlice {
-            ptr: blob.as_ptr() as usize,
-            len: blob.len(),
-        };
-        100
-    ];
+    let fat = vec![unsafe { StrSlice::from_raw(blob.as_ptr() as usize, blob.len()) }; 100];
     check::expect_errno(
         "execve/arg_bytes_over_budget",
         raw_execve(MISSING, fat.as_ptr() as usize, fat.len(), 0, 0),

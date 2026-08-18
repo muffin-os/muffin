@@ -139,21 +139,22 @@ impl ExecArgs {
 
             for i in 0..count {
                 let slot = unsafe { (ptr as *const StrSlice).add(i).read_unaligned() };
+                let (slot_ptr, slot_len) = (slot.ptr(), slot.len());
                 budget = budget
-                    .saturating_add(slot.len)
+                    .saturating_add(slot_len)
                     .saturating_add(STACK_BYTES_PER_ARG);
                 if budget > ARG_MAX {
                     return Err(E2BIG);
                 }
-                if slot.len > 0 {
-                    make_user_range_resident(slot.ptr, slot.len, UserAccess::Read)?;
-                    let src = unsafe { slice_from_ptr_and_len::<u8>(slot.ptr, slot.len) }?;
+                if !slot.is_empty() {
+                    make_user_range_resident(slot_ptr, slot_len, UserAccess::Read)?;
+                    let src = unsafe { slice_from_ptr_and_len::<u8>(slot_ptr, slot_len) }?;
                     if src.contains(&0) {
                         return Err(EINVAL);
                     }
                     bytes.extend_from_slice(src);
                 }
-                lens.push(slot.len);
+                lens.push(slot_len);
             }
         }
 

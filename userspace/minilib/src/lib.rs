@@ -291,17 +291,11 @@ pub fn open(path: &str) -> Result<c_int, Errno> {
 pub fn execve(path: &str, argv: &[&str], envp: &[&str]) -> Errno {
     let argv_v = argv
         .iter()
-        .map(|s| StrSlice {
-            ptr: s.as_ptr() as usize,
-            len: s.len(),
-        })
+        .map(|&s| StrSlice::from(s))
         .collect::<Vec<_>>();
     let envp_v = envp
         .iter()
-        .map(|s| StrSlice {
-            ptr: s.as_ptr() as usize,
-            len: s.len(),
-        })
+        .map(|&s| StrSlice::from(s))
         .collect::<Vec<_>>();
     let raw = syscall6(
         SYS_EXECVE,

@@ -1,4 +1,5 @@
 use core::fmt::{Display, Formatter};
+use core::marker::PhantomData;
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -44,7 +45,48 @@ impl ProcessId {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct StrSlice {
-    pub ptr: usize,
-    pub len: usize,
+pub struct StrSlice<'a> {
+    ptr: usize,
+    len: usize,
+    _life: PhantomData<&'a str>,
+}
+
+impl<'a> From<&'a str> for StrSlice<'a> {
+    fn from(s: &'a str) -> Self {
+        Self {
+            ptr: s.as_ptr() as usize,
+            len: s.len(),
+            _life: PhantomData,
+        }
+    }
+}
+
+impl StrSlice<'_> {
+    /// # Safety
+    ///
+    /// For nonzero `len`, `ptr..ptr + len` must stay valid and unchanged for
+    /// the chosen lifetime.
+    #[must_use]
+    pub const unsafe fn from_raw(ptr: usize, len: usize) -> Self {
+        Self {
+            ptr,
+            len,
+            _life: PhantomData,
+        }
+    }
+
+    #[must_use]
+    pub const fn ptr(&self) -> usize {
+        self.ptr
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
