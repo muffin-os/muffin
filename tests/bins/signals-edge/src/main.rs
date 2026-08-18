@@ -5,9 +5,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use minilib::{
     EFAULT, EINVAL, ESRCH, SYS_KILL, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN,
-    SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal, exit, getpid, install_handler,
-    kill, sigaction, sigprocmask, sigreturn_restorer, syscall0, syscall1, syscall2, syscall3,
-    write,
+    SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal, getpid, install_handler, kill,
+    println, sigaction, sigprocmask, sigreturn_restorer, syscall0, syscall1, syscall2, syscall3,
 };
 
 const PUMP_SPIN: u64 = 2_000_000;
@@ -18,10 +17,6 @@ const NEG_BUDGET: u32 = 40;
 static URGENT_RUNS: AtomicU32 = AtomicU32::new(0);
 static WINCH_RUNS: AtomicU32 = AtomicU32::new(0);
 static CHILD_RUNS: AtomicU32 = AtomicU32::new(0);
-
-fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
 
 fn busy_delay_n(n: u64) {
     let mut counter: u64 = 0;
@@ -76,7 +71,7 @@ extern "C" fn winch_handler(_signo: Signal) {
         let _ = kill(1, Signal::WindowChanged);
         spin(NEG_BUDGET);
         if WINCH_RUNS.load(Ordering::SeqCst) == 1 {
-            puts("A: defer ok\n");
+            println!("A: defer ok");
         }
     }
 }
@@ -86,7 +81,7 @@ extern "C" fn child_handler(_signo: Signal) {
     if run == 1 {
         let _ = kill(1, Signal::Child);
         if wait_runs(&CHILD_RUNS, 2, NEST_BUDGET) {
-            puts("A: nodefer nested ok\n");
+            println!("A: nodefer nested ok");
         }
     }
 }
@@ -94,33 +89,33 @@ extern "C" fn child_handler(_signo: Signal) {
 extern "C" fn noop_handler(_signo: Signal) {}
 
 extern "C" fn b_segv_handler(_signo: Signal) {
-    puts("B: UNREACHABLE\n");
+    println!("B: UNREACHABLE");
 }
 
 fn role_a() {
-    puts("A: start\n");
+    println!("A: start");
 
     if syscall2(SYS_KILL, 1, 0) == 0 {
-        puts("A: sig0 self ok\n");
+        println!("A: sig0 self ok");
     }
 
     if syscall2(SYS_KILL, 999, 0) as isize == -isize::from(ESRCH) {
-        puts("A: sig0 esrch ok\n");
+        println!("A: sig0 esrch ok");
     }
 
     if syscall2(SYS_KILL, 1, Signal::COUNT + 1) as isize == -isize::from(EINVAL) {
-        puts("A: kill einval ok\n");
+        println!("A: kill einval ok");
     }
 
     if syscall3(SYS_SIGPROCMASK, 99, 0, 0) as isize == -isize::from(EINVAL) {
-        puts("A: how einval ok\n");
+        println!("A: how einval ok");
     }
 
     let protected = custom_action(noop_handler, SaFlags::default());
     let kill_rc = sigaction(Signal::Kill, Some(&protected), None);
     let stop_rc = sigaction(Signal::Stop, Some(&protected), None);
     if kill_rc == Err(EINVAL) && stop_rc == Err(EINVAL) {
-        puts("A: protected einval ok\n");
+        println!("A: protected einval ok");
     }
 
     let no_restorer = SigAction {
@@ -130,17 +125,17 @@ fn role_a() {
         restorer: 0,
     };
     if sigaction(Signal::Usr1, Some(&no_restorer), None) == Err(EINVAL) {
-        puts("A: restorer einval ok\n");
+        println!("A: restorer einval ok");
     }
 
     let unmapped = syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0x43, 0) as isize;
     let upper = syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 1 << 63, 0) as isize;
     if unmapped == -isize::from(EFAULT) && upper == -isize::from(EFAULT) {
-        puts("A: efault new ok\n");
+        println!("A: efault new ok");
     }
 
     if syscall1(SYS_SIGPENDING, 0) as isize == -isize::from(EINVAL) {
-        puts("A: sigpending einval ok\n");
+        println!("A: sigpending einval ok");
     }
 
     let full: SigSet = u64::MAX;
@@ -149,7 +144,7 @@ fn role_a() {
     let _ = sigprocmask(SigMaskHow::Block, None, Some(&mut current));
     let unblockable = Signal::Kill.bit() | Signal::Stop.bit();
     if current & unblockable == 0 && current & Signal::Terminate.bit() != 0 {
-        puts("A: unblockable ok\n");
+        println!("A: unblockable ok");
     }
     let empty: SigSet = 0;
     let _ = sigprocmask(SigMaskHow::SetMask, Some(&empty), None);
@@ -159,7 +154,7 @@ fn role_a() {
     let mut installed = SigAction::default();
     let _ = sigaction(Signal::Urgent, None, Some(&mut installed));
     if installed.handler.addr() == urgent_handler as *const () as usize {
-        puts("A: query ok\n");
+        println!("A: query ok");
     }
 
     let _ = kill(1, Signal::Urgent);
@@ -167,14 +162,14 @@ fn role_a() {
         let _ = kill(1, Signal::Urgent);
         spin(NEG_BUDGET);
         if URGENT_RUNS.load(Ordering::SeqCst) == 1 {
-            puts("A: resethand ok\n");
+            println!("A: resethand ok");
         }
     }
 
     let _ = install_handler(Signal::WindowChanged, winch_handler);
     let _ = kill(1, Signal::WindowChanged);
     if wait_runs(&WINCH_RUNS, 2, NEST_BUDGET) {
-        puts("A: redeliver ok\n");
+        println!("A: redeliver ok");
     }
 
     let child = custom_action(child_handler, SaFlags::NODEFER);
@@ -184,7 +179,7 @@ fn role_a() {
 
     forged_sigreturn();
 
-    puts("A: UNREACHABLE\n");
+    println!("A: UNREACHABLE");
 }
 
 #[inline(never)]
@@ -195,29 +190,29 @@ fn forged_sigreturn() {
         unsafe { core::ptr::write_volatile(&mut pad[i], 0) };
         i += 64;
     }
-    puts("A: forged sigreturn next\n");
+    println!("A: forged sigreturn next");
     syscall0(SYS_SIGRETURN);
 }
 
 fn role_b() {
-    puts("B: start\n");
+    println!("B: start");
 
     let _ = install_handler(Signal::Segfault, b_segv_handler);
     let segv: SigSet = Signal::Segfault.bit();
     let _ = sigprocmask(SigMaskHow::Block, Some(&segv), None);
 
-    puts("B: blocked fault next\n");
+    println!("B: blocked fault next");
     let null = core::ptr::null::<u8>();
     let _ = unsafe { core::ptr::read_volatile(null) };
 
-    puts("B: UNREACHABLE\n");
+    println!("B: UNREACHABLE");
 }
 
 fn role_c() {
-    puts("C: forged sigreturn next\n");
+    println!("C: forged sigreturn next");
     syscall0(SYS_SIGRETURN);
 
-    puts("C: UNREACHABLE\n");
+    println!("C: UNREACHABLE");
 }
 
 minilib::entry!(main);
@@ -227,8 +222,8 @@ fn main() -> i32 {
         1 => role_a(),
         2 => role_b(),
         3 => role_c(),
-        _ => puts("edge: unexpected pid\n"),
+        _ => println!("edge: unexpected pid"),
     }
 
-    exit(0)
+    0
 }

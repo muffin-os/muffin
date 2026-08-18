@@ -1,62 +1,38 @@
 #![no_std]
 #![no_main]
 
-use minilib::{ENOTTY, FbScreenInfo, IoctlRequest, exit, ioctl, open, write};
-
-fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
-
-fn put_u32(n: u32) {
-    let mut buf = [0u8; 10];
-    let mut i = buf.len();
-    let mut value = n;
-    loop {
-        i -= 1;
-        buf[i] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    let _ = write(1, &buf[i..]);
-}
+use minilib::{ENOTTY, FbScreenInfo, IoctlRequest, ioctl, open, println};
 
 minilib::entry!(main);
 
 fn main() -> i32 {
     let Ok(fd) = open("/dev/fb0") else {
-        puts("fb-ioctl: FAIL open\n");
-        exit(1);
+        println!("fb-ioctl: FAIL open");
+        return 1;
     };
 
     let mut info = FbScreenInfo::default();
     if ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info).is_err() {
-        puts("fb-ioctl: FAIL ioctl\n");
-        exit(1);
+        println!("fb-ioctl: FAIL ioctl");
+        return 1;
     }
 
-    puts("fb-ioctl: info ");
-    put_u32(info.width);
-    puts("x");
-    put_u32(info.height);
-    puts(" pitch=");
-    put_u32(info.pitch);
-    puts(" bpp=");
-    put_u32(info.bpp);
-    puts("\n");
+    println!(
+        "fb-ioctl: info {}x{} pitch={} bpp={}",
+        info.width, info.height, info.pitch, info.bpp
+    );
 
     let Ok(spawn_fd) = open("/spawn") else {
-        puts("fb-ioctl: FAIL enotty\n");
-        exit(1);
+        println!("fb-ioctl: FAIL enotty");
+        return 1;
     };
     let mut enotty_info = FbScreenInfo::default();
     if ioctl(spawn_fd, IoctlRequest::FbGetScreenInfo, &mut enotty_info) == Err(ENOTTY) {
-        puts("fb-ioctl: enotty ok\n");
+        println!("fb-ioctl: enotty ok");
     } else {
-        puts("fb-ioctl: FAIL enotty\n");
-        exit(1);
+        println!("fb-ioctl: FAIL enotty");
+        return 1;
     }
 
-    exit(0)
+    0
 }

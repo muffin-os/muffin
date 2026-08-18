@@ -10,42 +10,8 @@ use gfx::backend::software::{SoftAllocator, SoftBackend, SoftCompiler, SoftQueue
 use kernel_abi::gfx::BufferDesc;
 use minilib::{
     CLOCK_MONOTONIC, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Timespec, clock_gettime,
-    exit, fsync, ioctl, mmap, open, write,
+    exit, fsync, ioctl, mmap, open, println,
 };
-
-fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
-
-fn put_u32(n: u32) {
-    let mut buf = [0u8; 10];
-    let mut i = buf.len();
-    let mut value = n;
-    loop {
-        i -= 1;
-        buf[i] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    let _ = write(1, &buf[i..]);
-}
-
-fn put_u64(n: u64) {
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    let mut value = n;
-    loop {
-        i -= 1;
-        buf[i] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    let _ = write(1, &buf[i..]);
-}
 
 // monotonic timestamp in microseconds; on failure the zeroed timespec yields 0
 fn now_us() -> u64 {
@@ -55,11 +21,7 @@ fn now_us() -> u64 {
 }
 
 fn report(label: &str, start_us: u64, end_us: u64) {
-    puts("fbdemo: ");
-    puts(label);
-    puts(" ");
-    put_u64(end_us.saturating_sub(start_us));
-    puts("us\n");
+    println!("fbdemo: {label} {}us", end_us.saturating_sub(start_us));
 }
 
 /// Unwraps a gfx pipeline result, reporting `FAIL gfx` and exiting on any error
@@ -68,7 +30,7 @@ fn or_fail_gfx<T, E>(result: Result<T, E>) -> T {
     match result {
         Ok(v) => v,
         Err(_) => {
-            puts("fbdemo: FAIL gfx\n");
+            println!("fbdemo: FAIL gfx");
             exit(1);
         }
     }
@@ -112,8 +74,8 @@ fn main() -> i32 {
     let fd = open("/dev/fb0");
     report("open", t, now_us());
     let Ok(fd) = fd else {
-        puts("fbdemo: FAIL open\n");
-        exit(1);
+        println!("fbdemo: FAIL open");
+        return 1;
     };
 
     let mut info = FbScreenInfo::default();
@@ -121,8 +83,8 @@ fn main() -> i32 {
     let ioctl_rc = ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info);
     report("ioctl", t, now_us());
     if ioctl_rc.is_err() {
-        puts("fbdemo: FAIL ioctl\n");
-        exit(1);
+        println!("fbdemo: FAIL ioctl");
+        return 1;
     }
 
     let len = info.pitch as usize * info.height as usize;
@@ -137,8 +99,8 @@ fn main() -> i32 {
     );
     report("mmap", t, now_us());
     let Ok(addr) = mapped else {
-        puts("fbdemo: FAIL mmap\n");
-        exit(1);
+        println!("fbdemo: FAIL mmap");
+        return 1;
     };
 
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
@@ -207,22 +169,16 @@ fn main() -> i32 {
         let fsync_rc = fsync(fd);
         let t2 = now_us();
         if fsync_rc.is_err() {
-            puts("fbdemo: FAIL fsync\n");
-            exit(1);
+            println!("fbdemo: FAIL fsync");
+            return 1;
         }
-        puts("fbdemo: frame ");
-        put_u32(frame);
-        puts(" submit ");
-        put_u64(t1.saturating_sub(t0));
-        puts("us fsync ");
-        put_u64(t2.saturating_sub(t1));
-        puts("us\n");
+        println!(
+            "fbdemo: frame {frame} submit {}us fsync {}us",
+            t1.saturating_sub(t0),
+            t2.saturating_sub(t1)
+        );
     }
 
-    puts("fbdemo: frame drawn ");
-    put_u32(info.width);
-    puts("x");
-    put_u32(info.height);
-    puts("\n");
-    exit(0)
+    println!("fbdemo: frame drawn {}x{}", info.width, info.height);
+    0
 }

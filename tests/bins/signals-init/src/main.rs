@@ -5,12 +5,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use minilib::{
     EFAULT, SYS_SIGACTION, SigMaskHow, SigSet, Signal, exit, getpid, install_handler, kill,
-    sigpending, sigprocmask, syscall3, write,
+    println, sigpending, sigprocmask, syscall3,
 };
-
-fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
 
 fn busy_delay_n(n: u64) {
     let mut counter: u64 = 0;
@@ -75,7 +71,7 @@ fn acks() -> u32 {
 }
 
 extern "C" fn usr1_handler(_signo: Signal) {
-    puts("A: handler ran\n");
+    println!("A: handler ran");
 }
 
 /// Runs in the driver when the victim answers a ping.
@@ -90,7 +86,7 @@ extern "C" fn on_ping(_signo: Signal) {
 }
 
 extern "C" fn segv_handler(_signo: Signal) {
-    puts("A: segv handled\n");
+    println!("A: segv handled");
     exit(0);
 }
 
@@ -113,7 +109,7 @@ const NEG_BUDGET: u32 = 40;
 const REPORT_CLAMP: u32 = 99;
 
 fn role_a() {
-    puts("A: start\n");
+    println!("A: start");
 
     let _ = install_handler(Signal::Usr1, usr1_handler);
 
@@ -124,11 +120,11 @@ fn role_a() {
     let mut pending: SigSet = 0;
     let _ = sigpending(&mut pending);
     if pending & Signal::Usr1.bit() != 0 {
-        puts("A: pending ok\n");
+        println!("A: pending ok");
     }
 
     let _ = sigprocmask(SigMaskHow::Unblock, Some(&usr1_set), None);
-    puts("A: after unblock\n");
+    println!("A: after unblock");
 
     let ready = if wait_acks(1, READY_BUDGET) { 1 } else { 0 };
 
@@ -163,22 +159,22 @@ fn role_a() {
     spin(NEG_BUDGET);
     let term = acks().saturating_sub(before).min(REPORT_CLAMP);
 
-    print_report(ready, pre, stop, cont, term);
+    println!("A: report ready={ready} pre={pre} stop={stop} cont={cont} term={term}");
 
     // Regression guard: a syscall that copies out to a bad user pointer must
     // fail with EFAULT, not fault inside the kernel and panic it. Usr2 keeps
-    // this disjoint from the handshake; new=0 leaves its disposition untouched
+    // this disjoint from the handshake. new=0 leaves its disposition untouched
     // while old points at an unmapped lower-half address.
     let efault = syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0, 0x43) as isize;
     if efault == -isize::from(EFAULT) {
-        puts("A: efault ok\n");
+        println!("A: efault ok");
     }
 
     let _ = install_handler(Signal::Segfault, segv_handler);
     let null = core::ptr::null::<u8>();
     let _ = unsafe { core::ptr::read_volatile(null) };
 
-    puts("A: UNREACHABLE\n");
+    println!("A: UNREACHABLE");
 }
 
 fn role_b() -> ! {
@@ -190,69 +186,6 @@ fn role_b() -> ! {
     loop {
         pump();
     }
-}
-
-/// Write the decimal digits of `value` into `buf` starting at `at`, returning
-/// the index just past the last digit written.
-fn write_u32(buf: &mut [u8], at: usize, value: u32) -> usize {
-    let mut digits = [0u8; 10];
-    let mut count = 0;
-    let mut v = value;
-    loop {
-        digits[count] = b'0' + (v % 10) as u8;
-        count += 1;
-        v /= 10;
-        if v == 0 {
-            break;
-        }
-    }
-    let mut len = at;
-    while count > 0 {
-        count -= 1;
-        buf[len] = digits[count];
-        len += 1;
-    }
-    len
-}
-
-/// Copy `bytes` into `buf` starting at `at`, returning the new end index.
-fn write_bytes(buf: &mut [u8], at: usize, bytes: &[u8]) -> usize {
-    let mut len = at;
-    for &b in bytes {
-        buf[len] = b;
-        len += 1;
-    }
-    len
-}
-
-fn print_report(ready: u32, pre: u32, stop: u32, cont: u32, term: u32) {
-    let mut buf = [0u8; 64];
-    let mut len = write_bytes(&mut buf, 0, b"A: report ready=");
-    len = write_u32(&mut buf, len, ready);
-    len = write_bytes(&mut buf, len, b" pre=");
-    len = write_u32(&mut buf, len, pre);
-    len = write_bytes(&mut buf, len, b" stop=");
-    len = write_u32(&mut buf, len, stop);
-    len = write_bytes(&mut buf, len, b" cont=");
-    len = write_u32(&mut buf, len, cont);
-    len = write_bytes(&mut buf, len, b" term=");
-    len = write_u32(&mut buf, len, term);
-    buf[len] = b'\n';
-    len += 1;
-    let _ = write(1, &buf[..len]);
-}
-
-fn print_pid(pid: i64) {
-    let mut buf = [0u8; 24];
-    let mut len = write_bytes(&mut buf, 0, b"init: pid=");
-    if pid < 0 {
-        buf[len] = b'-';
-        len += 1;
-    }
-    len = write_u32(&mut buf, len, pid.unsigned_abs() as u32);
-    buf[len] = b'\n';
-    len += 1;
-    let _ = write(1, &buf[..len]);
 }
 
 minilib::entry!(main);
@@ -268,15 +201,15 @@ fn main() -> i32 {
     let _ = install_handler(PING, on_ping);
 
     let pid = getpid();
-    print_pid(pid);
+    println!("init: pid={pid}");
 
     match pid {
         1 => role_a(),
         2 => role_b(),
         _ => {
-            puts("init: unexpected pid\n");
+            println!("init: unexpected pid");
         }
     }
 
-    exit(0)
+    0
 }

@@ -1,13 +1,7 @@
-use minilib::{Errno, write};
-
-pub fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
+use minilib::{Errno, println};
 
 pub fn group(name: &str) {
-    puts("posix: group ");
-    puts(name);
-    puts("\n");
+    println!("posix: group {name}");
 }
 
 #[track_caller]

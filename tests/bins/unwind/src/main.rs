@@ -11,11 +11,7 @@ extern crate alloc;
 use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use minilib::{catch_unwind, exit, write};
-
-fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
+use minilib::{catch_unwind, println};
 
 static DROPPED: AtomicBool = AtomicBool::new(false);
 
@@ -38,27 +34,27 @@ fn main() -> i32 {
     });
 
     let Err(payload) = result else {
-        puts("unwind: FAIL result\n");
-        exit(1);
+        println!("unwind: FAIL result");
+        return 1;
     };
     if !DROPPED.load(Ordering::SeqCst) {
-        puts("unwind: FAIL drop\n");
-        exit(1);
+        println!("unwind: FAIL drop");
+        return 1;
     }
     match payload.downcast_ref::<String>() {
-        Some(msg) if msg == "boom 42" => puts("unwind: caught\n"),
+        Some(msg) if msg == "boom 42" => println!("unwind: caught"),
         _ => {
-            puts("unwind: FAIL payload\n");
-            exit(1);
+            println!("unwind: FAIL payload");
+            return 1;
         }
     }
 
     let nested: Result<(), _> = catch_unwind(|| panic!("again"));
     if nested.is_err() {
-        puts("unwind: caught twice\n");
+        println!("unwind: caught twice");
     } else {
-        puts("unwind: FAIL nested\n");
-        exit(1);
+        println!("unwind: FAIL nested");
+        return 1;
     }
 
     panic!("escape")

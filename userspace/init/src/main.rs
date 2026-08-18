@@ -1,15 +1,14 @@
 #![no_std]
 #![no_main]
 
-use minilib::{exit, write};
+use minilib::println;
 
 minilib::entry!(main);
 
 fn main() -> i32 {
-    let bytes = b"hello from init!\n";
-    let _ = write(1, bytes);
+    println!("hello from init!");
     foo();
-    exit(0)
+    0
 }
 
 fn foo() {

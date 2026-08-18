@@ -10,7 +10,7 @@
 
 use core::arch::asm;
 
-use minilib::{SYS_KILL, Signal, exit, getpid, install_handler, write};
+use minilib::{SYS_KILL, Signal, getpid, install_handler, println};
 
 /// Iterations per spin. A tight `dec` and `jnz` loop, so it retires much faster
 /// than iteration counts elsewhere in the test suite suggest. It has to stay
@@ -19,57 +19,9 @@ use minilib::{SYS_KILL, Signal, exit, getpid, install_handler, write};
 /// without exercising the kernel at all.
 const SPIN: u64 = 20_000_000;
 
-fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
-
-fn write_u32(buf: &mut [u8], at: usize, value: u32) -> usize {
-    let mut digits = [0u8; 10];
-    let mut count = 0;
-    let mut v = value;
-    loop {
-        digits[count] = b'0' + (v % 10) as u8;
-        count += 1;
-        v /= 10;
-        if v == 0 {
-            break;
-        }
-    }
-    let mut len = at;
-    while count > 0 {
-        count -= 1;
-        buf[len] = digits[count];
-        len += 1;
-    }
-    len
-}
-
-fn write_bytes(buf: &mut [u8], at: usize, bytes: &[u8]) -> usize {
-    let mut len = at;
-    for &b in bytes {
-        buf[len] = b;
-        len += 1;
-    }
-    len
-}
-
-fn print_marker(pid: u32, suffix: &[u8]) {
-    let mut buf = [0u8; 32];
-    let mut len = write_bytes(&mut buf, 0, b"floats: pid=");
-    len = write_u32(&mut buf, len, pid);
-    len = write_bytes(&mut buf, len, suffix);
-    buf[len] = b'\n';
-    len += 1;
-    let _ = write(1, &buf[..len]);
-}
-
-fn expect(ok: bool, pass: &str, fail: &str) {
-    if ok {
-        puts(pass);
-    } else {
-        puts(fail);
-        exit(1);
-    }
+fn expect(ok: bool, pass: &str, fail: &str) -> bool {
+    println!("{}", if ok { pass } else { fail });
+    ok
 }
 
 /// Sixteen distinct finite doubles keyed by index and pid. Distinct per index
@@ -404,28 +356,31 @@ fn main() -> i32 {
     let _ = install_handler(Signal::Usr1, clobber_handler);
 
     let pid = getpid() as u64;
-    print_marker(pid as u32, b" start");
+    println!("floats: pid={pid} start");
 
-    expect(check_xmm(pid), "floats: xmm ok\n", "floats: FAIL xmm\n");
-    expect(check_x87(), "floats: x87 ok\n", "floats: FAIL x87\n");
-    expect(check_mxcsr(), "floats: mxcsr ok\n", "floats: FAIL mxcsr\n");
-    expect(
-        check_rounding(),
-        "floats: rounding ok\n",
-        "floats: FAIL rounding\n",
-    );
-    expect(
-        check_special(),
-        "floats: special ok\n",
-        "floats: FAIL special\n",
-    );
-    expect(check_sum(), "floats: sum ok\n", "floats: FAIL sum\n");
-    expect(
-        check_signal(pid),
-        "floats: signal ok\n",
-        "floats: FAIL signal\n",
-    );
+    let ok = expect(check_xmm(pid), "floats: xmm ok", "floats: FAIL xmm")
+        && expect(check_x87(), "floats: x87 ok", "floats: FAIL x87")
+        && expect(check_mxcsr(), "floats: mxcsr ok", "floats: FAIL mxcsr")
+        && expect(
+            check_rounding(),
+            "floats: rounding ok",
+            "floats: FAIL rounding",
+        )
+        && expect(
+            check_special(),
+            "floats: special ok",
+            "floats: FAIL special",
+        )
+        && expect(check_sum(), "floats: sum ok", "floats: FAIL sum")
+        && expect(
+            check_signal(pid),
+            "floats: signal ok",
+            "floats: FAIL signal",
+        );
+    if !ok {
+        return 1;
+    }
 
-    print_marker(pid as u32, b" done");
-    exit(0)
+    println!("floats: pid={pid} done");
+    0
 }

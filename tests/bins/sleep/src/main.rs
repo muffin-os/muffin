@@ -2,13 +2,9 @@
 #![no_main]
 
 use minilib::{
-    CLOCK_MONOTONIC, EINTR, Errno, Signal, Timespec, clock_gettime, exit, getpid, install_handler,
-    kill, nanosleep, write,
+    CLOCK_MONOTONIC, EINTR, Errno, Signal, Timespec, clock_gettime, getpid, install_handler, kill,
+    nanosleep, println,
 };
-
-fn puts(msg: &str) {
-    let _ = write(1, msg.as_bytes());
-}
 
 extern "C" fn urgent_handler(_signo: Signal) {}
 
@@ -30,15 +26,15 @@ fn sleep_ms(ms: u64) -> Result<(), Errno> {
 }
 
 fn victim() {
-    puts("sleep: start\n");
+    println!("sleep: start");
 
     let before = now_ms();
     let rc = sleep_ms(200);
     let elapsed = now_ms() - before;
     if rc.is_ok() && elapsed >= 200 {
-        puts("sleep: duration ok\n");
+        println!("sleep: duration ok");
     } else {
-        puts("sleep: UNREACHABLE duration\n");
+        println!("sleep: UNREACHABLE duration");
     }
 
     // SIGURG defaults to ignore, so the handler is what makes it interrupt
@@ -49,9 +45,9 @@ fn victim() {
     let rc = sleep_ms(10_000);
     let elapsed = now_ms() - before;
     if rc == Err(EINTR) && elapsed < 8_000 {
-        puts("sleep: eintr ok\n");
+        println!("sleep: eintr ok");
     } else {
-        puts("sleep: UNREACHABLE eintr\n");
+        println!("sleep: UNREACHABLE eintr");
     }
 }
 
@@ -68,8 +64,8 @@ fn main() -> i32 {
     match getpid() {
         1 => victim(),
         2 => driver(),
-        _ => puts("sleep: unexpected pid\n"),
+        _ => println!("sleep: unexpected pid"),
     }
 
-    exit(0)
+    0
 }

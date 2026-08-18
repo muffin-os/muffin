@@ -98,25 +98,11 @@ fn panic(info: &PanicInfo) -> ! {
     if PANIC_COUNT.fetch_add(1, Ordering::Relaxed) > 0 {
         crate::exit(101);
     }
-    let _ = writeln!(Stderr, "{info}");
+    let _ = writeln!(crate::Stderr, "{info}");
     // There is no init hook, so the first panic installs the finder. It stays for
     // the process lifetime and the repeat call reports exactly that.
     let _ = set_custom_eh_frame_finder(&FINDER);
-    crate::backtrace::print(&mut Stderr);
+    crate::backtrace::print(&mut crate::Stderr);
     unwinding::panic::begin_panic(Box::new(info.message().to_string()));
     crate::exit(101)
-}
-
-/// Writer over fd 2, which the kernel preopens for every process.
-struct Stderr;
-
-impl Write for Stderr {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        // The write syscall rejects a zero-length buffer, and formatters emit empty
-        // pieces freely. Passing one on would log a kernel error mid-report.
-        if !s.is_empty() {
-            let _ = crate::write(2, s.as_bytes());
-        }
-        Ok(())
-    }
 }

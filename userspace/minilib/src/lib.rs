@@ -4,6 +4,7 @@ extern crate alloc;
 
 mod backtrace;
 mod heap;
+mod io;
 mod panic;
 mod start;
 
@@ -12,6 +13,7 @@ use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
 use core::ffi::c_int;
 
+pub use io::{Stderr, Stdout};
 pub use kernel_abi::{
     ARG_MAX, CLOCK_MONOTONIC, CLOCK_REALTIME, DefaultAction, E2BIG, EACCES, EBADF, EFAULT, EINTR,
     EINVAL, EISDIR, ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOTDIR, ENOTTY, EOVERFLOW, EPERM,

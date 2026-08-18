@@ -14,7 +14,7 @@ mod time;
 minilib::entry!(main);
 
 fn main() -> i32 {
-    check::puts("posix: start\n");
+    minilib::println!("posix: start");
 
     fd::run();
     mem::run();
@@ -23,6 +23,6 @@ fn main() -> i32 {
     time::run();
     exec::run();
 
-    check::puts("posix: all checks passed\n");
+    minilib::println!("posix: all checks passed");
     0
 }
