@@ -69,7 +69,7 @@ pub fn dispatch_sys_execve(
     };
 
     process.set_executable_path(path);
-    process.finish_reap();
+    sole.finish_reap();
     process.signals_write().exec_reset();
 
     let sel = ctx.selectors();

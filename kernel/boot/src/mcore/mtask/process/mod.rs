@@ -126,7 +126,14 @@ struct ReapState {
 /// Proof that the calling task is the process's only live task. Constructed
 /// only by [`Process::reap_sibling_tasks`].
 pub struct SoleLiveTask<'p> {
-    _process: &'p Process,
+    process: &'p Process,
+}
+
+impl SoleLiveTask<'_> {
+    pub fn finish_reap(self) {
+        self.process.reap_active.store(false, Ordering::Release);
+        self.process.task_accounting.lock().reap = None;
+    }
 }
 
 pub struct Process {
@@ -455,7 +462,7 @@ impl Process {
 
         loop {
             if self.task_accounting.lock().live == 1 {
-                return SoleLiveTask { _process: self };
+                return SoleLiveTask { process: self };
             }
             let (park_ticket, unpark_ticket) = reserve().split();
             let waker = unpark_ticket.into_waker();
@@ -469,13 +476,6 @@ impl Process {
             }
             block_current(park_ticket);
         }
-    }
-
-    /// Skipping this after [`Process::reap_sibling_tasks`] would kill every
-    /// task the process creates later.
-    pub fn finish_reap(&self) {
-        self.reap_active.store(false, Ordering::Release);
-        self.task_accounting.lock().reap = None;
     }
 
     /// Records the first terminating event. A process that exits while being
