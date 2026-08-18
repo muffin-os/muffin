@@ -9,7 +9,7 @@ use kernel::mcore;
 use kernel::mcore::mtask::process::Process;
 use kernel_ext2::Ext2Fs;
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use tracing::{Level, info, span};
+use tracing::{Level, span};
 
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
@@ -30,26 +30,10 @@ unsafe extern "C" fn main() -> ! {
             .expect("should be able to mount ext2fs at /");
     });
 
-    {
-        let launch_span = span!(Level::INFO, "launch /bin/init");
-        let pid = launch_span.in_scope(|| {
-            let init_path = AbsolutePath::try_new("/bin/init").unwrap();
-            let _ = vfs().read().open(init_path).expect("should have /bin/init");
-            let proc = Process::create_from_executable(Process::root(), init_path).unwrap();
-            proc.pid()
-        });
-        launch_span.record("pid", pid.as_u64());
-    }
-
-    {
-        info!("starting fbdemo process...");
-        let fbdemo_path = AbsolutePath::try_new("/bin/fbdemo").unwrap();
-        let _ = vfs()
-            .read()
-            .open(fbdemo_path)
-            .expect("should have /bin/fbdemo");
-        let proc = Process::create_from_executable(Process::root(), fbdemo_path).unwrap();
-        info!(pid = %proc.pid(), "started process");
+    for path in ["/bin/init", "/bin/fbdemo"] {
+        let path = AbsolutePath::try_new(path).expect("executable path should be absolute");
+        Process::create_from_executable(Process::root(), path)
+            .expect("should be able to create process from executable");
     }
 
     mcore::exit_bootstrap()
@@ -68,13 +52,16 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
 fn handle_panic(info: &core::panic::PanicInfo) {
     use tracing::error;
 
-    let location = info.location().unwrap();
-    error!(
-        "kernel panicked at {}:{}:{}:",
-        location.file(),
-        location.line(),
-        location.column(),
-    );
+    if let Some(location) = info.location() {
+        error!(
+            "kernel panicked at {}:{}:{}:",
+            location.file(),
+            location.line(),
+            location.column(),
+        );
+    } else {
+        error!("kernel panicked at <unknown location>:");
+    }
     error!("{}", info.message());
 
     #[cfg(feature = "backtrace")]

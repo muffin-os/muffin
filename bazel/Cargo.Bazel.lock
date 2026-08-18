@@ -311,6 +311,7 @@ dependencies = [
  "spin",
  "thiserror",
  "tracing",
+ "tracing-core",
  "uart_16550",
  "unwinding",
  "virtio-drivers",

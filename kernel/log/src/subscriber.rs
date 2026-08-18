@@ -20,6 +20,7 @@ use spin::Mutex;
 use tracing::field::{Field, Visit};
 use tracing::level_filters::LevelFilter;
 use tracing::{Event, Level, Metadata, Subscriber, span};
+use tracing_core::span::Current;
 
 use crate::Filter;
 
@@ -30,6 +31,7 @@ const MAX_SPANS: usize = 64;
 const FIELDS_CAP: usize = 256;
 /// Rendered close label per span, truncating beyond.
 const LABEL_CAP: usize = 256;
+const SPAN_STACK_DEPTH: usize = 16;
 
 static FILTER: OnceCell<Filter> = OnceCell::uninit();
 
@@ -56,6 +58,14 @@ pub trait Environment: 'static {
     /// Writes the flow label of a record prefix (in the kernel:
     /// `cpu0 pid0` or `boot`).
     fn write_flow_label(out: &mut dyn Write);
+
+    /// Runs `f` against the current flow's entered-span stack. Returns `None`
+    /// when the environment has no per-flow storage, in which case the flow
+    /// reports no current span.
+    ///
+    /// `f` must not log, because the implementation holds a lock the log path
+    /// would retake.
+    fn with_span_stack<R>(f: impl FnOnce(&mut SpanStack) -> R) -> Option<R>;
 }
 
 /// Parses `rust_log` into the global filter and installs the subscriber.
@@ -77,6 +87,10 @@ fn filter() -> &'static Filter {
 /// Runs `f` against the span pool inside a critical section.
 fn with_spans<E: Environment, R>(f: impl FnOnce(&mut SpanPool) -> R) -> R {
     E::critical(|| f(&mut SPAN_POOL.lock()))
+}
+
+fn with_stack<E: Environment, R>(f: impl FnOnce(&mut SpanStack) -> R) -> Option<R> {
+    E::critical(|| E::with_span_stack(f))
 }
 
 /// A fixed-capacity UTF-8 buffer that silently truncates at char boundaries.
@@ -114,6 +128,50 @@ impl<const N: usize> Write for FixedBuf<N> {
         self.buf[self.len..self.len + take].copy_from_slice(&s.as_bytes()[..take]);
         self.len += take;
         Ok(())
+    }
+}
+
+/// The spans one flow has entered, innermost last.
+#[derive(Debug, Default)]
+pub struct SpanStack {
+    ids: [u64; SPAN_STACK_DEPTH],
+    len: usize,
+    /// Entries lost to overflow. While nonzero, the innermost entered spans
+    /// are untracked and the flow reports an outer span as current.
+    dropped: usize,
+}
+
+impl SpanStack {
+    pub const fn new() -> Self {
+        Self {
+            ids: [0; SPAN_STACK_DEPTH],
+            len: 0,
+            dropped: 0,
+        }
+    }
+
+    pub(crate) fn push(&mut self, id: u64) {
+        if self.len < SPAN_STACK_DEPTH {
+            self.ids[self.len] = id;
+            self.len += 1;
+        } else {
+            self.dropped += 1;
+        }
+    }
+
+    /// Removes the topmost entry equal to `id`. tracing permits guards to be
+    /// dropped out of order, so the top is not assumed to match.
+    pub(crate) fn remove(&mut self, id: u64) {
+        let Some(at) = self.ids[..self.len].iter().rposition(|entry| *entry == id) else {
+            self.dropped = self.dropped.saturating_sub(1);
+            return;
+        };
+        self.ids.copy_within(at + 1..self.len, at);
+        self.len -= 1;
+    }
+
+    pub(crate) fn top(&self) -> Option<u64> {
+        self.len.checked_sub(1).map(|last| self.ids[last])
     }
 }
 
@@ -206,6 +264,16 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
         Some(filter().max())
     }
 
+    fn current_span(&self) -> Current {
+        let Some(Some(id)) = with_stack::<E, _>(|stack| stack.top()) else {
+            return Current::none();
+        };
+        with_spans::<E, _>(|pool| pool.get_mut(id).map(|data| data.meta))
+            .map_or_else(Current::none, |meta| {
+                Current::new(span::Id::from_u64(id), meta)
+            })
+    }
+
     fn new_span(&self, span: &span::Attributes<'_>) -> span::Id {
         let mut fields = FixedBuf::new();
         span.record(&mut FieldVisitor { out: &mut fields });
@@ -272,6 +340,7 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
                 data.last = now;
             }
         });
+        let _ = with_stack::<E, _>(|stack| stack.push(id));
     }
 
     fn exit(&self, span: &span::Id) {
@@ -283,6 +352,7 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
                 data.last = now;
             }
         });
+        let _ = with_stack::<E, _>(|stack| stack.remove(id));
     }
 
     fn try_close(&self, span: span::Id) -> bool {
@@ -414,6 +484,7 @@ fn level_style(level: &Level) -> (&'static str, &'static str) {
 mod tests {
     extern crate std;
 
+    use core::cell::RefCell;
     use core::fmt::Write;
     use core::sync::atomic::AtomicU64;
     use core::sync::atomic::Ordering::Relaxed;
@@ -421,7 +492,7 @@ mod tests {
 
     use spin::Mutex;
 
-    use super::{Environment, FILTER, FixedBuf, SpanSubscriber, write_duration};
+    use super::{Environment, FILTER, FixedBuf, SpanStack, SpanSubscriber, write_duration};
     use crate::Filter;
 
     #[test]
@@ -461,6 +532,10 @@ mod tests {
     static NOW: AtomicU64 = AtomicU64::new(0);
     static SINK: Mutex<String> = Mutex::new(String::new());
 
+    std::thread_local! {
+        static STACK: RefCell<SpanStack> = const { RefCell::new(SpanStack::new()) };
+    }
+
     impl Environment for MockEnv {
         fn now_ns() -> u64 {
             NOW.fetch_add(1_000, Relaxed) + 1_000
@@ -477,6 +552,10 @@ mod tests {
         fn write_flow_label(out: &mut dyn Write) {
             let _ = write!(out, "test");
         }
+
+        fn with_span_stack<R>(f: impl FnOnce(&mut SpanStack) -> R) -> Option<R> {
+            Some(STACK.with(|stack| f(&mut stack.borrow_mut())))
+        }
     }
 
     #[test]
@@ -485,13 +564,26 @@ mod tests {
 
         tracing::subscriber::set_global_default(SpanSubscriber::<MockEnv>::new())
             .expect("no other test sets a subscriber");
-        let outer = tracing::info_span!("outer", answer = 42);
+        let outer = tracing::info_span!("outer", answer = 42, late = tracing::field::Empty);
         {
             let _outer_guard = outer.enter();
-            let inner = tracing::info_span!("inner");
-            let _inner_guard = inner.enter();
-            tracing::info!("hello");
+            {
+                let inner = tracing::info_span!("inner");
+                let inner_id = inner.id();
+                let _inner_guard = inner.enter();
+                assert_eq!(
+                    tracing::Span::current().id(),
+                    inner_id,
+                    "current span is the innermost entered span"
+                );
+                tracing::info!("hello");
+            }
+            tracing::Span::current().record("late", 7u64);
         }
+        assert!(
+            tracing::Span::current().is_none(),
+            "no current span once every guard is dropped"
+        );
         drop(outer);
 
         let out = SINK.lock();
@@ -506,6 +598,11 @@ mod tests {
         assert!(
             out.contains("answer=") && out.contains("42"),
             "span fields rendered, output:\n{}",
+            *out
+        );
+        assert!(
+            out.contains("late=") && out.contains('7'),
+            "late record on the current span reaches the close label, output:\n{}",
             *out
         );
         assert!(

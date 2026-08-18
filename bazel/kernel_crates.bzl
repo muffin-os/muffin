@@ -26,7 +26,7 @@ KERNEL_CRATES = {
     "device": struct(deps = [], crates = ["spin", "thiserror", "x86_64"]),
     "elfloader": struct(deps = [], crates = ["thiserror", "zerocopy"]),
     "ext2": struct(deps = ["device"], crates = ["bitflags", "spin"]),
-    "log": struct(deps = [], crates = ["conquer-once", "spin", "tracing"]),
+    "log": struct(deps = [], crates = ["conquer-once", "spin", "tracing", "tracing-core"]),
     "memapi": struct(deps = [], crates = ["x86_64"]),
     "park": struct(deps = [], crates = ["thiserror"]),
     "pci": struct(deps = ["memapi"], crates = ["spin", "thiserror", "x86_64"]),
@@ -140,6 +140,7 @@ sha3 = { version = "0.11.0-rc.8", default-features = false }
 spin = "0.10"
 thiserror = { version = "2.0", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["attributes"] }
+tracing-core = { version = "0.1", default-features = false }
 uart_16550 = "0.4"
 unwinding = { version = "0.2.10", default-features = false, features = [
   "dwarf-expr",

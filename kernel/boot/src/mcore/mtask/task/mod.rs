@@ -10,8 +10,9 @@ use core::sync::atomic::{AtomicBool, AtomicU64};
 
 use cordyceps::Linked;
 use cordyceps::mpsc_queue::Links;
+use kernel_log::SpanStack;
 use kernel_park::ParkTicketCell;
-use spin::RwLock;
+use spin::{Mutex, RwLock};
 use tracing::trace;
 use x86_64::instructions::{hlt, interrupts};
 
@@ -66,6 +67,11 @@ pub struct Task {
     ustack: RwLock<Option<LowerHalfAllocation<Writable>>>,
     tls: RwLock<Option<LowerHalfAllocation<Writable>>>,
     fx_area: RwLock<Option<LowerHalfAllocation<Writable>>>,
+
+    /// Only the CPU currently running this task ever touches this stack, so the
+    /// lock is never contended. It lives on the task rather than per CPU because
+    /// an entered span stays entered across a migration to another CPU.
+    span_stack: Mutex<SpanStack>,
 
     links: Links<Self>,
 }
@@ -131,6 +137,7 @@ impl Task {
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
             fx_area: RwLock::new(None),
+            span_stack: Mutex::new(SpanStack::new()),
             links,
         }
     }
@@ -157,6 +164,7 @@ impl Task {
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
             fx_area: RwLock::new(None),
+            span_stack: Mutex::new(SpanStack::new()),
             links,
         }
     }
@@ -232,6 +240,7 @@ impl Task {
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
             fx_area: RwLock::new(None),
+            span_stack: Mutex::new(SpanStack::new()),
             links: Links::default(),
         }
     }
@@ -293,6 +302,10 @@ impl Task {
 
     pub fn pending_fault_addr(&self) -> &AtomicU64 {
         &self.pending_fault_addr
+    }
+
+    pub(crate) fn span_stack(&self) -> &Mutex<SpanStack> {
+        &self.span_stack
     }
 
     pub fn ustack(&self) -> &RwLock<Option<LowerHalfAllocation<Writable>>> {

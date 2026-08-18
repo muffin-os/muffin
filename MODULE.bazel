@@ -120,6 +120,11 @@ crate.spec(
     package = "tracing",
     version = "0.1",
 )
+crate.spec(
+    default_features = False,
+    package = "tracing-core",
+    version = "0.1",
+)
 crate.spec(package = "uart_16550", version = "0.4")
 crate.spec(
     default_features = False,

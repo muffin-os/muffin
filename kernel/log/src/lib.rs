@@ -13,7 +13,7 @@ use tracing::Level;
 use tracing::level_filters::LevelFilter;
 
 mod subscriber;
-pub use subscriber::{Environment, init};
+pub use subscriber::{Environment, SpanStack, init};
 
 const MAX_DIRECTIVES: usize = 16;
 const BUF_SIZE: usize = 256;

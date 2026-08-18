@@ -22,7 +22,8 @@ use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
-use tracing::debug;
+use tracing::field::Empty;
+use tracing::{Level, Span, debug, instrument};
 use x86_64::VirtAddr;
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::rflags::RFlags;
@@ -248,16 +249,26 @@ impl Process {
         res
     }
 
-    // TODO: add documentation
-    #[allow(clippy::missing_errors_doc)]
+    /// Enqueues the new process's main task. The executable is opened and statically validated
+    /// before any process is inserted into the process tree.
+    #[instrument(
+        level = Level::INFO,
+        skip_all,
+        fields(path = %path.as_ref(), ppid = %parent.pid(), pid = Empty)
+    )]
     pub fn create_from_executable(
         parent: &Arc<Process>,
         path: impl AsRef<AbsolutePath>,
     ) -> Result<Arc<Self>, CreateProcessError> {
-        // TODO: validate that the executable exists and is a valid executable file
-
         let path = path.as_ref();
+        let node = vfs()
+            .read()
+            .open(path)
+            .map_err(|_| CreateProcessError::OpenExecutable)?;
+        elf::validate(&node)?;
+
         let process = Self::create_new(parent, path.to_string(), Some(path));
+        Span::current().record("pid", process.pid.as_u64());
         {
             // register STDIN, STDOUT and STDERR
             let mut fds = process.file_descriptors().write();
@@ -520,6 +531,10 @@ impl Drop for Process {
 
 #[derive(Debug, Error)]
 pub enum CreateProcessError {
+    #[error("failed to open the executable")]
+    OpenExecutable,
+    #[error(transparent)]
+    LoadExecutable(#[from] elf::LoadExecutableError),
     #[error("failed to allocate stack")]
     StackAllocationError(#[from] StackAllocationError),
 }

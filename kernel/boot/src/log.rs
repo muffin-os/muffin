@@ -1,6 +1,6 @@
 use core::fmt::Write;
 
-use kernel_log::Environment;
+use kernel_log::{Environment, SpanStack};
 use x86_64::instructions::interrupts;
 
 use crate::hpet::hpet_maybe;
@@ -48,5 +48,10 @@ impl Environment for KernelEnvironment {
         } else {
             let _ = write!(out, "boot");
         }
+    }
+
+    fn with_span_stack<R>(f: impl FnOnce(&mut SpanStack) -> R) -> Option<R> {
+        let ctx = ExecutionContext::try_load()?;
+        Some(f(&mut ctx.current_task().span_stack().lock()))
     }
 }

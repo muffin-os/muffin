@@ -1,5 +1,5 @@
 {
-  "checksum": "07276235d6cddb1e660efe87830fb3e73fea2329475c692a70bd6c6ca099b354",
+  "checksum": "7109e8c00fdceece863fc23eac08c9eef86c537721773c90987ebab1ae3ccdad",
   "crates": {
     "acpi 5.2.0": {
       "name": "acpi",
@@ -1864,6 +1864,10 @@
             {
               "id": "tracing 0.1.44",
               "target": "tracing"
+            },
+            {
+              "id": "tracing-core 0.1.36",
+              "target": "tracing_core"
             },
             {
               "id": "uart_16550 0.4.0",
@@ -6680,6 +6684,7 @@
     "spin 0.10.1",
     "thiserror 2.0.19",
     "tracing 0.1.44",
+    "tracing-core 0.1.36",
     "uart_16550 0.4.0",
     "unwinding 0.2.10",
     "virtio-drivers 0.13.0",

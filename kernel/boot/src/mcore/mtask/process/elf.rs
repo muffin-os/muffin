@@ -61,7 +61,31 @@ pub enum LoadExecutableError {
 /// An executable that passed every check that can fail with a user-visible
 /// error.
 pub struct ValidatedExecutable {
-    header: Vec<u8>,
+    entry: usize,
+    segments: Vec<ValidatedSegment>,
+    tls: Option<ValidatedTls>,
+}
+
+enum ValidatedSegment {
+    Private {
+        vaddr: VirtAddr,
+        layout: Layout,
+        offset: usize,
+        filesz: usize,
+    },
+    Mapped {
+        start: VirtAddr,
+        len: usize,
+        no_execute: bool,
+        offset: usize,
+        filesz: usize,
+    },
+}
+
+struct ValidatedTls {
+    layout: Layout,
+    offset: usize,
+    filesz: usize,
 }
 
 /// Runs every static check on the executable without touching the process.
@@ -85,65 +109,101 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
 
     let mut buf = vec![0u8; phte];
     read_exact(node, &mut buf, 0)?;
-    {
-        let elf = ElfFile::try_parse(&buf)?;
+    let elf = ElfFile::try_parse(&buf)?;
 
-        if *elf.typ() != ElfType::Exec {
-            return Err(LoadExecutableError::UnsupportedType(elf.typ().clone()));
+    if *elf.typ() != ElfType::Exec {
+        return Err(LoadExecutableError::UnsupportedType(elf.typ().clone()));
+    }
+
+    let page_size = Size4KiB::SIZE.into_usize();
+    let mut segments = vec![];
+    for hdr in elf.program_headers_by_type(ProgramHeaderType::LOAD) {
+        if hdr.filesz > hdr.memsz {
+            return Err(LoadExecutableError::FileLongerThanMemory {
+                vaddr: hdr.vaddr,
+                filesz: hdr.filesz,
+                memsz: hdr.memsz,
+            });
+        }
+        if hdr.memsz == 0 {
+            continue;
         }
 
-        let page_size = Size4KiB::SIZE.into_usize();
-        for hdr in elf.program_headers_by_type(ProgramHeaderType::LOAD) {
-            if hdr.filesz > hdr.memsz {
-                return Err(LoadExecutableError::FileLongerThanMemory {
-                    vaddr: hdr.vaddr,
-                    filesz: hdr.filesz,
-                    memsz: hdr.memsz,
-                });
-            }
-            if hdr.memsz == 0 {
-                continue;
-            }
-
-            let executable = hdr.flags.contains(&ProgramHeaderFlags::EXECUTABLE);
-            let writable = hdr.flags.contains(&ProgramHeaderFlags::WRITABLE);
-            if executable && writable {
-                return Err(LoadExecutableError::WritableExecutable(hdr.vaddr));
-            }
-
-            if hdr.offset % page_size != hdr.vaddr % page_size {
-                return Err(LoadExecutableError::NotPageCongruent {
-                    vaddr: hdr.vaddr,
-                    offset: hdr.offset,
-                });
-            }
-
-            VirtAddr::try_new(hdr.vaddr as u64)
-                .map_err(|_| LoadExecutableError::InvalidVirtualAddress(hdr.vaddr))?;
-            if writable {
-                Layout::from_size_align(hdr.memsz, hdr.align)
-                    .map_err(|_| LoadExecutableError::InvalidSizeOrAlign)?;
-            }
+        let writable = hdr.flags.contains(&ProgramHeaderFlags::WRITABLE);
+        let executable = hdr.flags.contains(&ProgramHeaderFlags::EXECUTABLE);
+        if executable && writable {
+            return Err(LoadExecutableError::WritableExecutable(hdr.vaddr));
         }
 
-        let mut tls_headers = elf.program_headers_by_type(ProgramHeaderType::TLS);
-        if let Some(tls) = tls_headers.next() {
-            if tls_headers.next().is_some() {
-                return Err(LoadExecutableError::TooManyTlsHeaders);
-            }
-            if tls.filesz > tls.memsz {
-                return Err(LoadExecutableError::FileLongerThanMemory {
-                    vaddr: tls.vaddr,
-                    filesz: tls.filesz,
-                    memsz: tls.memsz,
-                });
-            }
-            Layout::from_size_align(tls.memsz, tls.align)
+        if hdr.offset % page_size != hdr.vaddr % page_size {
+            return Err(LoadExecutableError::NotPageCongruent {
+                vaddr: hdr.vaddr,
+                offset: hdr.offset,
+            });
+        }
+
+        let vaddr = VirtAddr::try_new(hdr.vaddr.into_u64())
+            .map_err(|_| LoadExecutableError::InvalidVirtualAddress(hdr.vaddr))?;
+
+        if writable {
+            let layout = Layout::from_size_align(hdr.memsz, hdr.align)
                 .map_err(|_| LoadExecutableError::InvalidSizeOrAlign)?;
+            segments.push(ValidatedSegment::Private {
+                vaddr,
+                layout,
+                offset: hdr.offset,
+                filesz: hdr.filesz,
+            });
+        } else {
+            let start = vaddr.align_down(Size4KiB::SIZE);
+            let end = hdr
+                .vaddr
+                .checked_add(hdr.memsz)
+                .and_then(|e| e.checked_next_multiple_of(page_size))
+                .ok_or(LoadExecutableError::InvalidVirtualAddress(hdr.vaddr))?;
+            VirtAddr::try_new(end.into_u64())
+                .map_err(|_| LoadExecutableError::InvalidVirtualAddress(hdr.vaddr))?;
+            let start_usize = start.as_u64().into_usize();
+            let lead = hdr.vaddr - start_usize;
+            segments.push(ValidatedSegment::Mapped {
+                start,
+                len: end - start_usize,
+                no_execute: !executable,
+                // Page congruence of offset and vaddr guarantees `hdr.offset >= lead`.
+                offset: hdr.offset - lead,
+                filesz: lead + hdr.filesz,
+            });
         }
     }
 
-    Ok(ValidatedExecutable { header: buf })
+    let mut tls_headers = elf.program_headers_by_type(ProgramHeaderType::TLS);
+    let tls = if let Some(tls) = tls_headers.next() {
+        if tls_headers.next().is_some() {
+            return Err(LoadExecutableError::TooManyTlsHeaders);
+        }
+        if tls.filesz > tls.memsz {
+            return Err(LoadExecutableError::FileLongerThanMemory {
+                vaddr: tls.vaddr,
+                filesz: tls.filesz,
+                memsz: tls.memsz,
+            });
+        }
+        let layout = Layout::from_size_align(tls.memsz, tls.align)
+            .map_err(|_| LoadExecutableError::InvalidSizeOrAlign)?;
+        Some(ValidatedTls {
+            layout,
+            offset: tls.offset,
+            filesz: tls.filesz,
+        })
+    } else {
+        None
+    };
+
+    Ok(ValidatedExecutable {
+        entry: elf.entry(),
+        segments,
+        tls,
+    })
 }
 
 impl ValidatedExecutable {
@@ -156,70 +216,69 @@ impl ValidatedExecutable {
         task: &Task,
         node: &VfsNode,
     ) -> Result<usize, LoadExecutableError> {
-        let elf = ElfFile::try_parse(&self.header)?;
-
         let mut memapi = LowerHalfMemoryApi::new(process.clone());
 
-        for hdr in elf.program_headers_by_type(ProgramHeaderType::LOAD) {
-            if hdr.memsz == 0 {
-                continue;
-            }
-
-            let executable = hdr.flags.contains(&ProgramHeaderFlags::EXECUTABLE);
-            let writable = hdr.flags.contains(&ProgramHeaderFlags::WRITABLE);
-
-            let vaddr = VirtAddr::try_new(hdr.vaddr as u64)
-                .map_err(|_| LoadExecutableError::InvalidVirtualAddress(hdr.vaddr))?;
-            let seg_start = vaddr.align_down(Size4KiB::SIZE);
-            let seg_end = (vaddr + hdr.memsz.into_u64()).align_up(Size4KiB::SIZE);
-
-            if writable {
-                let layout = Layout::from_size_align(hdr.memsz, hdr.align)
-                    .map_err(|_| LoadExecutableError::InvalidSizeOrAlign)?;
-                let mut alloc = memapi
-                    .allocate(
-                        Location::Fixed(vaddr),
-                        layout,
-                        UserAccessible::Yes,
-                        Guarded::No,
-                    )
-                    .ok_or(LoadExecutableError::AllocationFailed)?;
-                let slice = alloc.as_mut();
-                read_exact(node, &mut slice[..hdr.filesz], hdr.offset)?;
-                slice[hdr.filesz..].fill(0);
-                process.executable_segments().write().push(alloc);
-            } else {
-                let segment = Segment::new(seg_start, seg_end - seg_start);
-                let owned = process
-                    .vmm()
-                    .mark_as_reserved(segment)
-                    .map_err(|_| LoadExecutableError::AlreadyReserved(seg_start))?;
-                let flags = PageTableFlags::PRESENT
-                    | PageTableFlags::USER_ACCESSIBLE
-                    | if executable {
-                        PageTableFlags::empty()
-                    } else {
-                        PageTableFlags::NO_EXECUTE
-                    };
-                let lead = hdr.vaddr - seg_start.as_u64().into_usize();
-                let lazy = LazyMemoryRegion::new(owned, (seg_end - seg_start).into_usize(), flags);
-                process
-                    .memory_regions()
-                    .add_region(MemoryRegion::FileBacked(FileBackedMemoryRegion::new(
-                        lazy,
-                        node.clone(),
-                        hdr.offset - lead,
-                        lead + hdr.filesz,
-                    )));
+        for segment in &self.segments {
+            match *segment {
+                ValidatedSegment::Private {
+                    vaddr,
+                    layout,
+                    offset,
+                    filesz,
+                } => {
+                    let mut alloc = memapi
+                        .allocate(
+                            Location::Fixed(vaddr),
+                            layout,
+                            UserAccessible::Yes,
+                            Guarded::No,
+                        )
+                        .ok_or(LoadExecutableError::AllocationFailed)?;
+                    let slice = alloc.as_mut();
+                    read_exact(node, &mut slice[..filesz], offset)?;
+                    slice[filesz..].fill(0);
+                    process.executable_segments().write().push(alloc);
+                }
+                ValidatedSegment::Mapped {
+                    start,
+                    len,
+                    no_execute,
+                    offset,
+                    filesz,
+                } => {
+                    let segment = Segment::new(start, len.into_u64());
+                    let owned = process
+                        .vmm()
+                        .mark_as_reserved(segment)
+                        .map_err(|_| LoadExecutableError::AlreadyReserved(start))?;
+                    let flags = PageTableFlags::PRESENT
+                        | PageTableFlags::USER_ACCESSIBLE
+                        | if no_execute {
+                            PageTableFlags::NO_EXECUTE
+                        } else {
+                            PageTableFlags::empty()
+                        };
+                    let lazy = LazyMemoryRegion::new(owned, len, flags);
+                    process
+                        .memory_regions()
+                        .add_region(MemoryRegion::FileBacked(FileBackedMemoryRegion::new(
+                            lazy,
+                            node.clone(),
+                            offset,
+                            filesz,
+                        )));
+                }
             }
         }
 
-        let tls = elf.program_headers_by_type(ProgramHeaderType::TLS).next();
-        if let Some(tls) = tls {
-            let layout = Layout::from_size_align(tls.memsz, tls.align)
-                .map_err(|_| LoadExecutableError::InvalidSizeOrAlign)?;
+        if let Some(tls) = &self.tls {
             let mut alloc = memapi
-                .allocate(Location::Anywhere, layout, UserAccessible::Yes, Guarded::No)
+                .allocate(
+                    Location::Anywhere,
+                    tls.layout,
+                    UserAccessible::Yes,
+                    Guarded::No,
+                )
                 .ok_or(LoadExecutableError::AllocationFailed)?;
             let slice = alloc.as_mut();
             read_exact(node, &mut slice[..tls.filesz], tls.offset)?;
@@ -228,7 +287,7 @@ impl ValidatedExecutable {
             *task.tls().write() = Some(alloc);
         }
 
-        Ok(elf.entry())
+        Ok(self.entry)
     }
 }
 
