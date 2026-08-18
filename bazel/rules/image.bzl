@@ -52,10 +52,6 @@ def _ext2_image_impl(ctx):
         ctx.actions.write(staged, content)
         inputs.append(staged)
         cmds.extend(_stage(dest, staged.path))
-        
-    for dest, size in ctx.attr.random_files.items():
-        cmds.append('mkdir -p "$(dirname "$root/{}")"'.format(dest))
-        cmds.append('dd if=/dev/urandom bs=1M count={} iflag=fullblock status=none of="$root/{}"'.format(size, dest))
 
     cmds.append('mke2fs -q -d "$root" -m 5 -t ext2 {} {}'.format(out.path, ctx.attr.image_size))
 
@@ -89,9 +85,6 @@ ext2_image = rule(
         "image_size": attr.string(
             default = "64M",
             doc = "Filesystem size passed to mke2fs.",
-        ),
-        "random_files": attr.string_dict(
-            doc = "Destination path inside the image to a size in MiB of random filler data.",
         ),
     },
 )

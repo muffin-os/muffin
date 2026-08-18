@@ -34,13 +34,8 @@ ext2_image(
     files = {
         "//userspace/fbdemo": "bin/fbdemo",
         "//userspace/init": "bin/init",
-        "//userspace/sandbox": "bin/sandbox",
         "//userspace/utilities/false": "bin/false",
         "//userspace/utilities/true": "bin/true",
-    },
-    image_size = "4G",
-    random_files = {
-        "var/large.bin": "3072",
     },
 )
 

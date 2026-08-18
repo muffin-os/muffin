@@ -52,17 +52,6 @@ unsafe extern "C" fn main() -> ! {
         info!(pid = %proc.pid(), "started process");
     }
 
-    {
-        info!("starting sandbox process...");
-        let sandbox_path = AbsolutePath::try_new("/bin/sandbox").unwrap();
-        let _ = vfs()
-            .read()
-            .open(sandbox_path)
-            .expect("should have /bin/sandbox");
-        let proc = Process::create_from_executable(Process::root(), sandbox_path).unwrap();
-        info!(pid = %proc.pid(), "started process");
-    }
-
     mcore::exit_bootstrap()
 }
 

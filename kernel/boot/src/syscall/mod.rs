@@ -20,8 +20,8 @@ use x86_64::structures::idt::InterruptStackFrame;
 use crate::arch::idt::SyscallRegisters;
 use crate::hpet::hpet;
 use crate::mcore::context::ExecutionContext;
-use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome};
 use crate::mcore::mtask::process::mem::PageInError;
+use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome};
 use crate::mcore::mtask::task::Task;
 
 mod access;

@@ -55,7 +55,9 @@ pub fn dispatch_sys_execve(
     task.free_user_allocations();
     FsBase::write(VirtAddr::zero());
     process.executable_segments().write().clear();
-    process.memory_regions().clear(process.address_space(), &sole);
+    process
+        .memory_regions()
+        .clear(process.address_space(), &sole);
 
     let argv_refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     let envp_refs: Vec<&[u8]> = envp.iter().map(Vec::as_slice).collect();

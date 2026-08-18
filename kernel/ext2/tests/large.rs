@@ -8,6 +8,9 @@ mod common;
 
 const IMAGE: &str = "kernel/ext2/tests/filesystems/large.img";
 const PATTERN_LEN: usize = 600_000;
+const HUGE_LEN: usize = 160 * 1024 * 1024;
+const TRIPLE_BOUNDARY_WINDOW: (usize, usize) = (65804 * 1024 - 2048, 6144);
+const INNER_DOUBLE_WINDOW: (usize, usize) = ((65804 + 65536 - 1) * 1024, 3072);
 
 fn pattern_byte(offset: usize) -> u8 {
     (offset % 251) as u8
@@ -30,6 +33,18 @@ where
         .expect("pattern.bin must exist in the image")
         .try_into()
         .expect("pattern.bin must be a regular file")
+}
+
+fn open_huge<T>(fs: &Ext2Fs<T>) -> RegularFile
+where
+    T: BlockDevice,
+{
+    let root = fs.read_root_inode().expect("root inode must be readable");
+    fs.find_and_resolve_entry(&root, |e| e.name().is_some_and(|n| n == "huge.bin"))
+        .expect("directory lookup must succeed")
+        .expect("huge.bin must exist in the image")
+        .try_into()
+        .expect("huge.bin must be a regular file")
 }
 
 fn read_exact_at<T>(fs: &Ext2Fs<T>, file: &RegularFile, offset: usize, len: usize) -> Vec<u8>
@@ -154,6 +169,82 @@ fn read_across_sparse_hole(sector_size: usize) {
             "unexpected byte at offset {i} of sparse.bin at sector size {sector_size}"
         );
     }
+}
+
+generate_tests!(
+    huge_file_length:
+    512 - huge_file_length_512,
+    1024 - huge_file_length_1024,
+    4096 - huge_file_length_4096,
+);
+
+fn huge_file_length(sector_size: usize) {
+    let fs = cow_fs!("kernel/ext2/tests/filesystems/huge.img", sector_size);
+    let file = open_huge(&fs);
+    assert_eq!(
+        HUGE_LEN,
+        file.len(),
+        "unexpected huge.bin size at sector size {sector_size}"
+    );
+}
+
+generate_tests!(
+    read_across_triple_indirect_boundary:
+    512 - read_across_triple_indirect_boundary_512,
+    1024 - read_across_triple_indirect_boundary_1024,
+    4096 - read_across_triple_indirect_boundary_4096,
+);
+
+fn read_across_triple_indirect_boundary(sector_size: usize) {
+    let fs = cow_fs!("kernel/ext2/tests/filesystems/huge.img", sector_size);
+    let file = open_huge(&fs);
+
+    let (offset, len) = TRIPLE_BOUNDARY_WINDOW;
+    let data = read_exact_at(&fs, &file, offset, len);
+    assert_eq!(
+        None,
+        first_mismatch(&data, offset),
+        "pattern mismatch across the double to triple indirect boundary at sector size {sector_size}"
+    );
+}
+
+generate_tests!(
+    read_across_inner_double_indirect_boundary:
+    512 - read_across_inner_double_indirect_boundary_512,
+    1024 - read_across_inner_double_indirect_boundary_1024,
+    4096 - read_across_inner_double_indirect_boundary_4096,
+);
+
+fn read_across_inner_double_indirect_boundary(sector_size: usize) {
+    let fs = cow_fs!("kernel/ext2/tests/filesystems/huge.img", sector_size);
+    let file = open_huge(&fs);
+
+    let (offset, len) = INNER_DOUBLE_WINDOW;
+    let data = read_exact_at(&fs, &file, offset, len);
+    assert_eq!(
+        None,
+        first_mismatch(&data, offset),
+        "pattern mismatch across the inner double indirect boundary at sector size {sector_size}"
+    );
+}
+
+generate_tests!(
+    read_hole_in_triple_indirect:
+    512 - read_hole_in_triple_indirect_512,
+    1024 - read_hole_in_triple_indirect_1024,
+    4096 - read_hole_in_triple_indirect_4096,
+);
+
+fn read_hole_in_triple_indirect(sector_size: usize) {
+    let fs = cow_fs!("kernel/ext2/tests/filesystems/huge.img", sector_size);
+    let file = open_huge(&fs);
+
+    let offset = 100 * 1024 * 1024;
+    let data = read_exact_at(&fs, &file, offset, 1024);
+    assert!(
+        data.iter().all(|b| *b == 0),
+        "hole at offset {offset} must read as zeros at sector size {sector_size}"
+    );
 }
 
 struct CountingDevice {
