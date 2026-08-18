@@ -46,6 +46,9 @@ unsafe impl Hal for HalImpl {
             .unwrap();
         let segment = segment.leak();
         let addr = NonNull::new(segment.start.as_mut_ptr::<u8>()).unwrap();
+        unsafe {
+            core::ptr::write_bytes(addr.as_ptr(), 0, pages * Size4KiB::SIZE.into_usize());
+        }
         (start_address, addr)
     }
 
@@ -100,7 +103,6 @@ unsafe impl Hal for HalImpl {
         let segment = segment.leak();
         NonNull::new(segment.start.as_mut_ptr::<u8>()).unwrap()
     }
-
     unsafe fn share(buffer: NonNull<[u8]>, _: BufferDirection) -> u64 {
         AddressSpace::kernel()
             .translate(VirtAddr::from_ptr(buffer.as_ptr()))
