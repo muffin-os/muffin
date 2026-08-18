@@ -59,6 +59,12 @@ pub fn init() -> Lapic {
 
     unsafe {
         lapic.enable();
+        // While the LAPIC is software-disabled, LVT mask bits are forced set
+        // and writes cannot clear them. `enable` unmasks the timer before it
+        // software-enables the LAPIC, so on APs (software-disabled after
+        // INIT) the unmask is lost and the timer never fires. Unmask again
+        // now that the LAPIC is software-enabled.
+        lapic.enable_timer();
     }
 
     Lapic {
