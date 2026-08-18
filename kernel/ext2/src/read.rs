@@ -23,12 +23,7 @@ impl IndirectCache {
     fn lookup(&mut self, addr: BlockAddress, index: usize) -> Option<Option<BlockAddress>> {
         let pos = self.entries.iter().position(|(a, _)| *a == addr)?;
         self.entries[..=pos].rotate_right(1);
-        let table = &self.entries[0].1;
-        debug_assert!(
-            index < table.len(),
-            "indirect pointer index must be within the pointer table"
-        );
-        Some(table[index])
+        self.entries[0].1.get(index).copied()
     }
 
     fn insert(&mut self, addr: BlockAddress, table: Vec<Option<BlockAddress>>) {
@@ -162,6 +157,12 @@ where
                 block_index - indirect_limit,
             )?
         } else {
+            let pointers_per_block = u64::from(self.superblock.block_size() / 4);
+            let triple_indirect_limit = u64::from(double_indirect_limit)
+                + pointers_per_block * pointers_per_block * pointers_per_block;
+            if u64::from(block_index) >= triple_indirect_limit {
+                return Err(Error::InvalidBlockIndex(block_index));
+            }
             self.resolve_triple_indirect_ptr(
                 inode.triple_indirect_ptr(),
                 block_index - double_indirect_limit,
@@ -193,11 +194,10 @@ where
             .map(BlockAddress::new)
             .collect::<Vec<_>>();
 
-        debug_assert!(
-            index < table.len(),
-            "indirect pointer index must be within the pointer table"
-        );
-        let resolved = table[index];
+        let resolved = table
+            .get(index)
+            .copied()
+            .ok_or(Error::InvalidBlockIndex(block_index))?;
         self.indirect_cache.lock().insert(indirect_ptr, table);
         Ok(resolved)
     }

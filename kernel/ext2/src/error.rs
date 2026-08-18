@@ -12,6 +12,7 @@ pub enum Error {
     DeviceRead,
     DeviceWrite,
     InvalidInodeAddress(u32),
+    InvalidBlockIndex(u32),
     NoSpace,
     NotSupported,
     EntryExists,

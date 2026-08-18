@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Read;
 
 use kernel_device::block::MemoryBlockDevice;
-use kernel_ext2::{DirType, Ext2Fs, RegularFile, Type};
+use kernel_ext2::{BlockAddress, DirType, Error, Ext2Fs, RegularFile, Type};
 
 #[test]
 fn test_list_directory() {
@@ -135,4 +135,41 @@ fn do_test_read_file(sector_size: usize) {
         assert_eq!(5, read_bytes);
         assert_eq!(b"World", &hello_txt_data[..]);
     }
+}
+
+#[test]
+fn resolve_block_index_out_of_range() {
+    let fs = open_read_fs();
+    let root = fs.read_root_inode().unwrap();
+
+    let res = fs.resolve_block_index(&root, u32::MAX);
+    assert_eq!(
+        Err(Error::InvalidBlockIndex(u32::MAX)),
+        res,
+        "block index beyond the triple indirect range must be rejected"
+    );
+}
+
+#[test]
+fn resolve_indirect_ptr_out_of_range() {
+    let fs = open_read_fs();
+    let (direct_limit, indirect_limit, _) = fs.indirect_pointer_limits();
+    let pointers_per_block = indirect_limit - direct_limit;
+
+    let res = fs.resolve_indirect_ptr(BlockAddress::new(1), pointers_per_block);
+    assert_eq!(
+        Err(Error::InvalidBlockIndex(pointers_per_block)),
+        res,
+        "index beyond the pointer table must be rejected"
+    );
+}
+
+fn open_read_fs() -> Ext2Fs<kernel_device::block::MemoryBlockDevice<Vec<u8>>> {
+    let mut data = Vec::new();
+    File::open("kernel/ext2/tests/filesystems/read.img")
+        .unwrap()
+        .read_to_end(&mut data)
+        .unwrap();
+    let device = MemoryBlockDevice::try_new(512, data).unwrap();
+    Ext2Fs::try_new(device).unwrap()
 }
