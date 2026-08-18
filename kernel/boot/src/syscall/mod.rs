@@ -84,9 +84,7 @@ fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
     debug!("process {} exit with code {code}", ctx.pid());
     ctx.current_process()
         .set_exit_outcome(ExitOutcome::Exited(code));
-    Task::exit();
-    // Task::exit never returns, it switches away and the scheduler reaps the task.
-    Ok(0)
+    Task::exit_current()
 }
 
 fn dispatch_sys_getpid() -> Result<usize, Errno> {

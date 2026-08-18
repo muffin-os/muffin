@@ -38,11 +38,11 @@ fn or_fail_gfx<T, E>(result: Result<T, E>) -> T {
 
 // vertex layout: (x, y, r, g, b) — 5 floats × 4 bytes = 20 bytes/vertex
 fn color_vert(input: &[f32], output: &mut [f32]) {
-    output[0] = input[0]; // NDC x
-    output[1] = input[1]; // NDC y
-    output[2] = input[2]; // red
-    output[3] = input[3]; // green
-    output[4] = input[4]; // blue
+    output[0] = input[0];
+    output[1] = input[1];
+    output[2] = input[2];
+    output[3] = input[3];
+    output[4] = input[4];
 }
 
 /// Scales a unit-interval channel to 0..=255, saturating outside it.
@@ -157,7 +157,6 @@ fn main() -> i32 {
     let mut q = SoftQueue::new(fb_u32, info.width, info.height, stride);
     report("queue_new", t, now_us());
 
-    // render several frames to expose warm-up effects across submit/fsync
     for frame in 0..5u32 {
         let t0 = now_us();
         or_fail_gfx(q.submit(|rec| {

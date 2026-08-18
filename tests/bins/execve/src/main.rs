@@ -17,6 +17,10 @@ fn main() -> i32 {
         println!("execve-test: FAIL enoent");
         return 1;
     }
+    if execve("", &["x"], &[]) != ENOENT {
+        println!("execve-test: FAIL empty");
+        return 1;
+    }
     if execve("/data/notelf.txt", &["x"], &[]) != ENOEXEC {
         println!("execve-test: FAIL enoexec");
         return 1;

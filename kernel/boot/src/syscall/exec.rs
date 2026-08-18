@@ -91,6 +91,12 @@ pub fn dispatch_sys_execve(
 }
 
 fn copy_in_path(ptr: usize, len: usize) -> Result<AbsoluteOwnedPath, Errno> {
+    if ptr == 0 {
+        return Err(EFAULT);
+    }
+    if len == 0 {
+        return Err(ENOENT);
+    }
     if len > PATH_MAX {
         return Err(ENAMETOOLONG);
     }

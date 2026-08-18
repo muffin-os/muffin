@@ -6,7 +6,6 @@ package(default_visibility = ["//visibility:public"])
     rust_binary(
         name = name,
         srcs = glob(["{}/src/**/*.rs".format(directory)]),
-        crate_root = "{}/src/main.rs".format(directory),
         edition = "2024",
         platform = "//platforms:x86_64-unknown-muffin",
         deps = ["//userspace/minilib"],
@@ -14,7 +13,6 @@ package(default_visibility = ["//visibility:public"])
     for name, directory in {
         "exec_target": "exec-target",
         "execve": "execve",
-        "execve_reap": "execve-reap",
         "exit_code": "exit-code",
         "fb_ioctl": "fb-ioctl",
         "fb_mmap": "fb-mmap",

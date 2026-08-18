@@ -164,7 +164,7 @@ pub extern "sysv64" fn syscall_handler_impl(
     let ctx = ExecutionContext::load();
     let task = ctx.current_task();
     if task.process().reap_requested_for(task.id()) {
-        Task::exit();
+        Task::exit_current();
     }
 }
 

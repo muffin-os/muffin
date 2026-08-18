@@ -115,12 +115,13 @@ ext2_image(
     name = "execve_reap_disk",
     contents = {
         "data/hello.txt": _HELLO,
+        "data/notelf.txt": "definitely not an ELF\n",
         "exec-sibling": "1\n",
-        "spawn": "/bin/execve-reap\n",
+        "spawn": "/bin/execve\n",
     },
     files = {
         "//tests/bins:exec_target": "bin/exec-target",
-        "//tests/bins:execve_reap": "bin/execve-reap",
+        "//tests/bins:execve": "bin/execve",
     },
 )
 

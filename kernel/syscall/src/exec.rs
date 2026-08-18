@@ -6,7 +6,8 @@ const STACK_ALIGN: usize = 16;
 /// Writes the SysV x86-64 process-entry stack into `stack`, whose last byte
 /// is mapped at virtual address `stack_top - 1`. Returns the virtual address
 /// the new image starts with in rsp. The result points at argc and is 16 byte
-/// aligned. None when the payload does not fit into `stack`.
+/// aligned. The auxiliary vector is empty, holding only its AT_NULL
+/// terminator. None when the payload does not fit into `stack`.
 pub fn build_initial_stack(
     stack: &mut [u8],
     stack_top: usize,
@@ -18,7 +19,7 @@ pub fn build_initial_stack(
         strings_len = strings_len.checked_add(s.len())?.checked_add(1)?;
     }
 
-    let words = argv.len().checked_add(envp.len())?.checked_add(3)?;
+    let words = argv.len().checked_add(envp.len())?.checked_add(5)?;
     let pointers_len = words.checked_mul(WORD)?;
 
     let base = stack_top.checked_sub(stack.len())?;
@@ -50,6 +51,10 @@ pub fn build_initial_stack(
         put_word(stack, base, word_addr, 0)?;
         word_addr += WORD;
     }
+
+    put_word(stack, base, word_addr, 0)?;
+    word_addr += WORD;
+    put_word(stack, base, word_addr, 0)?;
 
     Some(rsp)
 }
@@ -138,6 +143,18 @@ mod tests {
             0,
             "envp array is not NULL terminated"
         );
+        addr += WORD;
+
+        assert_eq!(
+            read_word(&stack, STACK_TOP, addr),
+            0,
+            "auxv AT_NULL key missing"
+        );
+        assert_eq!(
+            read_word(&stack, STACK_TOP, addr + WORD),
+            0,
+            "auxv AT_NULL value missing"
+        );
     }
 
     #[test]
@@ -159,6 +176,16 @@ mod tests {
             0,
             "envp array is not NULL terminated"
         );
+        assert_eq!(
+            read_word(&stack, STACK_TOP, rsp + 3 * WORD),
+            0,
+            "auxv AT_NULL key missing"
+        );
+        assert_eq!(
+            read_word(&stack, STACK_TOP, rsp + 4 * WORD),
+            0,
+            "auxv AT_NULL value missing"
+        );
     }
 
     #[test]
@@ -166,7 +193,7 @@ mod tests {
         let argv: [&[u8]; 2] = [b"exec-target", b"alpha"];
         let envp: [&[u8]; 1] = [b"KEY=value"];
         let strings = 12 + 6 + 10;
-        let words = argv.len() + envp.len() + 3;
+        let words = argv.len() + envp.len() + 5;
         let needed = (strings + words * WORD).next_multiple_of(STACK_ALIGN);
 
         let mut exact = vec![0u8; needed];

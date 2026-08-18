@@ -58,6 +58,9 @@ unsafe extern "C" fn main() -> ! {
         GlobalTaskQueue::enqueue(Box::pin(task));
     }
 
+    let attach_exec_sibling = AbsolutePath::try_new("/exec-sibling")
+        .is_ok_and(|marker| vfs().write().open(marker).is_ok());
+
     {
         info!("reading spawn manifest");
         let manifest_path = AbsolutePath::try_new("/spawn").expect("should be a valid path");
@@ -91,27 +94,23 @@ unsafe extern "C" fn main() -> ! {
                 continue;
             }
             let path = AbsolutePath::try_new(line).expect("manifest entry should be a valid path");
-            let proc = Process::create_from_executable(Process::root(), path)
-                .expect("should be able to spawn manifest entry");
+            let proc = if attach_exec_sibling && pending.is_empty() {
+                let (proc, main_task) = Process::create_unscheduled(Process::root(), path)
+                    .expect("should be able to spawn manifest entry");
+                let sibling = Task::create_new(&proc, exec_sibling, ptr::null_mut())
+                    .expect("should be able to create the exec sibling task");
+                GlobalTaskQueue::enqueue(Box::pin(sibling));
+                kernel::serial_println!("test-kernel: sibling attached pid={}", proc.pid());
+                GlobalTaskQueue::enqueue(Box::pin(main_task));
+                proc
+            } else {
+                Process::create_from_executable(Process::root(), path)
+                    .expect("should be able to spawn manifest entry")
+            };
             kernel::serial_println!("test-kernel: spawned {} pid={}", line, proc.pid());
             pending.push(proc);
         }
         kernel::serial_println!("test-kernel: spawn complete count={}", pending.len());
-
-        // No thread syscall exists, so the reap target is attached here,
-        // opt-in through the marker file.
-        if let Ok(marker) = AbsolutePath::try_new("/exec-sibling")
-            && vfs().write().open(marker).is_ok()
-        {
-            let target = pending
-                .first()
-                .expect("manifest must spawn a process")
-                .clone();
-            let task = Task::create_new(&target, exec_sibling, ptr::null_mut())
-                .expect("should be able to create the exec sibling task");
-            kernel::serial_println!("test-kernel: sibling attached pid={}", target.pid());
-            GlobalTaskQueue::enqueue(Box::pin(task));
-        }
 
         // The other CPUs run the scheduler, so CPU 0 can poll here without
         // stalling user tasks.
@@ -155,13 +154,14 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
 fn handle_panic(info: &core::panic::PanicInfo) {
     use tracing::error;
 
-    let location = info.location().unwrap();
-    error!(
-        "kernel panicked at {}:{}:{}:",
-        location.file(),
-        location.line(),
-        location.column(),
-    );
+    if let Some(location) = info.location() {
+        error!(
+            "kernel panicked at {}:{}:{}:",
+            location.file(),
+            location.line(),
+            location.column(),
+        );
+    }
     error!("{}", info.message());
 
     match kernel::backtrace::Backtrace::try_capture() {

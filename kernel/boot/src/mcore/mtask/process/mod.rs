@@ -249,17 +249,15 @@ impl Process {
         res
     }
 
-    /// Enqueues the new process's main task. The executable is opened and statically validated
-    /// before any process is inserted into the process tree.
     #[instrument(
         level = Level::INFO,
         skip_all,
         fields(path = %path.as_ref(), ppid = %parent.pid(), pid = Empty)
     )]
-    pub fn create_from_executable(
+    pub fn create_unscheduled(
         parent: &Arc<Process>,
         path: impl AsRef<AbsolutePath>,
-    ) -> Result<Arc<Self>, CreateProcessError> {
+    ) -> Result<(Arc<Self>, Task), CreateProcessError> {
         let path = path.as_ref();
         let node = vfs()
             .read()
@@ -269,28 +267,20 @@ impl Process {
 
         let process = Self::create_new(parent, path.to_string(), Some(path));
         Span::current().record("pid", process.pid.as_u64());
-        {
-            // register STDIN, STDOUT and STDERR
-            let mut fds = process.file_descriptors().write();
-
-            for (i, path) in ["/dev/stdin", "/dev/stdout", "/dev/stderr"]
-                .iter()
-                .map(|v| AbsolutePath::try_new(v).unwrap())
-                .enumerate()
-            {
-                let node = vfs()
-                    .write()
-                    .open(path)
-                    .expect("should be able to open stdin");
-                let ofd = OpenFileDescription::from(node);
-                let fd_num = FdNum::from(i as i32);
-                let fd = FileDescriptor::new(fd_num, FileDescriptorFlags::empty(), ofd.into());
-                fds.insert(fd_num, fd);
-            }
-        }
 
         let kstack = HigherHalfStack::allocate(16, trampoline, ptr::null_mut(), Task::exit)?;
         let main_task = Task::create_with_stack(&process, kstack);
+
+        Ok((process, main_task))
+    }
+
+    /// Enqueues the new process's main task. The executable is opened and statically validated
+    /// before any process is inserted into the process tree.
+    pub fn create_from_executable(
+        parent: &Arc<Process>,
+        path: impl AsRef<AbsolutePath>,
+    ) -> Result<Arc<Self>, CreateProcessError> {
+        let (process, main_task) = Self::create_unscheduled(parent, path)?;
         GlobalTaskQueue::enqueue(Box::pin(main_task));
 
         Ok(process)
@@ -454,8 +444,7 @@ impl Process {
             match &acc.reap {
                 Some(reap) if reap.keeper != keeper => {
                     drop(acc);
-                    Task::exit();
-                    unreachable!("a reaped task never returns from exit");
+                    Task::exit_current();
                 }
                 Some(_) => {}
                 None => {
