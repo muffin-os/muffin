@@ -39,9 +39,7 @@ pub fn dispatch_sys_execve(
 ) -> Result<usize, Errno> {
     let path = copy_in_path(path_ptr, path_len)?;
 
-    let mut budget = 3 * size_of::<usize>();
-    let argv = copy_in_str_array(argv_ptr, argc, &mut budget)?;
-    let envp = copy_in_str_array(envp_ptr, envc, &mut budget)?;
+    let args = ExecArgs::copy_in(argv_ptr, argc, envp_ptr, envc)?;
 
     let node = vfs().write().open(&path).map_err(|_| ENOENT)?;
     let validated = elf::validate(&node).map_err(exec_errno)?;
@@ -59,11 +57,14 @@ pub fn dispatch_sys_execve(
         .memory_regions()
         .clear(process.address_space(), &sole);
 
-    let argv_refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
-    let envp_refs: Vec<&[u8]> = envp.iter().map(Vec::as_slice).collect();
-    let Ok((entry, rsp)) =
-        setup_user_image(&process, task, &validated, &node, &argv_refs, &envp_refs)
-    else {
+    let Ok((entry, rsp)) = setup_user_image(
+        &process,
+        task,
+        &validated,
+        &node,
+        &args.argv(),
+        &args.envp(),
+    ) else {
         terminate_current(Signal::Kill);
     };
 
@@ -110,42 +111,72 @@ fn copy_in_path(ptr: usize, len: usize) -> Result<AbsoluteOwnedPath, Errno> {
     }
 }
 
-/// All user memory becomes resident here, before any filesystem lock is
-/// taken, per the invariant on [`make_user_range_resident`].
-fn copy_in_str_array(ptr: usize, count: usize, budget: &mut usize) -> Result<Vec<Vec<u8>>, Errno> {
-    if count == 0 {
-        return Ok(vec![]);
-    }
-    if ptr == 0 {
-        return Err(EFAULT);
-    }
-    let array_len = count.checked_mul(size_of::<StrSlice>()).ok_or(E2BIG)?;
-    make_user_range_resident(ptr, array_len, UserAccess::Read)?;
+const STACK_BYTES_PER_ARG: usize = 1 + size_of::<usize>();
 
-    let mut strings = Vec::with_capacity(count);
-    for i in 0..count {
-        // Safety: the array range is resident and user readable, and the
-        // read tolerates an unaligned element address.
-        let slot = unsafe { (ptr as *const StrSlice).add(i).read_unaligned() };
-        let charge = slot.len.checked_add(1 + size_of::<usize>()).ok_or(E2BIG)?;
-        *budget = budget.checked_add(charge).ok_or(E2BIG)?;
-        if *budget > ARG_MAX {
-            return Err(E2BIG);
+struct ExecArgs {
+    bytes: Vec<u8>,
+    lens: Vec<usize>,
+    argc: usize,
+}
+
+impl ExecArgs {
+    fn copy_in(argv_ptr: usize, argc: usize, envp_ptr: usize, envc: usize) -> Result<Self, Errno> {
+        let mut budget = 3 * size_of::<usize>();
+        let mut bytes = vec![];
+        let mut lens = vec![];
+
+        for (ptr, count) in [(argv_ptr, argc), (envp_ptr, envc)] {
+            if count == 0 {
+                continue;
+            }
+            if ptr == 0 {
+                return Err(EFAULT);
+            }
+            if budget.saturating_add(count.saturating_mul(STACK_BYTES_PER_ARG)) > ARG_MAX {
+                return Err(E2BIG);
+            }
+            make_user_range_resident(ptr, count * size_of::<StrSlice>(), UserAccess::Read)?;
+
+            for i in 0..count {
+                let slot = unsafe { (ptr as *const StrSlice).add(i).read_unaligned() };
+                budget = budget
+                    .saturating_add(slot.len)
+                    .saturating_add(STACK_BYTES_PER_ARG);
+                if budget > ARG_MAX {
+                    return Err(E2BIG);
+                }
+                if slot.len > 0 {
+                    make_user_range_resident(slot.ptr, slot.len, UserAccess::Read)?;
+                    let src = unsafe { slice_from_ptr_and_len::<u8>(slot.ptr, slot.len) }?;
+                    if src.contains(&0) {
+                        return Err(EINVAL);
+                    }
+                    bytes.extend_from_slice(src);
+                }
+                lens.push(slot.len);
+            }
         }
-        let bytes = if slot.len == 0 {
-            vec![]
-        } else {
-            make_user_range_resident(slot.ptr, slot.len, UserAccess::Read)?;
-            unsafe { slice_from_ptr_and_len::<u8>(slot.ptr, slot.len) }?.to_vec()
-        };
-        // An embedded NUL would truncate the C string written onto the new
-        // image's initial stack.
-        if bytes.contains(&0) {
-            return Err(EINVAL);
-        }
-        strings.push(bytes);
+
+        Ok(Self { bytes, lens, argc })
     }
-    Ok(strings)
+
+    fn argv(&self) -> Vec<&[u8]> {
+        self.slices(0, self.argc)
+    }
+
+    fn envp(&self) -> Vec<&[u8]> {
+        self.slices(self.argc, self.lens.len() - self.argc)
+    }
+
+    fn slices(&self, skip: usize, take: usize) -> Vec<&[u8]> {
+        let mut at: usize = self.lens[..skip].iter().sum();
+        let mut out = Vec::with_capacity(take);
+        for &len in &self.lens[skip..skip + take] {
+            out.push(&self.bytes[at..at + len]);
+            at += len;
+        }
+        out
+    }
 }
 
 fn exec_errno(e: LoadExecutableError) -> Errno {

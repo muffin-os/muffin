@@ -5,7 +5,7 @@ package(default_visibility = ["//visibility:public"])
 [
     rust_binary(
         name = name,
-        srcs = ["{}/src/main.rs".format(directory)],
+        srcs = glob(["{}/src/**/*.rs".format(directory)]),
         crate_root = "{}/src/main.rs".format(directory),
         edition = "2024",
         platform = "//platforms:x86_64-unknown-muffin",
@@ -21,6 +21,7 @@ package(default_visibility = ["//visibility:public"])
         "file_read": "file-read",
         "floats": "floats",
         "mmap": "mmap",
+        "posix": "posix",
         "signals_edge": "signals-edge",
         "signals_init": "signals-init",
         "sleep": "sleep",

@@ -83,6 +83,16 @@ ext2_image(
 )
 
 ext2_image(
+    name = "posix_disk",
+    contents = {
+        "data/hello.txt": _HELLO,
+        "spawn": "/bin/posix\n",
+    },
+    empty_dirs = ["data/dir"],
+    files = {"//tests/bins:posix": "bin/posix"},
+)
+
+ext2_image(
     name = "unwind_disk",
     contents = {"spawn": "/bin/unwind\n"},
     files = {"//tests/bins:unwind": "bin/unwind"},
@@ -162,6 +172,7 @@ ext2_image(
         "floats",
         "kstack_overflow",
         "mmap",
+        "posix",
         "signals",
         "signals_edge",
         "sleep",
