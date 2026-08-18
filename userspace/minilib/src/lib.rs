@@ -289,14 +289,8 @@ pub fn open(path: &str) -> Result<c_int, Errno> {
 
 /// Never returns on success, so the result is always the failure reason.
 pub fn execve(path: &str, argv: &[&str], envp: &[&str]) -> Errno {
-    let argv_v = argv
-        .iter()
-        .map(|&s| StrSlice::from(s))
-        .collect::<Vec<_>>();
-    let envp_v = envp
-        .iter()
-        .map(|&s| StrSlice::from(s))
-        .collect::<Vec<_>>();
+    let argv_v = argv.iter().map(|&s| StrSlice::from(s)).collect::<Vec<_>>();
+    let envp_v = envp.iter().map(|&s| StrSlice::from(s)).collect::<Vec<_>>();
     let raw = syscall6(
         SYS_EXECVE,
         path.as_ptr() as usize,

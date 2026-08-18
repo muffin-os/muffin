@@ -156,11 +156,6 @@ impl Scheduler {
         self.idle_task = Some(task);
     }
 
-    pub fn adopt_current_as_idle(&mut self) {
-        assert!(!interrupts::are_enabled());
-        self.idle_tid = Some(self.current_task.id());
-    }
-
     unsafe fn switch(old_stack_ptr: *mut usize, new_stack_ptr: usize, new_cr3_value: usize) {
         unsafe {
             switch_impl(old_stack_ptr, new_stack_ptr as *const u8, new_cr3_value);

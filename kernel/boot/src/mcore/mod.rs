@@ -49,9 +49,11 @@ pub fn init() {
 
     GlobalTaskQueue::init();
 
+    TaskCleanup::init();
+
     // then call the `cpu_init` function on each CPU (no-op on bootstrap CPU)
     resp.cpus().iter().skip(1).for_each(|cpu| {
-        cpu.goto_address.write(cpu_init_and_idle);
+        cpu.goto_address.write(cpu_init);
     });
 
     // then call the `cpu_init` function on the bootstrap CPU
@@ -59,8 +61,6 @@ pub fn init() {
     interrupts::enable();
 
     install_idle_task();
-
-    TaskCleanup::init();
 }
 
 unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
@@ -107,23 +107,12 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
     info!("cpu {} initialized", ctx.cpu_id());
 }
 
-unsafe extern "C" fn cpu_init_and_idle(cpu: &limine::mp::Cpu) -> ! {
+unsafe extern "C" fn cpu_init(cpu: &limine::mp::Cpu) -> ! {
     unsafe { cpu_init_and_return(cpu) };
 
-    turn_idle()
-}
+    install_idle_task();
 
-/// Parks the current task as this core's idle task, never returning.
-fn turn_idle() -> ! {
-    unsafe {
-        ExecutionContext::load()
-            .scheduler_mut()
-            .adopt_current_as_idle();
-    }
-    interrupts::enable();
-    loop {
-        hlt();
-    }
+    Task::exit_current()
 }
 
 fn install_idle_task() {
