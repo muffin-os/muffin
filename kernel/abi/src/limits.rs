@@ -9,4 +9,4 @@ macro_rules! limit {
 }
 
 limit!(_POSIX_ARG_MAX = 4096 ; ARG_MAX = 32 * 4096);
-limit!(_POSIX_PATH_MAX = 255 ; PATH_MAX = 255);
+limit!(_POSIX_PATH_MAX = 256 ; PATH_MAX = 4096);

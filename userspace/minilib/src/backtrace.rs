@@ -19,12 +19,10 @@ use elf::string_table::StringTable;
 use elf::symbol::SymbolTable;
 use unwinding::abi::{_Unwind_Backtrace, _Unwind_GetIPInfo, UnwindContext, UnwindReasonCode};
 
-use crate::{MapFlags, ProtFlags, Stat};
+use crate::{MapFlags, PATH_MAX, ProtFlags, Stat};
 
 /// Frames collected before the walk is cut short, bounding a runaway recursion.
 const MAX_FRAMES: usize = 32;
-
-const PATH_MAX: usize = 4096;
 
 /// Indent that lines an inlined frame up under the address above it, so it has to
 /// match the width of the `  NN: 0x{:016x}` prefix.

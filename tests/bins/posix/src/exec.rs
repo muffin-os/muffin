@@ -1,8 +1,8 @@
 use alloc::vec;
 
 use minilib::{
-    CLOCK_MONOTONIC, E2BIG, EFAULT, EINVAL, ENAMETOOLONG, ENOENT, Errno, SYS_EXECVE, StrSlice,
-    Timespec, clock_gettime, execve, syscall6,
+    CLOCK_MONOTONIC, E2BIG, EFAULT, EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX, SYS_EXECVE,
+    StrSlice, Timespec, clock_gettime, execve, syscall6,
 };
 
 use crate::check;
@@ -45,7 +45,7 @@ pub fn run() {
     let argv = [StrSlice::from(arg)];
     let argv_ptr = argv.as_ptr() as usize;
 
-    let long = vec![b'a'; 256];
+    let long = vec![b'a'; PATH_MAX + 1];
     let Ok(long_path) = core::str::from_utf8(&long) else {
         check::fail("execve/path_setup")
     };

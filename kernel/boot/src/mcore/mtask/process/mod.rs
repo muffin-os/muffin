@@ -164,7 +164,7 @@ pub struct Process {
 
     task_accounting: Mutex<TaskAccounting>,
     /// Mirror of `task_accounting.reap.is_some()`, so the timer tick pays one
-    /// relaxed load instead of a lock when no exec is in progress.
+    /// Acquire load instead of a lock when no exec is in progress.
     // FIXME: find a better solution than mirroring data
     reap_active: AtomicBool,
 
