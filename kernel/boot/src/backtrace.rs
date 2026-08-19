@@ -35,36 +35,42 @@ pub fn init() {
 
         use addr2line::gimli::Dwarf;
         use elf::ElfBytes;
-        use tracing::debug;
+        use tracing::span;
         use x86_64::VirtAddr;
 
         use crate::U64Ext;
         use crate::limine::KERNEL_FILE_REQUEST;
 
-        debug!("initializing backtrace context");
-        let kernel_file = KERNEL_FILE_REQUEST.get_response().unwrap();
-        let file_addr = VirtAddr::from_ptr(kernel_file.file().addr());
-        let file_size = kernel_file.file().size().into_usize();
-        let file_slice = unsafe {
-            // Safety: we keep the part of limine's higher half mapping that contains
-            // the kernel file, so dereferencing that pointer is safe.
-            from_raw_parts(file_addr.as_mut_ptr::<u8>(), file_size)
-        };
-        let file = ElfBytes::<elf::endian::NativeEndian>::minimal_parse(file_slice).unwrap();
-        let dwarf = Dwarf::load(|section| {
-            Ok::<_, ParseError>(EndianSlice::new(
-                {
-                    match file.section_header_by_name(section.name())? {
-                        Some(h) => file.section_data(&h)?.0,
-                        None => &[],
-                    }
-                },
-                addr2line::gimli::NativeEndian,
-            ))
+        span!(Level::DEBUG, "initialize backtrace context").in_scope(|| {
+            let kernel_file = KERNEL_FILE_REQUEST.get_response().unwrap();
+            let file_addr = VirtAddr::from_ptr(kernel_file.file().addr());
+            let file_size = kernel_file.file().size().into_usize();
+            let file_slice = unsafe {
+                // Safety: we keep the part of limine's higher half mapping that contains
+                // the kernel file, so dereferencing that pointer is safe.
+                from_raw_parts(file_addr.as_mut_ptr::<u8>(), file_size)
+            };
+            let file = span!(Level::TRACE, "parse elf").in_scope(|| {
+                ElfBytes::<elf::endian::NativeEndian>::minimal_parse(file_slice).unwrap()
+            });
+            let dwarf = span!(Level::TRACE, "load DWARF").in_scope(|| {
+                Dwarf::load(|section| {
+                    Ok::<_, ParseError>(EndianSlice::new(
+                        {
+                            match file.section_header_by_name(section.name())? {
+                                Some(h) => file.section_data(&h)?.0,
+                                None => &[],
+                            }
+                        },
+                        addr2line::gimli::NativeEndian,
+                    ))
+                })
+                .unwrap()
+            });
+            let ctx = span!(Level::TRACE, "load context")
+                .in_scope(|| Context::from_dwarf(dwarf).unwrap());
+            BacktraceContext(ctx)
         })
-        .unwrap();
-        let ctx = Context::from_dwarf(dwarf).unwrap();
-        BacktraceContext(ctx)
     });
 }
 
