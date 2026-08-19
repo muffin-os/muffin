@@ -19,7 +19,7 @@ pub fn vfs() -> &'static RwLock<Vfs> {
     &VFS
 }
 
-#[instrument(level = Level::DEBUG)]
+#[instrument(name = "init filesystem", level = Level::DEBUG)]
 pub fn init() {
     devfs::init();
 

@@ -14,7 +14,7 @@ pub fn devfs() -> &'static ArcLockedDevFs {
     DEVFS.get().expect("devfs should be initialized")
 }
 
-#[instrument(level = Level::DEBUG)]
+#[instrument(name = "init devfs", level = Level::TRACE)]
 pub fn init() {
     let devfs = ArcLockedDevFs::new();
     {

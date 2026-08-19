@@ -3,7 +3,7 @@ use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::Ordering::{Acquire, Release};
 
-use tracing::{Level, info, instrument, trace};
+use tracing::{Level, instrument, trace};
 use x86_64::instructions::segmentation::{CS, DS, SS};
 use x86_64::instructions::tables::load_tss;
 use x86_64::instructions::{hlt, interrupts};
@@ -29,7 +29,7 @@ mod lapic;
 pub mod mtask;
 
 #[allow(clippy::missing_panics_doc)]
-#[instrument(level = Level::DEBUG)]
+#[instrument(name = "init multitasking", level = Level::DEBUG)]
 pub fn init() {
     let resp = unsafe {
         #[allow(static_mut_refs)] // we need this to set the `extra` field in the CPU structs
@@ -63,9 +63,10 @@ pub fn init() {
     install_idle_task();
 }
 
+#[instrument(name = "init cpu", level = Level::INFO, fields(cpu = cpu.id))]
 unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
     let cpu_arg = cpu.extra.load(Acquire);
-    trace!("booting cpu {} with argument {}", cpu.id, cpu_arg,);
+    trace!("booting cpu {} with argument {}", cpu.id, cpu_arg);
 
     // set the memory mapping that we got as a parameter
     unsafe {
@@ -101,10 +102,6 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
     sse::init();
 
     init_interrupts();
-
-    // load it back and print a message
-    let ctx = ExecutionContext::load();
-    info!("cpu {} initialized", ctx.cpu_id());
 }
 
 unsafe extern "C" fn cpu_init(cpu: &limine::mp::Cpu) -> ! {

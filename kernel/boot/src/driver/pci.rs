@@ -30,9 +30,9 @@ pub struct PciDriverDescriptor {
 ///
 /// Panics if there are multiple specific or multiple generic drivers that would match
 /// the same device.
-#[instrument(level = Level::DEBUG)]
+#[instrument(name = "init pci", level = Level::DEBUG)]
 pub fn init() {
-    if tracing::enabled!(tracing::Level::DEBUG) {
+    if tracing::enabled!(tracing::Level::TRACE) {
         PCI_DRIVERS
             .iter()
             .for_each(|driver| trace!(name = %driver.name, "have pci driver"));
