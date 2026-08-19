@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use kernel::cmdline::cmdline;
 use kernel::driver::block::BlockDevices;
 use kernel::file::ext2::VirtualExt2Fs;
 use kernel::file::vfs;
@@ -30,11 +31,19 @@ unsafe extern "C" fn main() -> ! {
             .expect("should be able to mount ext2fs at /");
     });
 
-    for path in ["/bin/init", "/bin/fbdemo"] {
-        let path = AbsolutePath::try_new(path).expect("executable path should be absolute");
+    span!(Level::INFO, "starting init process").in_scope(|| {
+        let init = cmdline()
+            .init()
+            .expect("should have init argument on cmdline");
+        let path = AbsolutePath::try_new(init).expect("init path should be absolute");
         Process::create_from_executable(Process::root(), path)
             .expect("should be able to create process from executable");
-    }
+    });
+
+    // TODO: start this from init through some kind of "autostart"
+    let path = AbsolutePath::try_new("/bin/fbdemo").expect("executable path should be absolute");
+    Process::create_from_executable(Process::root(), path)
+        .expect("should be able to create process from executable");
 
     mcore::exit_bootstrap()
 }

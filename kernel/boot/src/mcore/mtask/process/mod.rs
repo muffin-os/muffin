@@ -17,6 +17,7 @@ use kernel_abi::ProcessId;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use kernel_syscall::exec::build_initial_stack;
 use kernel_syscall::signal::SignalState;
+use kernel_vfs::OpenError;
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_virtual_memory::VirtualMemoryManager;
@@ -262,7 +263,7 @@ impl Process {
         let node = vfs()
             .read()
             .open(path)
-            .map_err(|_| CreateProcessError::OpenExecutable)?;
+            .map_err(CreateProcessError::OpenExecutable)?;
         elf::validate(&node)?;
 
         let process = Self::create_new(parent, path.to_string(), Some(path));
@@ -521,7 +522,7 @@ impl Drop for Process {
 #[derive(Debug, Error)]
 pub enum CreateProcessError {
     #[error("failed to open the executable")]
-    OpenExecutable,
+    OpenExecutable(#[from] OpenError),
     #[error(transparent)]
     LoadExecutable(#[from] elf::LoadExecutableError),
     #[error("failed to allocate stack")]

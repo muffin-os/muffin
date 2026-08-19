@@ -14,6 +14,7 @@ mod acpi;
 mod apic;
 mod arch;
 pub mod backtrace;
+pub mod cmdline;
 pub mod driver;
 pub mod file;
 pub mod hpet;
@@ -37,6 +38,7 @@ fn init_boot_time() {
 pub fn init() {
     init_boot_time();
 
+    cmdline::init();
     log::init();
     log_boot_environment();
     mem::init();
