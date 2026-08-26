@@ -141,8 +141,15 @@ impl KernelTest {
             ))
             .arg("-drive")
             .arg(format!("if=pflash,unit=1,format=raw,file={ovmf_vars}"))
-            .arg("-cdrom")
-            .arg(&self.env.iso)
+            .arg("-device")
+            .arg("ahci,id=ahci0")
+            .arg("-drive")
+            .arg(format!(
+                "if=none,id=cd0,media=cdrom,format=raw,file={}",
+                self.env.iso.display()
+            ))
+            .arg("-device")
+            .arg("ide-cd,drive=cd0,bus=ahci0.0")
             .arg("-cpu")
             .arg("max")
             .arg("-smp")

@@ -128,8 +128,14 @@ continue"
     ));
 
     // kernel binary
-    cmd.arg("-cdrom");
-    cmd.arg(BOOTABLE_ISO);
+    cmd.arg("-device");
+    cmd.arg("ahci,id=ahci0");
+    cmd.arg("-drive");
+    cmd.arg(format!(
+        "if=none,id=cd0,media=cdrom,format=raw,file={BOOTABLE_ISO}"
+    ));
+    cmd.arg("-device");
+    cmd.arg("ide-cd,drive=cd0,bus=ahci0.0");
 
     cmd.arg("-cpu");
     cmd.arg("max");
