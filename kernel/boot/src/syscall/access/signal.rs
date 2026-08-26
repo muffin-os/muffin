@@ -27,7 +27,7 @@ impl ProcessAccess for KernelProcess {
     }
 }
 
-impl ProcessesAccess for KernelAccess<'_> {
+impl ProcessesAccess for KernelAccess {
     type Process = KernelProcess;
 
     fn all_processes(&self) -> impl Iterator<Item = Self::Process> {
@@ -36,7 +36,7 @@ impl ProcessesAccess for KernelAccess<'_> {
     }
 }
 
-impl PermissionAccess for KernelAccess<'_> {
+impl PermissionAccess for KernelAccess {
     fn current_identity(&self) -> Identity {
         // No uid or pgid exists on Process yet. Single user, every process
         // is its own group.
@@ -53,7 +53,7 @@ impl PermissionAccess for KernelAccess<'_> {
     }
 }
 
-impl SignalAccess for KernelAccess<'_> {
+impl SignalAccess for KernelAccess {
     fn deliver(&self, pid: ProcessId, info: SigInfo) {
         // A missing process races process death. sys_kill already
         // ESRCH-checked, so a silent no-op is correct here.

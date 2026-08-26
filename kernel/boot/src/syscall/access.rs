@@ -18,7 +18,6 @@ use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlag
 use crate::mcore::mtask::process::mem::{
     FileBackedMemoryRegion, LazyMemoryRegion, MemoryRegion, SharedMemoryRegion,
 };
-use crate::mcore::mtask::task::Task;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
@@ -26,24 +25,19 @@ use crate::{U64Ext, UsizeExt};
 mod mem;
 mod signal;
 
-pub struct KernelAccess<'a> {
-    _task: &'a Task,
+pub struct KernelAccess {
     process: Arc<Process>,
 }
 
-impl<'a> KernelAccess<'a> {
+impl KernelAccess {
     pub fn new() -> Self {
-        let task = Task::current();
-        let process = task.process().clone(); // TODO: can we remove the clone?
-
         KernelAccess {
-            _task: task,
-            process,
+            process: Process::current().clone(),
         }
     }
 }
 
-impl CwdAccess for KernelAccess<'_> {
+impl CwdAccess for KernelAccess {
     fn current_working_directory(&self) -> &RwLock<kernel_vfs::path::AbsoluteOwnedPath> {
         self.process.current_working_directory()
     }
@@ -55,7 +49,7 @@ pub struct FileInfo {
 
 impl kernel_syscall::access::FileInfo for FileInfo {}
 
-impl FileAccess for KernelAccess<'_> {
+impl FileAccess for KernelAccess {
     type FileInfo = FileInfo;
     type Fd = FdNum;
     type OpenError = ();
@@ -176,7 +170,7 @@ impl FileAccess for KernelAccess<'_> {
     }
 }
 
-impl kernel_syscall::access::MemoryRegionAccess for KernelAccess<'_> {
+impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
     type Region = KernelMemoryRegionHandle;
 
     fn create_and_track_mapping(
