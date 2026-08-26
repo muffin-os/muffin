@@ -155,9 +155,9 @@ fn request_stop_park(ctx: &ExecutionContext, signals: &mut Signals) {
     }
 }
 
-/// Act on pending signals for the current task. Called from the timer tick
-/// with interrupts off and a Ring 3 frame. Contention means this tick
-/// delivers nothing and the next retries.
+/// Act on pending signals for the current task. Callers must have interrupts
+/// off and a Ring 3 frame. A contended signals lock delivers nothing, the
+/// signal stays pending until the next delivery attempt.
 pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
     let ctx = ExecutionContext::load();
     let process = ctx.current_process();

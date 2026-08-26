@@ -165,10 +165,14 @@ pub extern "sysv64" fn syscall_handler_impl(
     regs.rax = result as usize;
 
     let ctx = ExecutionContext::load();
-    let task = ctx.current_task();
-    if task.process().reap_requested_for(task.id()) {
+    interrupts::disable();
+    if !signal::reap_current_if_requested(ctx) {
+        signal::deliver_pending(stack_frame, regs);
+    }
+    if ctx.current_task().should_terminate() {
         Task::exit_current();
     }
+    interrupts::enable();
 }
 
 pub extern "sysv64" fn timer_interrupt_handler_impl(

@@ -24,6 +24,7 @@ package(default_visibility = ["//visibility:public"])
         "signals_init": "signals-init",
         "sleep": "sleep",
         "term_ignorer": "term-ignorer",
+        "term_sleeper": "term-sleeper",
         "term_witness": "term-witness",
         "unwind": "unwind",
     }.items()
