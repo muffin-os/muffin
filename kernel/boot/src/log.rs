@@ -6,6 +6,7 @@ use x86_64::instructions::interrupts;
 use crate::hpet::hpet_maybe;
 use crate::limine::EXECUTABLE_CMDLINE_REQUEST;
 use crate::mcore::context::ExecutionContext;
+use crate::mcore::mtask::task::Task;
 use crate::serial;
 
 pub(crate) fn init() {
@@ -43,15 +44,19 @@ impl Environment for KernelEnvironment {
     }
 
     fn write_flow_label(out: &mut dyn Write) {
-        if let Some(ctx) = ExecutionContext::try_load() {
-            let _ = write!(out, "cpu{} pid{}", ctx.cpu_id(), ctx.pid());
-        } else {
-            let _ = write!(out, "boot");
-        }
+        interrupts::without_interrupts(|| {
+            // Safety: interrupts are off, so the context stays this CPU's
+            // while the label is built.
+            if let Some(ctx) = unsafe { ExecutionContext::try_load() } {
+                let _ = write!(out, "cpu{} pid{}", ctx.cpu_id(), ctx.pid());
+            } else {
+                let _ = write!(out, "boot");
+            }
+        });
     }
 
     fn with_span_stack<R>(f: impl FnOnce(&mut SpanStack) -> R) -> Option<R> {
-        let ctx = ExecutionContext::try_load()?;
-        Some(f(&mut ctx.current_task().span_stack().lock()))
+        let task = Task::try_current()?;
+        Some(f(&mut task.span_stack().lock()))
     }
 }

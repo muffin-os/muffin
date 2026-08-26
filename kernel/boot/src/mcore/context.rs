@@ -1,4 +1,3 @@
-use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 
 use kernel_abi::ProcessId;
@@ -11,7 +10,6 @@ use x86_64::structures::tss::TaskStateSegment;
 
 use crate::arch::gdt::Selectors;
 use crate::mcore::lapic::Lapic;
-use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::scheduler::Scheduler;
 use crate::mcore::mtask::task::Task;
 
@@ -67,8 +65,13 @@ impl ExecutionContext {
         }
     }
 
+    /// # Safety
+    /// The returned context is CPU-local. The caller must ensure the current
+    /// thread cannot migrate to another CPU (typically by keeping interrupts
+    /// disabled) while it uses the reference, otherwise it observes or
+    /// mutates another CPU's context.
     #[must_use]
-    pub fn try_load() -> Option<&'static Self> {
+    pub unsafe fn try_load() -> Option<&'static Self> {
         let ctx = KernelGsBase::read();
         if ctx.is_null() {
             None
@@ -81,9 +84,12 @@ impl ExecutionContext {
     /// This function panics if the execution context could not be loaded.
     /// This could happen if no execution context exists yet, or the pointer
     /// or its memory in `KernelGSBase` is invalid.
+    ///
+    /// # Safety
+    /// Same contract as [`Self::try_load`].
     #[must_use]
-    pub fn load() -> &'static Self {
-        Self::try_load().expect("could not load cpu context")
+    pub unsafe fn load() -> &'static Self {
+        unsafe { Self::try_load() }.expect("could not load cpu context")
     }
 
     #[must_use]
@@ -134,9 +140,5 @@ impl ExecutionContext {
 
     pub fn current_task(&self) -> &Task {
         self.scheduler().current_task()
-    }
-
-    pub fn current_process(&self) -> &Arc<Process> {
-        self.current_task().process()
     }
 }

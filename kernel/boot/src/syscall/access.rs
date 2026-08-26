@@ -13,7 +13,6 @@ use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageSize, PageTableFlags, PhysFrame, Size4KiB};
 
 use crate::file::{OpenFileDescription, vfs};
-use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::{
@@ -34,7 +33,7 @@ pub struct KernelAccess<'a> {
 
 impl<'a> KernelAccess<'a> {
     pub fn new() -> Self {
-        let task = ExecutionContext::load().current_task();
+        let task = Task::current();
         let process = task.process().clone(); // TODO: can we remove the clone?
 
         KernelAccess {

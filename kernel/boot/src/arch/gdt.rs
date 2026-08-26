@@ -1,10 +1,12 @@
 use alloc::boxed::Box;
 use core::mem;
 
+use x86_64::instructions::interrupts;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::{PrivilegeLevel, VirtAddr};
 
+use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::task::HigherHalfStack;
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
@@ -37,13 +39,25 @@ fn allocate_exception_stack(usable_pages: usize) -> VirtAddr {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Selectors {
     pub kernel_code: SegmentSelector,
     pub kernel_data: SegmentSelector,
     pub tss: SegmentSelector,
     pub user_code: SegmentSelector,
     pub user_data: SegmentSelector,
+}
+
+impl Selectors {
+    /// This CPU's selectors, copied out with interrupts off. Every CPU builds
+    /// the same GDT layout, so the values stay valid wherever the task resumes.
+    #[must_use]
+    pub fn current() -> Selectors {
+        interrupts::without_interrupts(|| {
+            // Safety: interrupts are off, so the context is this CPU's.
+            *unsafe { ExecutionContext::load() }.selectors()
+        })
+    }
 }
 
 pub fn create_gdt_and_tss() -> (GlobalDescriptorTable, Selectors, *mut TaskStateSegment) {

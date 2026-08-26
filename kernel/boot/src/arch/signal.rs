@@ -11,9 +11,9 @@ use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrame;
 
+use crate::arch::gdt::Selectors;
 use crate::arch::idt::SyscallRegisters;
-use crate::mcore::context::ExecutionContext;
-use crate::mcore::mtask::process::{ExitOutcome, Signals};
+use crate::mcore::mtask::process::{ExitOutcome, Process, Signals};
 use crate::mcore::mtask::task::Task;
 use crate::mcore::mtask::wait::try_reserve;
 
@@ -64,7 +64,7 @@ fn capture_fpu(fx: &mut [u8; 512]) -> bool {
         return true;
     }
 
-    let task = ExecutionContext::load().current_task();
+    let task = Task::current();
     let guard = task.fx_area().read();
     if let Some(fx_area) = guard.as_ref() {
         let src = fx_area.start().as_mut_ptr::<u8>();
@@ -141,13 +141,13 @@ fn write_sigframe(
 
 /// Reserves a lot slot for the current task and keeps the unpark ticket
 /// in the signal state, so a later `Continue` or `Kill` can release it.
-fn request_stop_park(ctx: &ExecutionContext, signals: &mut Signals) {
+fn request_stop_park(task: &Task, signals: &mut Signals) {
     assert!(!interrupts::are_enabled());
 
     let Some(reservation) = try_reserve() else {
         return;
     };
-    match ctx.current_task().set_park_reservation(reservation) {
+    match task.set_park_reservation(reservation) {
         Ok(unpark_ticket) => signals.store_stop_unpark(unpark_ticket),
         // A pending ticket keeps its wake source, the fresh reservation goes
         // back to the lot.
@@ -159,14 +159,14 @@ fn request_stop_park(ctx: &ExecutionContext, signals: &mut Signals) {
 /// off and a Ring 3 frame. A contended signals lock delivers nothing, the
 /// signal stays pending until the next delivery attempt.
 pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
-    let ctx = ExecutionContext::load();
-    let process = ctx.current_process();
+    let task = Task::current();
+    let process = task.process();
     let Some(mut guard) = process.try_signals_write() else {
         return;
     };
     loop {
         if guard.stopped() {
-            request_stop_park(ctx, &mut guard);
+            request_stop_park(task, &mut guard);
             return;
         }
         let Some(signo) = guard.take_next_deliverable() else {
@@ -176,13 +176,12 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
             Disposition::Ignore => {}
             Disposition::DefaultStop => {
                 guard.set_stopped(true);
-                request_stop_park(ctx, &mut guard);
+                request_stop_park(task, &mut guard);
                 return;
             }
             Disposition::DefaultTerminate => {
                 drop(guard);
                 // free the user allocations while this address space is active
-                let task = ctx.current_task();
                 task.free_user_allocations();
                 task.set_should_terminate(true);
                 return;
@@ -207,8 +206,7 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
     }
 }
 
-pub fn reap_current_if_requested(ctx: &ExecutionContext) -> bool {
-    let task = ctx.current_task();
+pub fn reap_current_if_requested(task: &Task) -> bool {
     if !task.process().reap_requested_for(task.id()) {
         return false;
     }
@@ -230,9 +228,7 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
         terminate_current(Signal::Segfault);
     }
 
-    let ctx = ExecutionContext::load();
-    if !ctx
-        .current_process()
+    if !Process::current()
         .address_space()
         .is_user_readable(frame.stack_pointer, size_of::<SigFrame>())
     {
@@ -249,8 +245,7 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
     // Restores rax too, so sigreturn must not write its own result afterwards.
     *regs = saved.regs;
 
-    let user_code = ctx.selectors().user_code;
-    let user_data = ctx.selectors().user_data;
+    let sel = Selectors::current();
     // Preserve the arithmetic flags the handler observed, force interrupts on,
     // and drop everything else the user must not control.
     let rflags = (saved.rflags & 0xDD5) | 0x200;
@@ -262,12 +257,12 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
             f.instruction_pointer = VirtAddr::new_truncate(saved.rip);
             f.stack_pointer = VirtAddr::new_truncate(saved.rsp);
             f.cpu_flags = RFlags::from_bits_retain(rflags);
-            f.code_segment = user_code;
-            f.stack_segment = user_data;
+            f.code_segment = sel.user_code;
+            f.stack_segment = sel.user_data;
         });
     }
 
-    ctx.current_process()
+    Process::current()
         .signals_write()
         .set_blocked_raw(saved.old_blocked);
 
@@ -292,10 +287,9 @@ pub fn terminate_current(signo: Signal) -> ! {
     // until `Task::exit` marks the task terminated, because the scheduler
     // reaps a terminated task without saving its context.
     interrupts::disable();
-    let ctx = ExecutionContext::load();
-    let pid = ctx.pid();
-    ctx.current_process()
-        .set_exit_outcome(ExitOutcome::Signaled(signo));
+    let process = Process::current();
+    let pid = process.pid();
+    process.set_exit_outcome(ExitOutcome::Signaled(signo));
     info!("terminating process on signal {} (pid {pid})", signo.name());
     Task::exit();
     loop {
@@ -306,10 +300,7 @@ pub fn terminate_current(signo: Signal) -> ! {
 /// Record `signo` as pending on the current process and then terminate on it.
 /// Used by fault paths so the bookkeeping reflects the signal that killed it.
 pub fn force_fatal_current(signo: Signal) -> ! {
-    ExecutionContext::load()
-        .current_process()
-        .signals_write()
-        .set_pending(signo);
+    Process::current().signals_write().set_pending(signo);
     terminate_current(signo);
 }
 
@@ -318,7 +309,7 @@ pub fn force_fatal_current(signo: Signal) -> ! {
 /// re-executes the faulting instruction. Otherwise the process dies, which is
 /// the safe choice POSIX leaves undefined for ignored or blocked fault signals.
 pub fn deliver_fault(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters, signo: Signal) {
-    let process = ExecutionContext::load().current_process().clone();
+    let process = Process::current().clone();
     let mut guard = process.signals_write();
 
     match guard.disposition(signo) {

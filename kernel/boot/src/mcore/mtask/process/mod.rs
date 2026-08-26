@@ -31,8 +31,8 @@ use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrameValue;
 use x86_64::structures::paging::{PageSize, Size4KiB};
 
+use crate::arch::gdt::Selectors;
 use crate::file::{OpenFileDescription, vfs};
-use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::MemoryRegions;
 use crate::mcore::mtask::process::telemetry::Telemetry;
@@ -175,6 +175,12 @@ pub struct Process {
 }
 
 impl Process {
+    /// The process of the task currently running on this CPU.
+    #[must_use]
+    pub fn current() -> &'static Arc<Process> {
+        Task::current().process()
+    }
+
     pub fn root() -> &'static Arc<Process> {
         ROOT_PROCESS.get_or_init(|| {
             let pid = new_process_id();
@@ -379,8 +385,7 @@ impl Process {
         deadline_ns: Option<u64>,
         mut should_wake: impl FnMut() -> bool,
     ) -> ParkOutcome {
-        let ctx = ExecutionContext::load();
-        let task = ctx.current_task();
+        let task = Task::current();
         debug_assert_eq!(
             task.process().pid(),
             self.pid,
@@ -551,8 +556,7 @@ const INITIAL_FX_IMAGE: [u8; 512] = {
 };
 
 extern "C" fn trampoline(_arg: *mut c_void) {
-    let ctx = ExecutionContext::load();
-    let current_task = ctx.scheduler().current_task();
+    let current_task = Task::current();
     let current_process = current_task.process().clone();
 
     let executable_path = current_process
@@ -610,7 +614,7 @@ extern "C" fn trampoline(_arg: *mut c_void) {
     )
     .expect("should be able to load executable");
 
-    let sel = ctx.selectors();
+    let sel = Selectors::current();
 
     debug!("stack_ptr: {:p}", rsp.as_ptr::<u8>());
     debug!("code_ptr: {:p}", entry.as_ptr::<u8>());

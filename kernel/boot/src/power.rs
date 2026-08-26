@@ -94,7 +94,7 @@ pub fn shutdown() -> ! {
     );
 
     let root_pid = Process::root().pid();
-    let caller_pid = ExecutionContext::load().pid();
+    let caller_pid = Process::current().pid();
     let victims: Vec<Arc<Process>> = process_tree()
         .read()
         .all()
@@ -128,6 +128,8 @@ pub fn shutdown() -> ! {
     interrupts::disable();
 
     unsafe {
+        // Safety: interrupts were disabled above, so the context is this
+        // CPU's and the IPI goes out through the local APIC.
         ExecutionContext::load().lapic().lock().send_ipi_all(
             InterruptIndex::Halt.as_u8(),
             IpiAllShorthand::AllExcludingSelf,

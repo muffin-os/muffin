@@ -121,7 +121,9 @@ impl Scheduler {
         // Point TSS.RSP0 at the incoming task's kernel stack so its next
         // Ring 3 to Ring 0 transition lands on a per-task stack.
         if let Some(kstack) = self.current_task.kstack() {
-            ExecutionContext::load().set_kernel_stack(kstack.top());
+            // Safety: reschedule runs with interrupts off, so the context is
+            // this CPU's.
+            unsafe { ExecutionContext::load() }.set_kernel_stack(kstack.top());
         }
 
         unsafe {

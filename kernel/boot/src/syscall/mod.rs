@@ -19,9 +19,8 @@ use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::arch::idt::SyscallRegisters;
 use crate::hpet::hpet;
-use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::mem::PageInError;
-use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome};
+use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use crate::mcore::mtask::task::Task;
 
 pub(crate) mod access;
@@ -81,21 +80,19 @@ pub(crate) fn dispatch_syscall(
 }
 
 fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
-    let ctx = ExecutionContext::load();
-    debug!("process {} exit with code {code}", ctx.pid());
-    ctx.current_process()
-        .set_exit_outcome(ExitOutcome::Exited(code));
+    let process = Process::current();
+    debug!("process {} exit with code {code}", process.pid());
+    process.set_exit_outcome(ExitOutcome::Exited(code));
     Task::exit_current()
 }
 
 fn dispatch_sys_shutdown() -> Result<usize, Errno> {
-    let ctx = ExecutionContext::load();
-    debug!("process {} requested shutdown", ctx.pid());
+    debug!("process {} requested shutdown", Process::current().pid());
     crate::power::shutdown()
 }
 
 fn dispatch_sys_getpid() -> Result<usize, Errno> {
-    Ok(ExecutionContext::load().pid().as_u64() as usize)
+    Ok(Process::current().pid().as_u64() as usize)
 }
 
 fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
@@ -117,7 +114,7 @@ fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
             SignalTarget::SpecificProcess(pid) => cx.process_by_id(pid).is_some(),
             SignalTarget::ProcessGroup(pgid) => {
                 let effective = if pgid.is_root() {
-                    ExecutionContext::load().pid()
+                    Process::current().pid()
                 } else {
                     pgid
                 };
@@ -142,8 +139,7 @@ fn write_user<T>(addr: usize, value: T) -> Result<(), Errno> {
     let Ok(vaddr) = VirtAddr::try_new(addr as u64) else {
         return Err(EFAULT);
     };
-    if !ExecutionContext::load()
-        .current_process()
+    if !Process::current()
         .address_space()
         .is_user_writable(vaddr, size_of::<T>())
     {
@@ -179,7 +175,7 @@ fn dispatch_sys_sigaction(signo: usize, new: usize, old: usize) -> Result<usize,
         Some(read_user::<SigAction>(new)?)
     };
 
-    let process = ExecutionContext::load().current_process();
+    let process = Process::current();
     let old_action = process.signals_write().sigaction(signal, new_action)?;
 
     if old != 0 {
@@ -197,7 +193,7 @@ fn dispatch_sys_sigprocmask(how: usize, set: usize, oldset: usize) -> Result<usi
         Some(read_user::<SigSet>(set)?)
     };
 
-    let process = ExecutionContext::load().current_process();
+    let process = Process::current();
     let old_mask = process.signals_write().sigprocmask(how, new_set)?;
 
     if oldset != 0 {
@@ -210,10 +206,7 @@ fn dispatch_sys_sigpending(out: usize) -> Result<usize, Errno> {
     if out == 0 {
         return Err(EINVAL);
     }
-    let pending = ExecutionContext::load()
-        .current_process()
-        .signals_read()
-        .sigpending();
+    let pending = Process::current().signals_read().sigpending();
     write_user(out, pending)?;
     Ok(0)
 }
@@ -258,7 +251,7 @@ fn make_user_range_resident(ptr: usize, len: usize, access: UserAccess) -> Resul
         return Err(EFAULT);
     };
 
-    let process = ExecutionContext::load().current_process();
+    let process = Process::current();
     let address_space = process.address_space();
     process
         .memory_regions()
@@ -423,7 +416,7 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
         .saturating_mul(1_000_000_000)
         .saturating_add(ts.tv_nsec as u64);
     let deadline = hpet().read().elapsed_ns().saturating_add(duration_ns);
-    let process = ExecutionContext::load().current_process().clone();
+    let process = Process::current().clone();
 
     let outcome = process.park_current_task(Some(deadline), || {
         hpet().read().elapsed_ns() >= deadline
@@ -457,7 +450,7 @@ fn dispatch_sys_exe_path(buf: usize, len: usize) -> Result<usize, Errno> {
     let slice = unsafe { slice_from_ptr_and_len_mut(buf, len) }?;
     make_user_range_resident(buf, len, UserAccess::Write)?;
 
-    let process = ExecutionContext::load().current_process();
+    let process = Process::current();
     let path = process.executable_path().ok_or(ENOENT)?;
 
     let bytelen = path.len();

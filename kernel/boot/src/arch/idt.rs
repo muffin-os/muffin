@@ -164,12 +164,12 @@ pub extern "sysv64" fn syscall_handler_impl(
 
     regs.rax = result as usize;
 
-    let ctx = ExecutionContext::load();
     interrupts::disable();
-    if !signal::reap_current_if_requested(ctx) {
+    let task = Task::current();
+    if !signal::reap_current_if_requested(task) {
         signal::deliver_pending(stack_frame, regs);
     }
-    if ctx.current_task().should_terminate() {
+    if task.should_terminate() {
         Task::exit_current();
     }
     interrupts::enable();
@@ -185,17 +185,17 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
 
     wake_expired_sleepers();
 
-    let ctx = ExecutionContext::load();
-
     // only deliver signals when we're in userspace
     if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3
-        && !signal::reap_current_if_requested(ctx)
+        && !signal::reap_current_if_requested(Task::current())
     {
         signal::deliver_pending(stack_frame, regs);
     }
 
     unsafe {
-        ctx.scheduler_mut().reschedule();
+        // Safety: interrupt handler, interrupts are off, so the context is
+        // this CPU's for the whole reschedule.
+        ExecutionContext::load().scheduler_mut().reschedule();
     }
 }
 
@@ -379,9 +379,8 @@ extern "sysv64" fn page_fault_classify(
 
     // if we know the address...
     if let Some(addr) = accessed_address
-        && let Some(ctx) = ExecutionContext::try_load()
+        && let Some(task) = Task::try_current()
     {
-        let task = ctx.current_task();
         let process = task.process();
         process.telemetry().page_faults.fetch_add(1, Relaxed);
 
@@ -445,8 +444,7 @@ extern "sysv64" fn page_fault_classify(
 }
 
 extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
-    let ctx = ExecutionContext::load();
-    let task = ctx.current_task();
+    let task = Task::current();
     let process = task.process();
     let addr = VirtAddr::new(task.pending_fault_addr().swap(0, Relaxed));
     let page = Page::<Size4KiB>::containing_address(addr);
@@ -503,8 +501,7 @@ extern "x86-interrupt" fn debug_handler(stack_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn device_not_available_handler(_stack_frame: InterruptStackFrame) {
-    let cx = ExecutionContext::load();
-    let current_task = cx.current_task();
+    let current_task = Task::current();
     let guard = current_task.fx_area().read();
     let fx_area_ptr = guard.as_ref().map(|fx| fx.start().as_mut_ptr::<u8>());
     drop(guard); // _fxrstor could trigger #NM again, so we must drop the guard before calling it
@@ -519,11 +516,13 @@ extern "x86-interrupt" fn device_not_available_handler(_stack_frame: InterruptSt
 /// Notifies the LAPIC that the interrupt has been handled.
 ///
 /// # Safety
-/// This is unsafe since it writes to an LAPIC register.
+/// This writes to an LAPIC register. The caller must also keep the CPU
+/// residency stable (interrupts off), so the EOI reaches the local APIC.
 #[inline]
 pub unsafe fn end_of_interrupt() {
-    let ctx = ExecutionContext::load();
-    unsafe { ctx.lapic().lock().end_of_interrupt() };
+    // Safety: the caller guarantees stable CPU residency, so the loaded
+    // context is this CPU's and the EOI reaches the local APIC.
+    unsafe { ExecutionContext::load().lapic().lock().end_of_interrupt() };
 }
 
 #[repr(transparent)]

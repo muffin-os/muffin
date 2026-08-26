@@ -117,6 +117,8 @@ fn install_idle_task() {
         .expect("should be able to create the idle task");
     interrupts::disable();
     unsafe {
+        // Safety: interrupts were disabled above, so the context is this
+        // CPU's while the idle task is installed.
         ExecutionContext::load()
             .scheduler_mut()
             .set_idle_task(Box::pin(idle_task));

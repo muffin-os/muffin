@@ -48,15 +48,16 @@ pub fn unpark_and_enqueue(ticket: TaskUnparkTicket) {
 /// Panics when the task already holds a park ticket. Only a kernel bug can
 /// park one task twice.
 pub(in crate::mcore::mtask) fn block_current(ticket: TaskParkTicket) {
-    let ctx = ExecutionContext::load();
-    let parked = ctx.current_task().set_park_ticket(ticket);
+    let parked = Task::current().set_park_ticket(ticket);
     assert!(
         parked.is_ok(),
         "the blocking task already holds a park ticket"
     );
     interrupts::disable();
     unsafe {
-        ctx.scheduler_mut().reschedule();
+        // Safety: interrupts are off, so the context is this CPU's and the
+        // reschedule cannot be preempted.
+        ExecutionContext::load().scheduler_mut().reschedule();
     }
     interrupts::enable();
 }

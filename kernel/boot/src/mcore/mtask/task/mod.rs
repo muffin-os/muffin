@@ -101,6 +101,30 @@ unsafe impl Linked<Links<Self>> for Task {
 }
 
 impl Task {
+    /// The task currently running on this CPU.
+    ///
+    /// The reference stays valid after interrupts are re-enabled, because
+    /// tasks are heap-pinned and a task cannot be freed while its own code
+    /// is still running.
+    ///
+    /// # Panics
+    /// Panics before the CPU's execution context is installed.
+    #[must_use]
+    pub fn current() -> &'static Task {
+        Self::try_current().expect("no execution context on this cpu")
+    }
+
+    /// Like [`Task::current`], but `None` before the CPU's execution context
+    /// is installed.
+    #[must_use]
+    pub fn try_current() -> Option<&'static Task> {
+        interrupts::without_interrupts(|| {
+            // Safety: interrupts are off, so this cannot migrate between
+            // loading the CPU-local context and reading its current task.
+            Some(unsafe { ExecutionContext::try_load() }?.current_task())
+        })
+    }
+
     /// Creates a new stack in the specified process. Stack will be allocated immediately in the
     /// current address space.
     ///
@@ -182,8 +206,7 @@ impl Task {
     }
 
     pub(crate) fn exit_current() -> ! {
-        let ctx = ExecutionContext::load();
-        let task = ctx.current_task();
+        let task = Task::current();
         trace!(name = %task.name(), "exiting task");
 
         unsafe {
@@ -202,7 +225,9 @@ impl Task {
         interrupts::disable();
         loop {
             unsafe {
-                ctx.scheduler_mut().reschedule();
+                // Safety: interrupts are off, so the context is this CPU's
+                // and the reschedule cannot be preempted.
+                ExecutionContext::load().scheduler_mut().reschedule();
             }
             interrupts::enable();
             hlt();

@@ -13,12 +13,13 @@ use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrame;
 
 use super::{UserAccess, make_user_range_resident, slice_from_ptr_and_len};
+use crate::arch::gdt::Selectors;
 use crate::arch::idt::SyscallRegisters;
 use crate::arch::signal::terminate_current;
 use crate::file::vfs;
-use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::elf::{self, LoadExecutableError};
-use crate::mcore::mtask::process::setup_user_image;
+use crate::mcore::mtask::process::{Process, setup_user_image};
+use crate::mcore::mtask::task::Task;
 
 /// POSIX execve. Replaces the calling process's image while preserving pid,
 /// ppid, cwd, open file descriptors, the signal mask, and pending signals.
@@ -44,9 +45,8 @@ pub fn dispatch_sys_execve(
     let node = vfs().write().open(&path).map_err(|_| ENOENT)?;
     let validated = elf::validate(&node).map_err(exec_errno)?;
 
-    let ctx = ExecutionContext::load();
-    let process = ctx.current_process().clone();
-    let task = ctx.current_task();
+    let process = Process::current().clone();
+    let task = Task::current();
 
     let sole = process.reap_sibling_tasks(task.id());
 
@@ -72,7 +72,7 @@ pub fn dispatch_sys_execve(
     sole.finish_reap();
     process.signals_write().exec_reset();
 
-    let sel = ctx.selectors();
+    let sel = Selectors::current();
     // Safety: building a Ring 3 entry frame for the new image. cs and ss come
     // from the trampoline selectors rather than any user-controlled value.
     unsafe {
@@ -107,8 +107,7 @@ fn copy_in_path(ptr: usize, len: usize) -> Result<AbsoluteOwnedPath, Errno> {
     if let Ok(p) = AbsolutePath::try_new(rel) {
         Ok(p.to_owned())
     } else {
-        let mut p = ExecutionContext::load()
-            .current_process()
+        let mut p = Process::current()
             .current_working_directory()
             .read()
             .clone();

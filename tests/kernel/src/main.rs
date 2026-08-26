@@ -198,8 +198,7 @@ extern "C" fn overflow_kernel_stack(_: *mut c_void) {
 /// before it can observe the termination request. Returning falls into
 /// `Task::exit`, which the task stack seeds as the return address.
 extern "C" fn exec_sibling(_: *mut c_void) {
-    let ctx = kernel::mcore::context::ExecutionContext::load();
-    let task = ctx.current_task();
+    let task = kernel::mcore::mtask::task::Task::current();
     let process = task.process().clone();
     match process.park_current_task(None, || false) {
         ParkOutcome::Interrupted => {
