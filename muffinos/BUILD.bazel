@@ -36,6 +36,7 @@ ext2_image(
         "//userspace/init": "bin/init",
         "//userspace/utilities/false": "bin/false",
         "//userspace/utilities/true": "bin/true",
+        "//userspace/utilities/shutdown": "bin/shutdown",
     },
 )
 

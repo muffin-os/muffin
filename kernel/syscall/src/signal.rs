@@ -44,7 +44,17 @@ pub fn sys_kill<Cx: SignalAccess + PermissionAccess + ProcessesAccess>(
             cx.deliver(pid, info);
             Ok(0)
         }
-        SignalTarget::BroadcastAll => distribute_signal(cx, cx.all_processes(), info),
+        SignalTarget::BroadcastAll => {
+            // Pid 0 hosts only Ring0 kernel tasks. A default-terminate signal
+            // marks the exit outcome at generation time, so broadcasting to it
+            // would brand the kernel process as signal-killed while it keeps
+            // running.
+            distribute_signal(
+                cx,
+                cx.all_processes().filter(|p| !p.process_id().is_root()),
+                info,
+            )
+        }
         SignalTarget::ProcessGroup(process_group_id) => {
             let effective_pgid = if process_group_id.is_root() {
                 current_pgid
@@ -633,6 +643,27 @@ mod tests {
         assert!(pids.contains(&pid2), "pid2 received");
         assert!(pids.contains(&pid3), "pid3 received");
         assert!(pids.contains(&pid4), "pid4 received");
+    }
+
+    #[test]
+    fn broadcast_skips_root() {
+        let current_pid = pid!(2);
+        let pid3 = pid!(3);
+
+        let mut cx = TestContext::new(current_pid, current_pid, 1000);
+        cx.add_process(pid!(0), pid!(0), 0);
+        cx.add_process(pid3, pid3, 1000);
+
+        let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
+        assert_eq!(result, Ok(0), "broadcast with root present succeeds");
+
+        let delivered = cx.get_delivered();
+        let pids: Vec<_> = delivered.iter().map(|s| s.pid).collect();
+        assert!(
+            !pids.contains(&pid!(0)),
+            "root must never receive a broadcast"
+        );
+        assert!(pids.contains(&pid3), "pid3 received");
     }
 
     #[test]

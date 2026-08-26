@@ -66,4 +66,5 @@ n! {
     SYS_EXE_PATH = 51,
     SYS_NANOSLEEP = 52,
     SYS_EXECVE = 53,
+    SYS_SHUTDOWN = 54,
 }

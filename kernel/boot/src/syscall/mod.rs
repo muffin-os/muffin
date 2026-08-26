@@ -24,7 +24,7 @@ use crate::mcore::mtask::process::mem::PageInError;
 use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome};
 use crate::mcore::mtask::task::Task;
 
-mod access;
+pub(crate) mod access;
 mod exec;
 
 #[must_use]
@@ -62,6 +62,7 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_EXECVE => {
             exec::dispatch_sys_execve(arg1, arg2, arg3, arg4, arg5, arg6, frame, regs)
         }
+        kernel_abi::SYS_SHUTDOWN => dispatch_sys_shutdown(),
         _ => {
             error!("unimplemented syscall: {} ({n})", syscall_name(n));
             loop {
@@ -85,6 +86,12 @@ fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
     ctx.current_process()
         .set_exit_outcome(ExitOutcome::Exited(code));
     Task::exit_current()
+}
+
+fn dispatch_sys_shutdown() -> Result<usize, Errno> {
+    let ctx = ExecutionContext::load();
+    debug!("process {} requested shutdown", ctx.pid());
+    crate::power::shutdown()
 }
 
 fn dispatch_sys_getpid() -> Result<usize, Errno> {

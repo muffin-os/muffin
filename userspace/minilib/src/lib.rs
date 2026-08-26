@@ -20,14 +20,21 @@ pub use kernel_abi::{
     ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, PATH_MAX, ProtFlags,
     SYS_CLOCK_GETTIME, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FSTAT, SYS_FSYNC, SYS_GETCWD,
     SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_READ,
-    SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WRITE, SaFlags, SigAction,
-    SigHandler, SigMaskHow, SigSet, Signal, Stat, StrSlice, Timespec, Whence,
+    SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WRITE,
+    SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal, Stat, StrSlice, Timespec, Whence,
 };
 pub use panic::catch_unwind;
 pub use start::{__muffin_start_inner, args, env};
 
 pub fn exit(code: i32) -> ! {
     syscall1(SYS_EXIT, code as usize);
+    loop {
+        _mm_pause();
+    }
+}
+
+pub fn shutdown() -> ! {
+    syscall0(SYS_SHUTDOWN);
     loop {
         _mm_pause();
     }

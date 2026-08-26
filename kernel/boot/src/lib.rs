@@ -22,6 +22,7 @@ pub mod limine;
 mod log;
 pub mod mcore;
 pub mod mem;
+pub mod power;
 pub mod serial;
 pub mod sse;
 pub mod syscall;
@@ -47,6 +48,7 @@ pub fn init() {
     hpet::init();
 
     span!(Level::DEBUG, "kinit2").in_scope(|| {
+        power::init();
         backtrace::init();
         mcore::init();
         file::init();

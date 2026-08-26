@@ -26,6 +26,8 @@ use crate::syscall::dispatch_syscall;
 pub enum InterruptIndex {
     /// 32
     Timer = 0x20,
+    /// 48
+    Halt = 0x30,
     /// 49
     LapicErr = 0x31,
     Syscall = 0x80,
@@ -81,6 +83,7 @@ pub fn create_idt() -> InterruptDescriptorTable {
         ));
     }
     idt[InterruptIndex::LapicErr.as_u8()].set_handler_fn(lapic_err_interrupt_handler);
+    idt[InterruptIndex::Halt.as_u8()].set_handler_fn(halt_ipi_handler);
     idt[InterruptIndex::Spurious.as_u8()].set_handler_fn(spurious_interrupt_handler);
 
     unsafe {
@@ -194,6 +197,16 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
 
 extern "x86-interrupt" fn lapic_err_interrupt_handler(stack_frame: InterruptStackFrame) {
     panic!("EXCEPTION: LAPIC ERROR\n{:#?}", stack_frame);
+}
+
+extern "x86-interrupt" fn halt_ipi_handler(_: InterruptStackFrame) {
+    unsafe {
+        end_of_interrupt();
+    }
+    crate::power::note_cpu_halted();
+    loop {
+        hlt();
+    }
 }
 
 extern "x86-interrupt" fn spurious_interrupt_handler(stack_frame: InterruptStackFrame) {

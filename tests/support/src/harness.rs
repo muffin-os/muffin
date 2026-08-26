@@ -99,15 +99,9 @@ impl KernelTest {
         self
     }
 
-    /// Boots the test kernel under QEMU and returns the collected transcript
-    /// and per-process outcomes.
-    ///
-    /// # Panics
-    /// Panics (after dumping the serial transcript) if QEMU exits before every
-    /// spawned process reports an outcome, if the deadline expires first, or if
-    /// any serial line contains `kernel panicked`.
-    #[must_use]
-    pub fn run(self) -> RunReport {
+    /// Stages the writable images and spawns QEMU. Shared by [`Self::run`] and
+    /// [`Self::run_until_poweroff`].
+    fn boot(&self) -> Child {
         // Runfiles are read-only build outputs. Booting them directly fails to
         // open and would corrupt the action cache.
         let out_dir = self.env.work_dir.join(self.name);
@@ -126,7 +120,7 @@ impl KernelTest {
         } else {
             &[]
         };
-        let mut child = Command::new("qemu-system-x86_64")
+        Command::new("qemu-system-x86_64")
             .arg("-serial")
             .arg("stdio")
             .arg("-display")
@@ -167,24 +161,20 @@ impl KernelTest {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .expect("failed to spawn qemu-system-x86_64");
+            .expect("failed to spawn qemu-system-x86_64")
+    }
 
-        let stdout = child.stdout.take().expect("child stdout was not captured");
-
-        let (tx, rx) = mpsc::channel::<String>();
-        let reader = thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if tx.send(line).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+    /// Boots the test kernel under QEMU and returns the collected transcript
+    /// and per-process outcomes.
+    ///
+    /// # Panics
+    /// Panics (after dumping the serial transcript) if QEMU exits before every
+    /// spawned process reports an outcome, if the deadline expires first, or if
+    /// any serial line contains `kernel panicked`.
+    #[must_use]
+    pub fn run(self) -> RunReport {
+        let mut child = self.boot();
+        let (rx, reader) = spawn_serial_reader(&mut child);
 
         let mut transcript: Vec<String> = vec![];
         let mut pending: Vec<PendingProcess> = vec![];
@@ -295,6 +285,84 @@ impl KernelTest {
             processes,
         }
     }
+
+    /// Boots and waits for the guest to power QEMU off by itself.
+    ///
+    /// Success is QEMU exiting with status 0 before the deadline. Guest-initiated
+    /// ACPI poweroff is the only way that happens: a panic parks in a hlt loop
+    /// (deadline), a triple fault reboots (deadline). Panics on a `kernel
+    /// panicked` line, on the deadline, and on a nonzero exit status.
+    #[must_use]
+    pub fn run_until_poweroff(self) -> Vec<String> {
+        let mut child = self.boot();
+        let (rx, reader) = spawn_serial_reader(&mut child);
+
+        let mut transcript: Vec<String> = vec![];
+        let deadline = Instant::now() + self.deadline;
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                fail(
+                    &transcript,
+                    &mut child,
+                    "deadline expired before the guest powered off".to_owned(),
+                );
+            }
+            match rx.recv_timeout(deadline - now) {
+                Ok(line) => {
+                    if line.contains("kernel panicked") {
+                        transcript.push(line.clone());
+                        fail(
+                            &transcript,
+                            &mut child,
+                            format!("kernel panicked during the run: {line:?}"),
+                        );
+                    }
+                    transcript.push(line);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    fail(
+                        &transcript,
+                        &mut child,
+                        "deadline expired before the guest powered off".to_owned(),
+                    );
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        let status = child.wait().expect("should be able to wait on qemu");
+        let _ = reader.join();
+
+        if !status.success() {
+            dump_transcript(&transcript);
+            panic!("QEMU exited with {status}, expected a guest-initiated poweroff with status 0");
+        }
+
+        transcript
+    }
+}
+
+/// Takes the child's stdout and streams serial lines over a channel until
+/// QEMU closes the pipe.
+fn spawn_serial_reader(child: &mut Child) -> (mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let stdout = child.stdout.take().expect("child stdout was not captured");
+    let (tx, rx) = mpsc::channel::<String>();
+    let reader = thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (rx, reader)
 }
 
 /// Stages a runfiles image at `dest`, writable, and returns `dest`.

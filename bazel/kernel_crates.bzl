@@ -31,6 +31,7 @@ KERNEL_CRATES = {
     "park": struct(deps = [], crates = ["thiserror"]),
     "pci": struct(deps = ["memapi"], crates = ["spin", "thiserror", "x86_64"]),
     "physical_memory": struct(deps = [], crates = ["thiserror", "x86_64"]),
+    "poweroff": struct(deps = [], crates = ["x86_64"]),
     "syscall": struct(
         deps = ["abi", "vfs"],
         crates = ["spin", "thiserror", "tracing", "x86_64"],
