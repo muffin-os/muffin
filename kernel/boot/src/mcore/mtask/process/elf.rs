@@ -16,7 +16,9 @@ use x86_64::registers::model_specific::FsBase;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::mcore::mtask::process::Process;
-use crate::mcore::mtask::process::mem::{FileBackedMemoryRegion, LazyMemoryRegion, MemoryRegion};
+use crate::mcore::mtask::process::mem::{
+    FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion,
+};
 use crate::mcore::mtask::task::Task;
 use crate::mem::memapi::LowerHalfMemoryApi;
 use crate::mem::virt::VirtualMemoryAllocator;
@@ -258,11 +260,11 @@ impl ValidatedExecutable {
                         } else {
                             PageTableFlags::empty()
                         };
-                    let lazy = LazyMemoryRegion::new(owned, len, flags);
+                    let private = PrivateMemoryRegion::new(owned, len, flags);
                     process
                         .memory_regions()
                         .add_region(MemoryRegion::FileBacked(FileBackedMemoryRegion::new(
-                            lazy,
+                            private,
                             node.clone(),
                             offset,
                             filesz,

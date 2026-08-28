@@ -404,7 +404,7 @@ extern "sysv64" fn page_fault_classify(
                 "protection violation"
             } else {
                 match &*region {
-                    MemoryRegion::Lazy(_) | MemoryRegion::FileBacked(_) => {
+                    MemoryRegion::Private(_) | MemoryRegion::FileBacked(_) => {
                         match pager_stack_top(task, frame, from_user) {
                             Some(top) => {
                                 task.pending_fault_addr().store(addr.as_u64(), Relaxed);
@@ -452,7 +452,7 @@ extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
 
     let region = process.memory_regions().region_for(addr);
     let failure = match region.as_deref() {
-        Some(MemoryRegion::Lazy(r)) => r.map_zeroed(address_space, page).err(),
+        Some(MemoryRegion::Private(r)) => r.map_zeroed(address_space, page).err(),
         Some(MemoryRegion::FileBacked(r)) => r.page_in(address_space, page).err(),
         _ => Some(PageInError::MapFailed),
     };

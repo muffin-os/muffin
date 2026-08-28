@@ -83,7 +83,7 @@ impl MemoryRegions {
                 continue;
             };
             match &*region {
-                MemoryRegion::Lazy(r) => r.map_zeroed(address_space, page)?,
+                MemoryRegion::Private(r) => r.map_zeroed(address_space, page)?,
                 MemoryRegion::FileBacked(r) => r.page_in(address_space, page)?,
                 MemoryRegion::Mapped(_) | MemoryRegion::Shared(_) => {}
             }
@@ -115,11 +115,11 @@ impl MemoryRegions {
 
 #[derive(Debug)]
 pub enum MemoryRegion {
-    /// A memory region that will have its memory mapped in lazily
-    /// by the page fault handler upon access to a page.
+    /// A private mapping (anonymous or CoW-shared after fork). Pages are
+    /// mapped in lazily by the page fault handler upon access.
     ///
-    /// - [`LazyMemoryRegion`]
-    Lazy(LazyMemoryRegion),
+    /// - [`PrivateMemoryRegion`]
+    Private(PrivateMemoryRegion),
     /// A memory region whose entire memory is already mapped.
     /// One could call it a "normal piece of memory".
     ///
@@ -143,7 +143,7 @@ pub enum MemoryRegion {
 impl MemoryRegion {
     pub fn addr(&self) -> VirtAddr {
         match self {
-            MemoryRegion::Lazy(lazy_memory_region) => lazy_memory_region.segment.start,
+            MemoryRegion::Private(private_memory_region) => private_memory_region.segment.start,
             MemoryRegion::Mapped(mapped_memory_region) => mapped_memory_region.segment.start,
             MemoryRegion::FileBacked(file_backed_memory_region) => {
                 file_backed_memory_region.region.segment().start
@@ -154,7 +154,7 @@ impl MemoryRegion {
 
     pub fn size(&self) -> usize {
         match self {
-            MemoryRegion::Lazy(lazy_memory_region) => lazy_memory_region.size,
+            MemoryRegion::Private(private_memory_region) => private_memory_region.size,
             MemoryRegion::Mapped(mapped_memory_region) => mapped_memory_region.size,
             MemoryRegion::FileBacked(file_backed_memory_region) => {
                 file_backed_memory_region.region.size
@@ -183,7 +183,7 @@ pub enum PageInError {
 }
 
 #[derive(Debug)]
-pub struct LazyMemoryRegion {
+pub struct PrivateMemoryRegion {
     segment: OwnedSegment<'static>,
     /// The size of the region. This may differ from the
     /// size of the segment in that the size of the segment
@@ -193,12 +193,12 @@ pub struct LazyMemoryRegion {
     /// size is 5 bytes is actually 4096 bytes.
     size: usize,
     flags: PageTableFlags,
-    /// The physical frames that were mapped for this lazy
+    /// The physical frames that were mapped for this
     /// memory region.
     physical_frames: Mutex<Vec<OwnedPhysicalMemory>>,
 }
 
-impl LazyMemoryRegion {
+impl PrivateMemoryRegion {
     pub fn new(segment: OwnedSegment<'static>, size: usize, flags: PageTableFlags) -> Self {
         Self {
             segment,
@@ -283,7 +283,7 @@ impl MappedMemoryRegion {
 
 #[derive(Debug)]
 pub struct FileBackedMemoryRegion {
-    region: LazyMemoryRegion,
+    region: PrivateMemoryRegion,
     node: VfsNode,
     file_offset: usize,
     file_len: usize,
@@ -291,7 +291,7 @@ pub struct FileBackedMemoryRegion {
 
 impl FileBackedMemoryRegion {
     pub fn new(
-        region: LazyMemoryRegion,
+        region: PrivateMemoryRegion,
         node: VfsNode,
         file_offset: usize,
         file_len: usize,

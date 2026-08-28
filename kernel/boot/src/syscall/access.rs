@@ -16,7 +16,7 @@ use crate::file::{OpenFileDescription, vfs};
 use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::{
-    FileBackedMemoryRegion, LazyMemoryRegion, MemoryRegion, SharedMemoryRegion,
+    FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion, SharedMemoryRegion,
 };
 use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::VirtualMemoryAllocator;
@@ -322,12 +322,12 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         // The region must carry the page-rounded size. `MemoryRegion::contains`
         // bounds the fault handler, so a region sized to `len` leaves the last
         // partial page unservable and any access to it kills the process.
-        let lazy = LazyMemoryRegion::new(segment, size, flags);
+        let private = PrivateMemoryRegion::new(segment, size, flags);
         self.add_memory_region(KernelMemoryRegionHandle {
             addr: user_ptr,
             size,
             inner: MemoryRegion::FileBacked(FileBackedMemoryRegion::new(
-                lazy, node, offset, file_len,
+                private, node, offset, file_len,
             )),
         });
 
