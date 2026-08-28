@@ -33,24 +33,33 @@ impl VirtualMemoryManager {
     }
 
     pub fn reserve(&mut self, n: usize) -> Option<Segment> {
-        if n == 0 {
+        let len = n as u64;
+        if len == 0 || len > self.mem_size {
             return None;
         }
+        // Inclusive bound. An exclusive end overflows for a manager that
+        // reaches the top of the address space.
+        let mem_last = self.mem_start.as_u64() as u128 + (self.mem_size as u128 - 1);
 
-        let mut segment = Segment::new(self.mem_start, n as u64);
-        while let Some(existing) = self.find_overlapping(&segment) {
-            segment.start = existing.start + existing.len;
-        }
-        if self.mem_start + (self.mem_size - 1) < segment.start + (segment.len - 1) {
-            return None;
+        // Probe arithmetic is u128 because a candidate range can exceed the
+        // manager's bounds before it is rejected, and such an address fails
+        // VirtAddr's canonicality check.
+        let mut start = self.mem_start.as_u64() as u128;
+        loop {
+            if start + (len as u128 - 1) > mem_last {
+                return None;
+            }
+            match self.find_overlapping_at(start, len) {
+                Some(existing) => {
+                    start = existing.start.as_u64() as u128 + existing.len as u128;
+                }
+                None => break,
+            }
         }
 
+        let segment = Segment::new(VirtAddr::new(start as u64), len);
         self.segments.insert(segment);
-
-        Some(Segment {
-            start: segment.start,
-            len: n as u64,
-        })
+        Some(segment)
     }
 
     pub fn release(&mut self, segment: Segment) -> bool {
@@ -77,9 +86,19 @@ impl VirtualMemoryManager {
     }
 
     fn find_overlapping(&self, segment: &Segment) -> Option<&Segment> {
+        self.find_overlapping_at(segment.start.as_u64() as u128, segment.len)
+    }
+
+    fn find_overlapping_at(&self, start: u128, len: u64) -> Option<&Segment> {
+        if len == 0 {
+            return None;
+        }
+        let last = start + (len as u128 - 1);
         self.segments.iter().find(|existing| {
-            segment.start <= existing.start + (existing.len - 1)
-                && existing.start <= segment.start + (segment.len - 1)
+            let existing_start = existing.start.as_u64() as u128;
+            existing.len != 0
+                && start <= existing_start + (existing.len as u128 - 1)
+                && existing_start <= last
         })
     }
 }
@@ -128,5 +147,42 @@ mod tests {
 
         vmm.release(segment1);
         vmm.mark_as_reserved(segment1_5).unwrap();
+    }
+
+    #[test]
+    fn reserve_larger_than_manager() {
+        let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0x1_0000_0000), 0x7F00_0000_0000);
+        assert_eq!(
+            vmm.reserve(1 << 47),
+            None,
+            "request exceeding the managed range must be refused"
+        );
+    }
+
+    #[test]
+    fn reserve_probe_past_manager_end() {
+        // The probe past the reserved page crosses the canonical boundary.
+        let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0x7FFF_FFFF_0000), 0x10000);
+        vmm.mark_as_reserved(Segment::new(VirtAddr::new(0x7FFF_FFFF_8000), 0x1000))
+            .unwrap();
+        assert_eq!(
+            vmm.reserve(0x9000),
+            None,
+            "no gap fits the request, refusal must not panic"
+        );
+    }
+
+    #[test]
+    fn zero_length_segments_never_overlap() {
+        let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0x1000), 0x10000);
+        vmm.mark_as_reserved(Segment::new(VirtAddr::new(0x2000), 0x1000))
+            .unwrap();
+        vmm.mark_as_reserved(Segment::new(VirtAddr::new(0x2000), 0))
+            .unwrap();
+        let segment = vmm.reserve(0x1000);
+        assert!(
+            segment.is_some(),
+            "zero-length entries must not block reservations"
+        );
     }
 }
