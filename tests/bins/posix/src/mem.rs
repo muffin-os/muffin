@@ -1,5 +1,6 @@
 use minilib::{
-    EBADF, EINVAL, ENOMEM, EOVERFLOW, Errno, MapFlags, ProtFlags, SYS_MMAP, mmap, ret, syscall6,
+    EBADF, EINVAL, ENOMEM, EOVERFLOW, Errno, MapFlags, ProtFlags, SYS_MMAP, SigSet, mmap, ret,
+    sigpending, syscall6,
 };
 
 use crate::check;
@@ -75,11 +76,30 @@ pub fn run() {
         ),
         EINVAL,
     );
+    // ENOMEM is required only when the address space cannot hold the
+    // mapping. 1 << 47 exceeds the whole canonical lower half.
     check::expect_err(
         "mmap/huge_len",
-        mmap(0, 1 << 46, rw, anon_private, 0, 0),
+        mmap(0, 1 << 47, rw, anon_private, 0, 0),
         ENOMEM,
     );
+
+    // The page-rounded region ends exactly at the canonical boundary.
+    let top = 0x7FFF_FFFF_F000_usize;
+    let top_ptr = check::unwrap_or_fail(
+        "mmap/fixed_top_page",
+        mmap(top, 1, rw, anon_private | MapFlags::FIXED, 0, 0),
+    );
+    check::require("mmap/fixed_top_page_addr", top_ptr as usize == top);
+    fill_and_verify("mmap/fixed_top_page_readback", top_ptr, PAGE);
+
+    // The copy-out must demand-page an untouched anonymous destination.
+    let set_page = check::unwrap_or_fail(
+        "mmap/anon_page_for_sigpending",
+        mmap(0, PAGE, rw, anon_private, 0, 0),
+    );
+    let set = unsafe { &mut *set_page.cast::<SigSet>() };
+    check::require("mmap/sigpending_into_fresh_page", sigpending(set).is_ok());
 
     check::expect_err(
         "mmap/file_no_sharing_mode",

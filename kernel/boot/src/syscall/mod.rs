@@ -129,25 +129,17 @@ fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
     sys_kill(&cx, target, signal)
 }
 
-/// Copies `value` to the userspace pointer `addr`, returning `EFAULT` if the
-/// destination is not a mapped, writable, user page. Validating up front keeps
-/// a bad pointer from faulting the copy-out in Ring 0 and panicking the kernel.
+/// Copies `value` to the userspace pointer `addr`, returning `EFAULT` unless
+/// the whole range is user memory that a region backs with write access.
+/// Making the range resident up front keeps a bad pointer from faulting the
+/// copy-out in Ring 0 and panicking the kernel.
 fn write_user<T>(addr: usize, value: T) -> Result<(), Errno> {
     let mut ptr = unsafe { UserspaceMutPtr::<T>::try_from_usize(addr) }.map_err(|_| EFAULT)?;
     ptr.validate_range(size_of::<T>()).map_err(|_| EFAULT)?;
-
-    let Ok(vaddr) = VirtAddr::try_new(addr as u64) else {
-        return Err(EFAULT);
-    };
-    if !Process::current()
-        .address_space()
-        .is_user_writable(vaddr, size_of::<T>())
-    {
-        return Err(EFAULT);
-    }
+    make_user_range_resident(addr, size_of::<T>(), UserAccess::Write)?;
     unsafe {
-        // Safety: the range is lower-half, mapped, writable, and user
-        // accessible, so this write cannot fault.
+        // Safety: the range is lower-half, resident, and user writable, so
+        // this write cannot fault.
         ptr.as_mut_ptr().write_unaligned(value);
     }
     Ok(())

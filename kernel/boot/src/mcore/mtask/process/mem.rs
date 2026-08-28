@@ -86,7 +86,7 @@ impl MemoryRegions {
             match &*region {
                 MemoryRegion::Private(r) => r.map_zeroed(address_space, page)?,
                 MemoryRegion::FileBacked(r) => r.page_in(address_space, page)?,
-                MemoryRegion::Mapped(_) | MemoryRegion::Shared(_) => {}
+                MemoryRegion::Shared(_) => {}
             }
         }
         Ok(())
@@ -121,11 +121,6 @@ pub enum MemoryRegion {
     ///
     /// - [`PrivateMemoryRegion`]
     Private(PrivateMemoryRegion),
-    /// A memory region whose entire memory is already mapped.
-    /// One could call it a "normal piece of memory".
-    ///
-    /// - [`MappedMemoryRegion`]
-    Mapped(MappedMemoryRegion),
     /// A memory region that is lazy, but is additionally backed by
     /// a file. The page handler will map the pages lazily upon access,
     /// and read the bytes from the respective location from the backing
@@ -145,7 +140,6 @@ impl MemoryRegion {
     pub fn addr(&self) -> VirtAddr {
         match self {
             MemoryRegion::Private(private_memory_region) => private_memory_region.start,
-            MemoryRegion::Mapped(mapped_memory_region) => mapped_memory_region.segment.start,
             MemoryRegion::FileBacked(file_backed_memory_region) => {
                 file_backed_memory_region.region.segment().start
             }
@@ -156,7 +150,6 @@ impl MemoryRegion {
     pub fn size(&self) -> usize {
         match self {
             MemoryRegion::Private(private_memory_region) => private_memory_region.size,
-            MemoryRegion::Mapped(mapped_memory_region) => mapped_memory_region.size,
             MemoryRegion::FileBacked(file_backed_memory_region) => {
                 file_backed_memory_region.region.size
             }
@@ -165,7 +158,11 @@ impl MemoryRegion {
     }
 
     pub fn contains(&self, addr: VirtAddr) -> bool {
-        self.addr() <= addr && self.addr() + self.size().into_u64() > addr
+        // Forming `addr + size` as a VirtAddr panics for a region ending
+        // exactly at the canonical lower-half boundary.
+        addr.as_u64()
+            .checked_sub(self.addr().as_u64())
+            .is_some_and(|offset| offset < self.size().into_u64())
     }
 
     pub fn as_slice(&self) -> &[u8] {
@@ -278,27 +275,6 @@ impl PrivateMemoryRegion {
             buf.fill(0);
             Ok(())
         })
-    }
-}
-
-#[derive(Debug)]
-pub struct MappedMemoryRegion {
-    segment: OwnedSegment<'static>,
-    size: usize,
-    _physical_memory: OwnedPhysicalMemory,
-}
-
-impl MappedMemoryRegion {
-    pub fn new(
-        segment: OwnedSegment<'static>,
-        size: usize,
-        physical_memory: OwnedPhysicalMemory,
-    ) -> Self {
-        Self {
-            segment,
-            size,
-            _physical_memory: physical_memory,
-        }
     }
 }
 

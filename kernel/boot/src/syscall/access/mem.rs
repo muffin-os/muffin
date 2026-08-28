@@ -7,9 +7,8 @@ use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::UsizeExt;
-use crate::mcore::mtask::process::mem::{MappedMemoryRegion, MemoryRegion};
-use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
-use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator};
+use crate::mcore::mtask::process::mem::{MemoryRegion, PrivateMemoryRegion};
+use crate::mem::virt::VirtualMemoryAllocator;
 use crate::syscall::access::{KernelAccess, KernelMemoryRegionHandle};
 
 impl MemoryAccess for KernelAccess {
@@ -19,14 +18,8 @@ impl MemoryAccess for KernelAccess {
         &self,
         location: Location,
         size: usize,
-        allocation_strategy: AllocationStrategy,
+        _allocation_strategy: AllocationStrategy,
     ) -> Result<Self::Mapping, CreateMappingError> {
-        // For now, we only support eager allocation
-        assert!(
-            matches!(allocation_strategy, AllocationStrategy::Eager),
-            "only eager allocation is supported"
-        );
-
         let page_aligned_size = size.next_multiple_of(Size4KiB::SIZE as usize);
         let page_count = page_aligned_size / Size4KiB::SIZE as usize;
 
@@ -45,28 +38,21 @@ impl MemoryAccess for KernelAccess {
                 .ok_or(CreateMappingError::OutOfMemory)?
         };
 
-        // Allocate physical frames and map them
-        // TODO: Optimize by using 2MiB and 1GiB frames when possible instead of only 4KiB frames
-        let frames = PhysicalMemory::allocate_frames::<Size4KiB>(page_count)
-            .ok_or(CreateMappingError::OutOfMemory)?;
-
-        self.process
-            .address_space()
-            .map_range::<Size4KiB>(
-                &*segment,
-                frames.into_iter(),
-                PageTableFlags::PRESENT
-                    | PageTableFlags::WRITABLE
-                    | PageTableFlags::USER_ACCESSIBLE
-                    | PageTableFlags::NO_EXECUTE,
-            )
-            .map_err(|_| CreateMappingError::OutOfMemory)?;
+        // The region spans the page-aligned size so the fault handler can
+        // serve the last partial page.
+        let region = MemoryRegion::Private(PrivateMemoryRegion::new(
+            segment,
+            page_aligned_size,
+            PageTableFlags::PRESENT
+                | PageTableFlags::WRITABLE
+                | PageTableFlags::USER_ACCESSIBLE
+                | PageTableFlags::NO_EXECUTE,
+        ));
 
         Ok(KernelMapping {
-            addr: segment.start,
-            size,
-            segment,
-            physical_frames: frames,
+            addr: region.addr(),
+            size: page_aligned_size,
+            region,
         })
     }
 }
@@ -74,8 +60,7 @@ impl MemoryAccess for KernelAccess {
 pub struct KernelMapping {
     addr: VirtAddr,
     size: usize,
-    segment: OwnedSegment<'static>,
-    physical_frames: OwnedPhysicalMemory,
+    region: MemoryRegion,
 }
 
 impl KernelMapping {
@@ -86,15 +71,12 @@ impl KernelMapping {
             .as_ptr::<u8>()
             .try_into()
             .expect("kernel mapping should be located in user space");
-        let size = self.size;
 
-        let inner = MemoryRegion::Mapped(MappedMemoryRegion::new(
-            self.segment,
-            self.size,
-            self.physical_frames,
-        ));
-
-        KernelMemoryRegionHandle { addr, size, inner }
+        KernelMemoryRegionHandle {
+            addr,
+            size: self.size,
+            inner: self.region,
+        }
     }
 }
 

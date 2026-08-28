@@ -13,15 +13,15 @@ const PAGE_SIZE: usize = 4096;
 
 /// Base the heap grows upward from.
 ///
-/// `MAP_FIXED` growth needs the range above the heap top to stay free. The kernel
-/// places an addressless mapping by first fit from 4 GiB and commits a frame per
-/// mapped byte, so nothing else reaches a terabyte up.
+/// `MAP_FIXED` growth needs the range above the heap top to stay free. The
+/// kernel places an addressless mapping by first fit from 4 GiB, so the heap
+/// base is only reached once about a terabyte of lower mappings accumulates.
 const HEAP_BASE: usize = 0x100_0000_0000;
 
 /// Bytes per `mmap` while growing.
 ///
-/// Frames for one mapping are physically contiguous, so a large request fails on
-/// fragmentation where several small ones succeed.
+/// Anonymous pages are committed on first touch, so the chunk bounds only
+/// how far the mapped range advances per growth call.
 const GROWTH_CHUNK: usize = 256 * 1024;
 
 #[global_allocator]

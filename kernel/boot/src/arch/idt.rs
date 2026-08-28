@@ -413,7 +413,6 @@ extern "sysv64" fn page_fault_classify(
                             None => "demand paging fault on an unusable stack",
                         }
                     }
-                    MemoryRegion::Mapped(_) => "invalid access to a mapped region",
                     // A shared device mapping is fully mapped eagerly, so a
                     // fault inside it is an invalid access.
                     MemoryRegion::Shared(_) => "invalid access to a shared region",
