@@ -446,13 +446,13 @@ extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
     let process = task.process();
     let addr = VirtAddr::new(task.pending_fault_addr().swap(0, Relaxed));
     let error_code = PageFaultErrorCode::from_bits_truncate(block.error_code);
-    let write = error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE);
+    let caused_by_write = error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE);
     let page = Page::<Size4KiB>::containing_address(addr);
     let address_space = process.address_space();
 
     let region = process.memory_regions().region_for(addr);
     let failure = match region.as_deref() {
-        Some(r) => r.handle_fault(address_space, page, write).err(),
+        Some(r) => r.handle_fault(address_space, page, caused_by_write).err(),
         None => Some(PageInError::MapFailed),
     };
 

@@ -63,6 +63,7 @@ impl MemoryRegions {
         address_space: &AddressSpace,
         addr: VirtAddr,
         len: usize,
+        caused_by_write: bool,
     ) -> Result<(), PageInError> {
         let Some(last) = len
             .checked_sub(1)
@@ -78,17 +79,15 @@ impl MemoryRegions {
             Page::containing_address(addr),
             Page::containing_address(end),
         ) {
-            if address_space.translate(page.start_address()).is_some() {
+            if let Some(flags) = address_space.translate_flags(page.start_address())
+                && (!caused_by_write || flags.contains(PageTableFlags::WRITABLE))
+            {
                 continue;
             }
             let Some(region) = self.region_for(page.start_address()) else {
                 continue;
             };
-            match &*region {
-                MemoryRegion::Private(r) => r.map_zeroed(address_space, page)?,
-                MemoryRegion::FileBacked(r) => r.page_in(address_space, page)?,
-                MemoryRegion::Shared(_) => {}
-            }
+            region.handle_fault(address_space, page, caused_by_write)?;
         }
         Ok(())
     }
@@ -336,7 +335,7 @@ impl PrivateMemoryRegion {
         &self,
         address_space: &AddressSpace,
         page: Page<Size4KiB>,
-        write: bool,
+        caused_by_write: bool,
         fill: impl FnOnce(&mut [u8; 4096]) -> Result<(), PageInError>,
     ) -> Result<(), PageInError> {
         let mut state = self.state.lock();
@@ -345,7 +344,7 @@ impl PrivateMemoryRegion {
             // Mapped already, so a racing task resolved the fault or a
             // stale TLB entry produced it. Retrying makes progress. #PF
             // delivery invalidates the TLB entries for the faulting address.
-            Some(f) if !write || f.contains(PageTableFlags::WRITABLE) => Ok(()),
+            Some(f) if !caused_by_write || f.contains(PageTableFlags::WRITABLE) => Ok(()),
             Some(_) if !flags.contains(PageTableFlags::WRITABLE) => Err(PageInError::NotWritable),
             Some(_) => {
                 let (count, _) = state.backing(page).ok_or(PageInError::MapFailed)?;
@@ -380,7 +379,7 @@ impl PrivateMemoryRegion {
             None => match state.backing(page) {
                 Some((count, frame)) => {
                     if !flags.contains(PageTableFlags::WRITABLE) {
-                        if write {
+                        if caused_by_write {
                             return Err(PageInError::NotWritable);
                         }
                         address_space
@@ -395,7 +394,7 @@ impl PrivateMemoryRegion {
                         address_space
                             .map(page, frame, flags)
                             .map_err(|_| PageInError::MapFailed)?;
-                    } else if !write {
+                    } else if !caused_by_write {
                         address_space
                             .map(page, frame, flags - PageTableFlags::WRITABLE)
                             .map_err(|_| PageInError::MapFailed)?;
@@ -462,17 +461,6 @@ impl PrivateMemoryRegion {
         state.pages.insert(page, Arc::new(owned));
         Ok(())
     }
-
-    fn map_zeroed(
-        &self,
-        address_space: &AddressSpace,
-        page: Page<Size4KiB>,
-    ) -> Result<(), PageInError> {
-        self.handle_fault(address_space, page, false, |buf| {
-            buf.fill(0);
-            Ok(())
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -502,7 +490,7 @@ impl FileBackedMemoryRegion {
         &self,
         address_space: &AddressSpace,
         page: Page<Size4KiB>,
-        write: bool,
+        caused_by_write: bool,
     ) -> Result<(), PageInError> {
         let off = (page.start_address() - self.region.start()).into_usize();
         let from_file = self
@@ -510,7 +498,7 @@ impl FileBackedMemoryRegion {
             .saturating_sub(off)
             .min(Size4KiB::SIZE.into_usize());
         self.region
-            .handle_fault(address_space, page, write, |buf| {
+            .handle_fault(address_space, page, caused_by_write, |buf| {
                 buf[from_file..].fill(0);
                 let mut done = 0;
                 while done < from_file {
@@ -528,14 +516,6 @@ impl FileBackedMemoryRegion {
             })?;
         trace!(page = ?page.start_address(), "paged in");
         Ok(())
-    }
-
-    fn page_in(
-        &self,
-        address_space: &AddressSpace,
-        page: Page<Size4KiB>,
-    ) -> Result<(), PageInError> {
-        self.handle_fault(address_space, page, false)
     }
 }
 

@@ -247,7 +247,12 @@ fn make_user_range_resident(ptr: usize, len: usize, access: UserAccess) -> Resul
     let address_space = process.address_space();
     process
         .memory_regions()
-        .populate(address_space, addr, len)
+        .populate(
+            address_space,
+            addr,
+            len,
+            matches!(access, UserAccess::Write),
+        )
         .map_err(|e| match e {
             PageInError::OutOfMemory => ENOMEM,
             PageInError::MapFailed => EFAULT,
