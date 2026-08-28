@@ -11,6 +11,7 @@ use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::mcore::mtask::process::Process;
+use crate::mcore::mtask::process::mem::{MemoryRegion, PrivateMemoryRegion};
 use crate::mem::address_space::AddressSpace;
 use crate::mem::phys::PhysicalMemory;
 use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
@@ -72,38 +73,44 @@ impl MemoryApi for LowerHalfMemoryApi {
             }
         };
 
-        let mapped_segment = match guarded {
-            Guarded::Yes => Segment::new(
+        let (window_start, window_len) = match guarded {
+            Guarded::Yes => (
                 segment.start + Size4KiB::SIZE,
                 segment.len - (2 * Size4KiB::SIZE),
             ),
-            Guarded::No => *segment,
+            Guarded::No => (segment.start, segment.len),
         };
 
-        self.process
-            .address_space()
-            .map_range::<Size4KiB>(
-                &mapped_segment,
-                PhysicalMemory::allocate_frames_non_contiguous(),
-                PageTableFlags::PRESENT
-                    | PageTableFlags::WRITABLE
-                    | PageTableFlags::NO_EXECUTE
-                    | if user_accessible == UserAccessible::Yes {
-                        PageTableFlags::USER_ACCESSIBLE
-                    } else {
-                        PageTableFlags::empty()
-                    },
-            )
-            .ok()?;
+        let base_flags = PageTableFlags::PRESENT
+            | PageTableFlags::WRITABLE
+            | PageTableFlags::NO_EXECUTE
+            | if user_accessible == UserAccessible::Yes {
+                PageTableFlags::USER_ACCESSIBLE
+            } else {
+                PageTableFlags::empty()
+            };
 
-        let start = start.unwrap_or(mapped_segment.start);
+        let region = PrivateMemoryRegion::new_populated(
+            segment,
+            window_start,
+            (window_len / Size4KiB::SIZE).into_usize(),
+            base_flags,
+            self.process.address_space(),
+        )
+        .ok()?;
+        let region = self
+            .process
+            .memory_regions()
+            .add_region(MemoryRegion::Private(region));
+
+        let start = start.unwrap_or(window_start);
         Some(LowerHalfAllocation {
             start,
             layout,
             inner: Inner {
+                region,
+                base_flags,
                 process: self.process.clone(),
-                segment,
-                mapped_segment,
             },
             _typ: PhantomData,
         })
@@ -113,13 +120,9 @@ impl MemoryApi for LowerHalfMemoryApi {
         &mut self,
         allocation: Self::WritableAllocation,
     ) -> Result<Self::ExecutableAllocation, Self::WritableAllocation> {
-        let res = self.process.address_space().remap_range::<Size4KiB, _>(
-            &*allocation.segment,
-            |mut flags| {
-                flags.remove(PageTableFlags::WRITABLE);
-                flags.remove(PageTableFlags::NO_EXECUTE);
-                flags
-            },
+        let res = allocation.region.set_protection(
+            self.process.address_space(),
+            allocation.base_flags - PageTableFlags::WRITABLE - PageTableFlags::NO_EXECUTE,
         );
         if res.is_err() {
             return Err(allocation);
@@ -137,14 +140,9 @@ impl MemoryApi for LowerHalfMemoryApi {
         &mut self,
         allocation: Self::ExecutableAllocation,
     ) -> Result<Self::WritableAllocation, Self::ExecutableAllocation> {
-        let res = self.process.address_space().remap_range::<Size4KiB, _>(
-            &*allocation.segment,
-            |mut flags| {
-                flags.insert(PageTableFlags::WRITABLE);
-                flags.insert(PageTableFlags::NO_EXECUTE);
-                flags
-            },
-        );
+        let res = allocation
+            .region
+            .set_protection(self.process.address_space(), allocation.base_flags);
         if res.is_err() {
             return Err(allocation);
         }
@@ -161,13 +159,9 @@ impl MemoryApi for LowerHalfMemoryApi {
         &mut self,
         allocation: Self::WritableAllocation,
     ) -> Result<Self::ReadonlyAllocation, Self::WritableAllocation> {
-        let res = self.process.address_space().remap_range::<Size4KiB, _>(
-            &*allocation.segment,
-            |mut flags| {
-                flags.remove(PageTableFlags::WRITABLE);
-                flags.insert(PageTableFlags::NO_EXECUTE);
-                flags
-            },
+        let res = allocation.region.set_protection(
+            self.process.address_space(),
+            allocation.base_flags - PageTableFlags::WRITABLE,
         );
         if res.is_err() {
             return Err(allocation);
@@ -219,8 +213,12 @@ impl<T: AllocationType> LowerHalfAllocation<T> {
 }
 
 pub struct Inner {
-    segment: OwnedSegment<'static>,
-    mapped_segment: Segment,
+    region: Arc<MemoryRegion>,
+    /// The flags of the writable allocation state. The `make_*` transitions
+    /// derive their targets from this value, because pages of a forked
+    /// region are transiently write-protected and the live page table flags
+    /// must not leak into the logical flags.
+    base_flags: PageTableFlags,
     process: Arc<Process>,
 }
 
@@ -236,7 +234,7 @@ impl<T: AllocationType> Debug for LowerHalfAllocation<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LowerHalfAllocation")
             .field("process_id", &self.process.pid())
-            .field("segment", &self.segment)
+            .field("region", &self.region)
             .field("typ", &self._typ)
             .finish_non_exhaustive()
     }
@@ -267,8 +265,8 @@ impl WritableAllocation for LowerHalfAllocation<Writable> {}
 impl Drop for Inner {
     fn drop(&mut self) {
         self.process
-            .address_space()
-            .unmap_range::<Size4KiB>(&self.mapped_segment, PhysicalMemory::deallocate_frame);
+            .memory_regions()
+            .remove_region(self.process.address_space(), &self.region);
     }
 }
 

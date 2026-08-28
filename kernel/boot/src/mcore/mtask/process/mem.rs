@@ -13,6 +13,7 @@ use tracing::trace;
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
+use x86_64::structures::paging::mapper::FlagUpdateError;
 use x86_64::structures::paging::{Page, PageSize, PageTableFlags, PhysFrame, Size4KiB};
 
 use super::SoleLiveTask;
@@ -40,8 +41,19 @@ impl MemoryRegions {
         }
     }
 
-    pub fn add_region(&self, region: MemoryRegion) {
-        interrupts::without_interrupts(|| self.regions.lock().push(Arc::new(region)));
+    pub fn add_region(&self, region: MemoryRegion) -> Arc<MemoryRegion> {
+        let region = Arc::new(region);
+        interrupts::without_interrupts(|| self.regions.lock().push(region.clone()));
+        region
+    }
+
+    /// Removes `region` by pointer identity and unmaps its pages. The
+    /// owning process's address space must be active on this CPU.
+    pub fn remove_region(&self, address_space: &AddressSpace, region: &Arc<MemoryRegion>) {
+        interrupts::without_interrupts(|| {
+            self.regions.lock().retain(|r| !Arc::ptr_eq(r, region));
+        });
+        region.unmap_from(address_space);
     }
 
     pub fn region_for(&self, addr: VirtAddr) -> Option<Arc<MemoryRegion>> {
@@ -97,19 +109,7 @@ impl MemoryRegions {
     pub fn clear(&self, address_space: &AddressSpace, _proof: &SoleLiveTask<'_>) {
         let regions = interrupts::without_interrupts(|| mem::take(&mut *self.regions.lock()));
         for region in regions {
-            let size = region.size();
-            if size == 0 {
-                continue;
-            }
-            let start = region.addr();
-            let end = start + (size - 1).into_u64();
-            address_space.unmap_range::<Size4KiB>(
-                Page::range_inclusive(
-                    Page::containing_address(start),
-                    Page::containing_address(end),
-                ),
-                |_| {},
-            );
+            region.unmap_from(address_space);
         }
     }
 }
@@ -169,6 +169,25 @@ impl MemoryRegion {
         unsafe { slice::from_raw_parts(self.addr().as_ptr(), self.size()) }
     }
 
+    fn unmap_from(&self, address_space: &AddressSpace) {
+        match self {
+            MemoryRegion::Private(r) => r.unmap_from(address_space),
+            MemoryRegion::FileBacked(r) => r.region.unmap_from(address_space),
+            MemoryRegion::Shared(r) => {
+                let Some(last) = r.size.checked_sub(1) else {
+                    return;
+                };
+                address_space.unmap_range::<Size4KiB>(
+                    Page::range_inclusive(
+                        Page::containing_address(r.segment.start),
+                        Page::containing_address(r.segment.start + last.into_u64()),
+                    ),
+                    |_| {},
+                );
+            }
+        }
+    }
+
     pub fn handle_fault(
         &self,
         address_space: &AddressSpace,
@@ -186,6 +205,20 @@ impl MemoryRegion {
             MemoryRegion::Shared(r) => r.handle_fault(address_space, page),
         }
     }
+
+    /// Replaces the logical flags of the region and remaps its currently
+    /// mapped pages in the active address space.
+    pub fn set_protection(
+        &self,
+        address_space: &AddressSpace,
+        new_flags: PageTableFlags,
+    ) -> Result<(), SetProtectionError> {
+        match self {
+            MemoryRegion::Private(r) => r.set_protection(address_space, new_flags),
+            MemoryRegion::FileBacked(r) => r.region.set_protection(address_space, new_flags),
+            MemoryRegion::Shared(_) => Err(SetProtectionError::UnsupportedRegion),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -198,6 +231,14 @@ pub enum PageInError {
     ReadFailed,
     #[error("write to read-only region")]
     NotWritable,
+}
+
+#[derive(Debug, Error)]
+pub enum SetProtectionError {
+    #[error("region does not support protection changes")]
+    UnsupportedRegion,
+    #[error("failed to remap a mapped page")]
+    RemapFailed,
 }
 
 /// Maps `frame` at a transient higher-half address of the active address
@@ -319,12 +360,121 @@ impl PrivateMemoryRegion {
         }
     }
 
+    /// Creates a region and eagerly populates `page_count` pages starting
+    /// at `start` in the active address space with zeroed pages. `flags`
+    /// must include WRITABLE, because population writes the zeroes through
+    /// the final mapping. On failure the whole window is unmapped before
+    /// the backing frames are freed with the region.
+    pub fn new_populated(
+        segment: OwnedSegment<'static>,
+        start: VirtAddr,
+        page_count: usize,
+        flags: PageTableFlags,
+        address_space: &AddressSpace,
+    ) -> Result<Self, PageInError> {
+        debug_assert!(flags.contains(PageTableFlags::WRITABLE));
+
+        let size = page_count * Size4KiB::SIZE.into_usize();
+
+        let region = Self {
+            start,
+            segment,
+            size,
+            state: Mutex::new(PrivateRegionState {
+                flags,
+                pages: BTreeMap::new(),
+                ranges: BTreeMap::new(),
+            }),
+        };
+        let first = Page::<Size4KiB>::containing_address(start);
+        let result = {
+            let mut state = region.state.lock();
+            if let Some(owned) = PhysicalMemory::allocate_frames::<Size4KiB>(page_count) {
+                let window = Segment::new(start, size.into_u64());
+                match address_space.map_range::<Size4KiB>(&window, *owned, flags) {
+                    Ok(()) => {
+                        unsafe { core::ptr::write_bytes(start.as_mut_ptr::<u8>(), 0, size) };
+                        state.ranges.insert(first, Arc::new(owned));
+                        Ok(())
+                    }
+                    Err(_) => Err(PageInError::MapFailed),
+                }
+            } else {
+                (0..page_count.into_u64()).try_for_each(|i| {
+                    state.map_and_fill(address_space, first + i, |buf| {
+                        buf.fill(0);
+                        Ok(())
+                    })
+                })
+            }
+        };
+        if let Err(e) = result {
+            // The backing frames drop with `region`, so no page of the
+            // window may still point at them.
+            address_space.unmap_range::<Size4KiB>(
+                Page::range_inclusive(first, first + (page_count.into_u64() - 1)),
+                |_| {},
+            );
+            return Err(e);
+        }
+        Ok(region)
+    }
+
+    /// Replaces the logical flags and remaps every currently mapped page.
+    /// Pages governed by shared backings get the new flags minus WRITABLE.
+    /// Unmapped backings are left for the fault handler.
+    fn set_protection(
+        &self,
+        address_space: &AddressSpace,
+        new_flags: PageTableFlags,
+    ) -> Result<(), SetProtectionError> {
+        let mut state = self.state.lock();
+        state.flags = new_flags;
+
+        let remap = |page: Page<Size4KiB>, shared: bool| {
+            let flags = if shared {
+                new_flags - PageTableFlags::WRITABLE
+            } else {
+                new_flags
+            };
+            match address_space.remap::<Size4KiB, _>(page, move |_| flags) {
+                Ok(()) | Err(FlagUpdateError::PageNotMapped) => Ok(()),
+                Err(_) => Err(SetProtectionError::RemapFailed),
+            }
+        };
+
+        // Ranges first and pages second, so the more specific shadow entry
+        // applies its flags last.
+        for (first, backing) in &state.ranges {
+            let shared = Arc::strong_count(backing) > 1;
+            for i in 0..(backing.end - backing.start + 1) {
+                remap(*first + i, shared)?;
+            }
+        }
+        for (page, backing) in &state.pages {
+            remap(*page, Arc::strong_count(backing) > 1)?;
+        }
+        Ok(())
+    }
+
     pub fn segment(&self) -> &Segment {
         &self.segment
     }
 
     pub fn start(&self) -> VirtAddr {
         self.start
+    }
+
+    fn unmap_from(&self, address_space: &AddressSpace) {
+        let state = self.state.lock();
+        for (first, backing) in &state.ranges {
+            for i in 0..(backing.end - backing.start + 1) {
+                address_space.unmap::<Size4KiB>(*first + i);
+            }
+        }
+        for page in state.pages.keys() {
+            address_space.unmap::<Size4KiB>(*page);
+        }
     }
 
     /// `fill` provides the content of a page that has no backing yet. It
@@ -423,46 +573,7 @@ impl PrivateMemoryRegion {
             },
         }
     }
-
-    fn map_and_fill_locked(
-        &self,
-        state: &mut PrivateRegionState,
-        address_space: &AddressSpace,
-        page: Page<Size4KiB>,
-        fill: impl FnOnce(&mut [u8; 4096]) -> Result<(), PageInError>,
-    ) -> Result<(), PageInError> {
-        let frame = PhysicalMemory::allocate_frame::<Size4KiB>().ok_or(PageInError::OutOfMemory)?;
-        let owned = OwnedPhysicalMemory::from_physical_frame(frame);
-
-        // PageAlreadyMapped is unreachable. The caller holds the region lock
-        // and has already checked the page is unmapped, and no other path
-        // maps pages of this region.
-        address_space
-            .map(
-                page,
-                frame,
-                PageTableFlags::PRESENT
-                    | PageTableFlags::WRITABLE
-                    | PageTableFlags::USER_ACCESSIBLE
-                    | PageTableFlags::NO_EXECUTE,
-            )
-            .map_err(|_| PageInError::MapFailed)?;
-
-        let buf = unsafe { &mut *page.start_address().as_mut_ptr::<[u8; 4096]>() };
-        if let Err(e) = fill(buf) {
-            address_space.unmap::<Size4KiB>(page);
-            return Err(e);
-        }
-
-        address_space
-            .remap::<Size4KiB, _>(page, |_| state.flags)
-            .map_err(|_| PageInError::MapFailed)?;
-
-        state.pages.insert(page, Arc::new(owned));
-        Ok(())
-    }
 }
-
 #[derive(Debug)]
 pub struct FileBackedMemoryRegion {
     region: PrivateMemoryRegion,
