@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -183,6 +184,15 @@ pub enum PageInError {
 }
 
 #[derive(Debug)]
+struct PrivateRegionState {
+    /// The flags a privately owned page is mapped with. While a frame is
+    /// shared (fork), pages are mapped with these flags minus WRITABLE.
+    flags: PageTableFlags,
+    /// Single-page frames from demand paging and CoW breaks.
+    pages: BTreeMap<Page<Size4KiB>, Arc<OwnedPhysicalMemory>>,
+}
+
+#[derive(Debug)]
 pub struct PrivateMemoryRegion {
     segment: OwnedSegment<'static>,
     /// The size of the region. This may differ from the
@@ -192,10 +202,9 @@ pub struct PrivateMemoryRegion {
     /// For example, the segment of a memory region whose
     /// size is 5 bytes is actually 4096 bytes.
     size: usize,
-    flags: PageTableFlags,
-    /// The physical frames that were mapped for this
-    /// memory region.
-    physical_frames: Mutex<Vec<OwnedPhysicalMemory>>,
+    /// Serializes all backing mutations, all flags changes, and all fault
+    /// resolution for this region.
+    state: Mutex<PrivateRegionState>,
 }
 
 impl PrivateMemoryRegion {
@@ -203,8 +212,10 @@ impl PrivateMemoryRegion {
         Self {
             segment,
             size,
-            flags,
-            physical_frames: Mutex::new(vec![]),
+            state: Mutex::new(PrivateRegionState {
+                flags,
+                pages: BTreeMap::new(),
+            }),
         }
     }
 
@@ -218,6 +229,7 @@ impl PrivateMemoryRegion {
         page: Page<Size4KiB>,
         fill: impl FnOnce(&mut [u8; 4096]) -> Result<(), PageInError>,
     ) -> Result<(), PageInError> {
+        let mut state = self.state.lock();
         let frame = PhysicalMemory::allocate_frame::<Size4KiB>().ok_or(PageInError::OutOfMemory)?;
         let owned = OwnedPhysicalMemory::from_physical_frame(frame);
 
@@ -241,10 +253,10 @@ impl PrivateMemoryRegion {
         }
 
         address_space
-            .remap::<Size4KiB, _>(page, |_| self.flags)
+            .remap::<Size4KiB, _>(page, |_| state.flags)
             .map_err(|_| PageInError::MapFailed)?;
 
-        self.physical_frames.lock().push(owned);
+        state.pages.insert(page, Arc::new(owned));
         Ok(())
     }
 
