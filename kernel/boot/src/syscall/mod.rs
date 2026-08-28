@@ -252,6 +252,7 @@ fn make_user_range_resident(ptr: usize, len: usize, access: UserAccess) -> Resul
             PageInError::OutOfMemory => ENOMEM,
             PageInError::MapFailed => EFAULT,
             PageInError::ReadFailed => EIO,
+            PageInError::NotWritable => EFAULT,
         })?;
 
     let accessible = match access {

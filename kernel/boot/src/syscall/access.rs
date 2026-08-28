@@ -10,6 +10,7 @@ use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{FsyncError, IoctlError, MmapError, Stat as VfsStat};
 use spin::rwlock::RwLock;
 use x86_64::VirtAddr;
+use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::{PageSize, PageTableFlags, PhysFrame, Size4KiB};
 
 use crate::file::{OpenFileDescription, vfs};
@@ -242,7 +243,10 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
         let page_count = page_aligned / page_size;
         let start = PhysFrame::<Size4KiB>::containing_address(phys);
-        let frames = (0..page_count as u64).map(move |i| start + i);
+        let frames = PhysFrameRangeInclusive {
+            start,
+            end: start + (page_count as u64 - 1),
+        };
 
         let segment = self.process.vmm().reserve(page_count).ok_or(ENOMEM)?;
         let addr = segment.start;
@@ -263,7 +267,8 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
         // The region owns the virtual reservation and the open device file,
         // but not the physical frames, so process exit never frees them.
-        let inner = MemoryRegion::Shared(SharedMemoryRegion::new(segment, page_aligned, node));
+        let inner =
+            MemoryRegion::Shared(SharedMemoryRegion::new(segment, page_aligned, frames, node));
         self.add_memory_region(KernelMemoryRegionHandle {
             addr: user_ptr,
             size: page_aligned,

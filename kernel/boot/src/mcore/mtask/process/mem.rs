@@ -2,6 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{Ordering, fence};
 use core::{mem, slice};
 
 use kernel_vfs::node::VfsNode;
@@ -11,13 +12,13 @@ use thiserror::Error;
 use tracing::trace;
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
-use x86_64::structures::paging::mapper::MapToError;
-use x86_64::structures::paging::{Page, PageSize, PageTableFlags, Size4KiB};
+use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
+use x86_64::structures::paging::{Page, PageSize, PageTableFlags, PhysFrame, Size4KiB};
 
 use super::SoleLiveTask;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
-use crate::mem::virt::OwnedSegment;
+use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use crate::{U64Ext, UsizeExt};
 
 /// Tracks a process's virtual memory regions, including the lazily mapped ones
@@ -168,6 +169,24 @@ impl MemoryRegion {
     pub fn as_slice(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.addr().as_ptr(), self.size()) }
     }
+
+    pub fn handle_fault(
+        &self,
+        address_space: &AddressSpace,
+        page: Page<Size4KiB>,
+        caused_by_write: bool,
+    ) -> Result<(), PageInError> {
+        match self {
+            MemoryRegion::Private(r) => {
+                r.handle_fault(address_space, page, caused_by_write, |buf| {
+                    buf.fill(0);
+                    Ok(())
+                })
+            }
+            MemoryRegion::FileBacked(r) => r.handle_fault(address_space, page, caused_by_write),
+            MemoryRegion::Shared(r) => r.handle_fault(address_space, page),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -178,6 +197,34 @@ pub enum PageInError {
     MapFailed,
     #[error("failed to read backing file")]
     ReadFailed,
+    #[error("write to read-only region")]
+    NotWritable,
+}
+
+/// Maps `frame` at a transient higher-half address of the active address
+/// space and hands the byte view to `f`. The kernel-half L4 entries are
+/// shared between all address spaces, so the mapping is process independent.
+fn with_frame_mapped<R>(
+    address_space: &AddressSpace,
+    frame: PhysFrame<Size4KiB>,
+    f: impl FnOnce(&mut [u8; 4096]) -> R,
+) -> Result<R, PageInError> {
+    let segment = VirtualMemoryHigherHalf
+        .reserve(1)
+        .ok_or(PageInError::OutOfMemory)?;
+    let page = Page::<Size4KiB>::containing_address(segment.start);
+    let _kernel_half = AddressSpace::lock_kernel_half();
+    address_space
+        .map(
+            page,
+            frame,
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
+        )
+        .map_err(|_| PageInError::MapFailed)?;
+    let buf = unsafe { &mut *segment.start.as_mut_ptr::<[u8; 4096]>() };
+    let result = f(buf);
+    address_space.unmap::<Size4KiB>(page);
+    Ok(result)
 }
 
 #[derive(Debug)]
@@ -187,6 +234,57 @@ struct PrivateRegionState {
     flags: PageTableFlags,
     /// Single-page frames from demand paging and CoW breaks.
     pages: BTreeMap<Page<Size4KiB>, Arc<OwnedPhysicalMemory>>,
+    /// Whole contiguous eager allocations, keyed by their first page.
+    /// Immutable, never split or merged (invariant 2), shadowed by `pages`.
+    ranges: BTreeMap<Page<Size4KiB>, Arc<OwnedPhysicalMemory>>,
+}
+
+impl PrivateRegionState {
+    fn backing(&self, page: Page<Size4KiB>) -> Option<(usize, PhysFrame<Size4KiB>)> {
+        if let Some(backing) = self.pages.get(&page) {
+            return Some((Arc::strong_count(backing), backing.start));
+        }
+        let (first, backing) = self.ranges.range(..=page).next_back()?;
+        let offset = page - *first;
+        let frames = backing.end - backing.start + 1;
+        (offset < frames).then(|| (Arc::strong_count(backing), backing.start + offset))
+    }
+
+    /// The caller holds the region lock and has already checked that `page`
+    /// is unmapped, so the map cannot collide.
+    fn map_and_fill(
+        &mut self,
+        address_space: &AddressSpace,
+        page: Page<Size4KiB>,
+        fill: impl FnOnce(&mut [u8; 4096]) -> Result<(), PageInError>,
+    ) -> Result<(), PageInError> {
+        let frame = PhysicalMemory::allocate_frame::<Size4KiB>().ok_or(PageInError::OutOfMemory)?;
+        let owned = OwnedPhysicalMemory::from_physical_frame(frame);
+
+        address_space
+            .map(
+                page,
+                frame,
+                PageTableFlags::PRESENT
+                    | PageTableFlags::WRITABLE
+                    | PageTableFlags::USER_ACCESSIBLE
+                    | PageTableFlags::NO_EXECUTE,
+            )
+            .map_err(|_| PageInError::MapFailed)?;
+
+        let buf = unsafe { &mut *page.start_address().as_mut_ptr::<[u8; 4096]>() };
+        if let Err(e) = fill(buf) {
+            address_space.unmap::<Size4KiB>(page);
+            return Err(e);
+        }
+
+        address_space
+            .remap::<Size4KiB, _>(page, |_| self.flags)
+            .map_err(|_| PageInError::MapFailed)?;
+
+        self.pages.insert(page, Arc::new(owned));
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -217,6 +315,7 @@ impl PrivateMemoryRegion {
             state: Mutex::new(PrivateRegionState {
                 flags,
                 pages: BTreeMap::new(),
+                ranges: BTreeMap::new(),
             }),
         }
     }
@@ -229,28 +328,126 @@ impl PrivateMemoryRegion {
         self.start
     }
 
-    fn map_and_fill(
+    /// `fill` provides the content of a page that has no backing yet. It
+    /// runs under the region lock, which cannot deadlock against mount
+    /// locks because faulting while a mount lock is held is forbidden (see
+    /// `make_user_range_resident`).
+    fn handle_fault(
         &self,
+        address_space: &AddressSpace,
+        page: Page<Size4KiB>,
+        write: bool,
+        fill: impl FnOnce(&mut [u8; 4096]) -> Result<(), PageInError>,
+    ) -> Result<(), PageInError> {
+        let mut state = self.state.lock();
+        let flags = state.flags;
+        match address_space.translate_flags(page.start_address()) {
+            // Mapped already, so a racing task resolved the fault or a
+            // stale TLB entry produced it. Retrying makes progress. #PF
+            // delivery invalidates the TLB entries for the faulting address.
+            Some(f) if !write || f.contains(PageTableFlags::WRITABLE) => Ok(()),
+            Some(_) if !flags.contains(PageTableFlags::WRITABLE) => Err(PageInError::NotWritable),
+            Some(_) => {
+                let (count, _) = state.backing(page).ok_or(PageInError::MapFailed)?;
+                if count == 1 {
+                    // strong_count loads Relaxed. The fence pairs with the
+                    // Release decrement in Arc::drop and orders the
+                    // dropper's reads before writes through the writable
+                    // mapping.
+                    fence(Ordering::Acquire);
+                    address_space
+                        .remap::<Size4KiB, _>(page, |_| flags)
+                        .map_err(|_| PageInError::MapFailed)?;
+                } else {
+                    let frame = PhysicalMemory::allocate_frame::<Size4KiB>()
+                        .ok_or(PageInError::OutOfMemory)?;
+                    let owned = OwnedPhysicalMemory::from_physical_frame(frame);
+                    with_frame_mapped(address_space, frame, |dst| {
+                        let src = unsafe { &*page.start_address().as_ptr::<[u8; 4096]>() };
+                        dst.copy_from_slice(src);
+                    })?;
+                    address_space.unmap::<Size4KiB>(page);
+                    address_space
+                        .map(page, frame, flags)
+                        .map_err(|_| PageInError::MapFailed)?;
+                    // Publish only after the copy completed.
+                    // A shadowed range frame stays retained until the range
+                    // Arc drops.
+                    state.pages.insert(page, Arc::new(owned));
+                }
+                Ok(())
+            }
+            None => match state.backing(page) {
+                Some((count, frame)) => {
+                    if !flags.contains(PageTableFlags::WRITABLE) {
+                        if write {
+                            return Err(PageInError::NotWritable);
+                        }
+                        address_space
+                            .map(page, frame, flags)
+                            .map_err(|_| PageInError::MapFailed)?;
+                    } else if count == 1 {
+                        // strong_count loads Relaxed. The fence pairs with
+                        // the Release decrement in Arc::drop and orders the
+                        // dropper's reads before writes through the
+                        // writable mapping.
+                        fence(Ordering::Acquire);
+                        address_space
+                            .map(page, frame, flags)
+                            .map_err(|_| PageInError::MapFailed)?;
+                    } else if !write {
+                        address_space
+                            .map(page, frame, flags - PageTableFlags::WRITABLE)
+                            .map_err(|_| PageInError::MapFailed)?;
+                    } else {
+                        let new = PhysicalMemory::allocate_frame::<Size4KiB>()
+                            .ok_or(PageInError::OutOfMemory)?;
+                        let owned = OwnedPhysicalMemory::from_physical_frame(new);
+                        address_space
+                            .map(page, new, flags)
+                            .map_err(|_| PageInError::MapFailed)?;
+                        if let Err(e) = with_frame_mapped(address_space, frame, |src| {
+                            let dst =
+                                unsafe { &mut *page.start_address().as_mut_ptr::<[u8; 4096]>() };
+                            dst.copy_from_slice(src);
+                        }) {
+                            // Never leave a mapping to a frame that
+                            // `owned` frees.
+                            address_space.unmap::<Size4KiB>(page);
+                            return Err(e);
+                        }
+                        state.pages.insert(page, Arc::new(owned));
+                    }
+                    Ok(())
+                }
+                None => state.map_and_fill(address_space, page, fill),
+            },
+        }
+    }
+
+    fn map_and_fill_locked(
+        &self,
+        state: &mut PrivateRegionState,
         address_space: &AddressSpace,
         page: Page<Size4KiB>,
         fill: impl FnOnce(&mut [u8; 4096]) -> Result<(), PageInError>,
     ) -> Result<(), PageInError> {
-        let mut state = self.state.lock();
         let frame = PhysicalMemory::allocate_frame::<Size4KiB>().ok_or(PageInError::OutOfMemory)?;
         let owned = OwnedPhysicalMemory::from_physical_frame(frame);
 
-        match address_space.map(
-            page,
-            frame,
-            PageTableFlags::PRESENT
-                | PageTableFlags::WRITABLE
-                | PageTableFlags::USER_ACCESSIBLE
-                | PageTableFlags::NO_EXECUTE,
-        ) {
-            Ok(()) => {}
-            Err(MapToError::PageAlreadyMapped(_)) => return Ok(()),
-            Err(_) => return Err(PageInError::MapFailed),
-        }
+        // PageAlreadyMapped is unreachable. The caller holds the region lock
+        // and has already checked the page is unmapped, and no other path
+        // maps pages of this region.
+        address_space
+            .map(
+                page,
+                frame,
+                PageTableFlags::PRESENT
+                    | PageTableFlags::WRITABLE
+                    | PageTableFlags::USER_ACCESSIBLE
+                    | PageTableFlags::NO_EXECUTE,
+            )
+            .map_err(|_| PageInError::MapFailed)?;
 
         let buf = unsafe { &mut *page.start_address().as_mut_ptr::<[u8; 4096]>() };
         if let Err(e) = fill(buf) {
@@ -266,12 +463,12 @@ impl PrivateMemoryRegion {
         Ok(())
     }
 
-    pub fn map_zeroed(
+    fn map_zeroed(
         &self,
         address_space: &AddressSpace,
         page: Page<Size4KiB>,
     ) -> Result<(), PageInError> {
-        self.map_and_fill(address_space, page, |buf| {
+        self.handle_fault(address_space, page, false, |buf| {
             buf.fill(0);
             Ok(())
         })
@@ -301,34 +498,44 @@ impl FileBackedMemoryRegion {
         }
     }
 
-    pub fn page_in(
+    fn handle_fault(
         &self,
         address_space: &AddressSpace,
         page: Page<Size4KiB>,
+        write: bool,
     ) -> Result<(), PageInError> {
         let off = (page.start_address() - self.region.start()).into_usize();
         let from_file = self
             .file_len
             .saturating_sub(off)
             .min(Size4KiB::SIZE.into_usize());
-        self.region.map_and_fill(address_space, page, |buf| {
-            buf[from_file..].fill(0);
-            let mut done = 0;
-            while done < from_file {
-                match self
-                    .node
-                    .read(&mut buf[done..from_file], self.file_offset + off + done)
-                {
-                    Ok(0) => break,
-                    Ok(n) => done += n,
-                    Err(_) => return Err(PageInError::ReadFailed),
+        self.region
+            .handle_fault(address_space, page, write, |buf| {
+                buf[from_file..].fill(0);
+                let mut done = 0;
+                while done < from_file {
+                    match self
+                        .node
+                        .read(&mut buf[done..from_file], self.file_offset + off + done)
+                    {
+                        Ok(0) => break,
+                        Ok(n) => done += n,
+                        Err(_) => return Err(PageInError::ReadFailed),
+                    }
                 }
-            }
-            buf[done..from_file].fill(0);
-            Ok(())
-        })?;
+                buf[done..from_file].fill(0);
+                Ok(())
+            })?;
         trace!(page = ?page.start_address(), "paged in");
         Ok(())
+    }
+
+    fn page_in(
+        &self,
+        address_space: &AddressSpace,
+        page: Page<Size4KiB>,
+    ) -> Result<(), PageInError> {
+        self.handle_fault(address_space, page, false)
     }
 }
 
@@ -343,15 +550,45 @@ impl FileBackedMemoryRegion {
 pub struct SharedMemoryRegion {
     segment: OwnedSegment<'static>,
     size: usize,
+    /// Borrowed from the device. Never deallocated (see the struct docs).
+    frames: PhysFrameRangeInclusive<Size4KiB>,
     _node: VfsNode,
 }
 
 impl SharedMemoryRegion {
-    pub fn new(segment: OwnedSegment<'static>, size: usize, node: VfsNode) -> Self {
+    pub fn new(
+        segment: OwnedSegment<'static>,
+        size: usize,
+        frames: PhysFrameRangeInclusive<Size4KiB>,
+        node: VfsNode,
+    ) -> Self {
         Self {
             segment,
             size,
+            frames,
             _node: node,
         }
+    }
+
+    fn handle_fault(
+        &self,
+        address_space: &AddressSpace,
+        page: Page<Size4KiB>,
+    ) -> Result<(), PageInError> {
+        if address_space.translate(page.start_address()).is_some() {
+            return Ok(());
+        }
+        let offset = (page.start_address() - self.segment.start) / Size4KiB::SIZE;
+        address_space
+            .map(
+                page,
+                self.frames.start + offset,
+                PageTableFlags::PRESENT
+                    | PageTableFlags::WRITABLE
+                    | PageTableFlags::USER_ACCESSIBLE
+                    | PageTableFlags::NO_EXECUTE,
+            )
+            .map_err(|_| PageInError::MapFailed)?;
+        Ok(())
     }
 }

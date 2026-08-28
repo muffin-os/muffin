@@ -3,7 +3,7 @@ use core::fmt::{Debug, Formatter};
 use conquer_once::spin::OnceCell;
 use limine::memory_map::EntryType;
 use mapper::AddressSpaceMapper;
-use spin::RwLock;
+use spin::{RwLock, RwLockWriteGuard};
 use tracing::{debug, info};
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::mapper::{
@@ -441,4 +441,24 @@ impl AddressSpace {
     pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         self.inner.read().translate(vaddr)
     }
+
+    pub fn translate_flags(&self, vaddr: VirtAddr) -> Option<PageTableFlags> {
+        self.inner.read().translate_flags(vaddr)
+    }
+
+    /// Serializes creation of page tables in the kernel half. The
+    /// kernel-half L3 subtrees are shared between all address spaces, so a
+    /// mapper that touches kernel-half entries through a non-kernel address
+    /// space races every [`AddressSpace::kernel`] mapper unless it holds
+    /// this guard, which is that same lock.
+    pub fn lock_kernel_half() -> KernelHalfGuard<'static> {
+        KernelHalfGuard {
+            _guard: Self::kernel().inner.write(),
+        }
+    }
+}
+
+/// See [`AddressSpace::lock_kernel_half`].
+pub struct KernelHalfGuard<'a> {
+    _guard: RwLockWriteGuard<'a, AddressSpaceMapper>,
 }

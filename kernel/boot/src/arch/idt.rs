@@ -16,7 +16,7 @@ use x86_64::{PrivilegeLevel, VirtAddr};
 use crate::U64Ext;
 use crate::arch::{gdt, signal};
 use crate::mcore::context::ExecutionContext;
-use crate::mcore::mtask::process::mem::{MemoryRegion, PageInError};
+use crate::mcore::mtask::process::mem::PageInError;
 use crate::mcore::mtask::task::Task;
 use crate::mcore::mtask::wait::wake_expired_sleepers;
 use crate::syscall::dispatch_syscall;
@@ -398,25 +398,20 @@ extern "sysv64" fn page_fault_classify(
             return 0;
         }
 
-        // ...but if it's not a stack issue, maybe it is a lazy mapping?
-        if let Some(region) = process.memory_regions().region_for(addr) {
-            let reason = if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
-                "protection violation"
-            } else {
-                match &*region {
-                    MemoryRegion::Private(_) | MemoryRegion::FileBacked(_) => {
-                        match pager_stack_top(task, frame, from_user) {
-                            Some(top) => {
-                                task.pending_fault_addr().store(addr.as_u64(), Relaxed);
-                                return top;
-                            }
-                            None => "demand paging fault on an unusable stack",
-                        }
+        if process.memory_regions().is_memory_region_at_address(addr) {
+            let write = error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE);
+            let violation = error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION);
+            let ifetch = error_code.contains(PageFaultErrorCode::INSTRUCTION_FETCH);
+            let reason = if !violation || (write && !ifetch) {
+                match pager_stack_top(task, frame, from_user) {
+                    Some(top) => {
+                        task.pending_fault_addr().store(addr.as_u64(), Relaxed);
+                        return top;
                     }
-                    // A shared device mapping is fully mapped eagerly, so a
-                    // fault inside it is an invalid access.
-                    MemoryRegion::Shared(_) => "invalid access to a shared region",
+                    None => "demand paging fault on an unusable stack",
                 }
+            } else {
+                "protection violation"
             };
 
             error!(
@@ -443,17 +438,22 @@ extern "sysv64" fn page_fault_classify(
 }
 
 extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
+    // Safety: the wrapper copied the fault block, error code included, onto
+    // this stack right below the pager frame, so the pointer is valid and
+    // exclusive.
+    let block = unsafe { &mut *block };
     let task = Task::current();
     let process = task.process();
     let addr = VirtAddr::new(task.pending_fault_addr().swap(0, Relaxed));
+    let error_code = PageFaultErrorCode::from_bits_truncate(block.error_code);
+    let write = error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE);
     let page = Page::<Size4KiB>::containing_address(addr);
     let address_space = process.address_space();
 
     let region = process.memory_regions().region_for(addr);
     let failure = match region.as_deref() {
-        Some(MemoryRegion::Private(r)) => r.map_zeroed(address_space, page).err(),
-        Some(MemoryRegion::FileBacked(r)) => r.page_in(address_space, page).err(),
-        _ => Some(PageInError::MapFailed),
+        Some(r) => r.handle_fault(address_space, page, write).err(),
+        None => Some(PageInError::MapFailed),
     };
 
     if let Some(e) = failure {
@@ -463,7 +463,6 @@ extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
             process.name(),
             task.name()
         );
-        let block = unsafe { &mut *block };
         terminate_faulting_task(&mut block.frame, &mut block.regs, task);
     }
 }
