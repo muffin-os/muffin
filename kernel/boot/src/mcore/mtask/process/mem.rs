@@ -144,7 +144,7 @@ pub enum MemoryRegion {
 impl MemoryRegion {
     pub fn addr(&self) -> VirtAddr {
         match self {
-            MemoryRegion::Private(private_memory_region) => private_memory_region.segment.start,
+            MemoryRegion::Private(private_memory_region) => private_memory_region.start,
             MemoryRegion::Mapped(mapped_memory_region) => mapped_memory_region.segment.start,
             MemoryRegion::FileBacked(file_backed_memory_region) => {
                 file_backed_memory_region.region.segment().start
@@ -195,6 +195,10 @@ struct PrivateRegionState {
 #[derive(Debug)]
 pub struct PrivateMemoryRegion {
     segment: OwnedSegment<'static>,
+    /// The first accessible address. Equals `segment.start` except for
+    /// guarded regions, where `segment` also reserves the surrounding guard
+    /// pages.
+    start: VirtAddr,
     /// The size of the region. This may differ from the
     /// size of the segment in that the size of the segment
     /// is page-aligned, while this may not be.
@@ -210,6 +214,7 @@ pub struct PrivateMemoryRegion {
 impl PrivateMemoryRegion {
     pub fn new(segment: OwnedSegment<'static>, size: usize, flags: PageTableFlags) -> Self {
         Self {
+            start: segment.start,
             segment,
             size,
             state: Mutex::new(PrivateRegionState {
@@ -221,6 +226,10 @@ impl PrivateMemoryRegion {
 
     pub fn segment(&self) -> &Segment {
         &self.segment
+    }
+
+    pub fn start(&self) -> VirtAddr {
+        self.start
     }
 
     fn map_and_fill(
@@ -321,7 +330,7 @@ impl FileBackedMemoryRegion {
         address_space: &AddressSpace,
         page: Page<Size4KiB>,
     ) -> Result<(), PageInError> {
-        let off = (page.start_address() - self.region.segment().start).into_usize();
+        let off = (page.start_address() - self.region.start()).into_usize();
         let from_file = self
             .file_len
             .saturating_sub(off)
