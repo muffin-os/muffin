@@ -380,12 +380,10 @@ pub struct PrivateMemoryRegion {
     /// guarded regions, where `segment` also reserves the surrounding guard
     /// pages.
     start: VirtAddr,
-    /// The size of the region. This may differ from the
-    /// size of the segment in that the size of the segment
-    /// is page-aligned, while this may not be.
-    ///
-    /// For example, the segment of a memory region whose
-    /// size is 5 bytes is actually 4096 bytes.
+    /// The accessible size in bytes starting at `start`. It is not
+    /// necessarily page aligned. `segment.len` can exceed it, because the
+    /// segment is page aligned and for guarded regions also reserves the
+    /// surrounding guard pages.
     size: usize,
     /// Serializes all backing mutations, all flags changes, and all fault
     /// resolution for this region.
