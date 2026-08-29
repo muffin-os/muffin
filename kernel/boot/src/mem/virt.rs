@@ -22,7 +22,7 @@ fn vmm() -> &'static RwLock<VirtualMemoryManager> {
     VMM.get().expect("virtual memory should be initialized")
 }
 
-#[allow(clippy::missing_panics_doc)]
+#[expect(clippy::missing_panics_doc)]
 pub fn init() {
     VMM.init_once(|| {
         RwLock::new(VirtualMemoryManager::new(
@@ -205,7 +205,6 @@ pub trait VirtualMemoryAllocator {
 pub struct VirtualMemoryHigherHalf;
 
 impl VirtualMemoryAllocator for VirtualMemoryHigherHalf {
-    #[allow(clippy::missing_panics_doc)] // panic must not happen, so the caller shouldn't have to care about it
     fn reserve(&self, pages: usize) -> Option<OwnedSegment<'static>> {
         vmm()
             .write()

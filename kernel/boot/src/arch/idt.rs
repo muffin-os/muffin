@@ -101,7 +101,7 @@ pub fn create_idt() -> InterruptDescriptorTable {
 
 macro_rules! wrap {
     ($fn:ident => $w:ident) => {
-        #[allow(clippy::missing_safety_doc)]
+        #[allow(clippy::missing_safety_doc)] // expect is incompatible with #[unsafe(naked)]
         #[unsafe(naked)]
         pub unsafe extern "sysv64" fn $w() {
             core::arch::naked_asm!(
@@ -270,7 +270,7 @@ const _: () = {
     assert!(128 == offset_of!(FaultBlock, frame));
 };
 
-#[allow(clippy::missing_safety_doc)]
+#[allow(clippy::missing_safety_doc)] // expect is incompatible with #[unsafe(naked)]
 #[unsafe(naked)]
 pub unsafe extern "sysv64" fn page_fault_wrapper() {
     core::arch::naked_asm!(

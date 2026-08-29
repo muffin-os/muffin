@@ -18,7 +18,7 @@ pub enum PciDriverType {
     Specific,
 }
 
-#[allow(clippy::type_complexity)] // refactoring the `init` fn type doesn't provide benefits here
+#[expect(clippy::type_complexity)] // refactoring the `init` fn type doesn't provide benefits here
 pub struct PciDriverDescriptor {
     pub name: &'static str,
     pub typ: PciDriverType,

@@ -2,7 +2,6 @@ macro_rules! n {
     ($($name:ident = $val:expr),*,) => {
         $(pub const $name: usize = $val;)*
 
-        #[allow(dead_code)]
         #[must_use] pub fn syscall_name(n: usize) -> &'static str {
             match n {
                 $( $val => stringify!($name), )*

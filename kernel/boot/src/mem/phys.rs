@@ -85,7 +85,6 @@ impl Drop for OwnedPhysicalMemory {
 #[derive(Copy, Clone)]
 pub struct PhysicalMemory;
 
-#[allow(dead_code)]
 impl PhysicalMemory {
     /// Checks whether the physical memory allocator has been initialized.
     ///

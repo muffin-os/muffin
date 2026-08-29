@@ -115,7 +115,7 @@ impl ExecutionContext {
     /// # Safety
     /// The caller must ensure that only one mutable reference
     /// to the scheduler exists at any time.
-    #[allow(clippy::mut_from_ref)]
+    #[expect(clippy::mut_from_ref)]
     pub unsafe fn scheduler_mut(&self) -> &mut Scheduler {
         unsafe { &mut *self.scheduler.get() }
     }

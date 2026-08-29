@@ -23,8 +23,8 @@ pub struct BlockDevices;
 
 impl BlockDevices {
     // TODO: add documentation
-    #[allow(clippy::missing_errors_doc)]
-    #[allow(clippy::missing_panics_doc)]
+    #[expect(clippy::missing_errors_doc)]
+    #[expect(clippy::missing_panics_doc)]
     pub fn register_block_device<D>(device: Arc<RwLock<D>>) -> Result<(), RegisterDeviceError>
     where
         D: BlockDevice<Error = Box<dyn Error>> + Send + Sync + 'static,

@@ -28,11 +28,11 @@ pub mod context;
 mod lapic;
 pub mod mtask;
 
-#[allow(clippy::missing_panics_doc)]
+#[expect(clippy::missing_panics_doc)]
 #[instrument(name = "init multitasking", level = Level::DEBUG)]
 pub fn init() {
     let resp = unsafe {
-        #[allow(static_mut_refs)] // we need this to set the `extra` field in the CPU structs
+        #[expect(static_mut_refs)] // we need this to set the `extra` field in the CPU structs
         MP_REQUEST.get_response_mut()
     }
     .unwrap();

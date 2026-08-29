@@ -183,7 +183,7 @@ fn handle_panic(info: &core::panic::PanicInfo) {
 /// call from becoming a tail call that the optimizer folds into a loop.
 extern "C" fn overflow_kernel_stack(_: *mut c_void) {
     #[inline(never)]
-    #[allow(unconditional_recursion)]
+    #[expect(unconditional_recursion)]
     fn recurse(depth: u64) -> u64 {
         let mut frame = [depth; 8];
         unsafe { core::ptr::write_volatile(&raw mut frame[0], depth) };

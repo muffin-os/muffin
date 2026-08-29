@@ -178,7 +178,7 @@ pub struct VirtualExt2Inode {
 
 impl VirtualExt2Inode {
     #[must_use]
-    #[allow(clippy::missing_panics_doc)] // see comments
+    #[expect(clippy::missing_panics_doc)] // see comments
     pub fn try_new(inode_num: InodeAddress, inode: Inode) -> Option<Self> {
         let inner = match inode.typ() {
             // the unwraps don't actually panic, we check the type, try_into checks again

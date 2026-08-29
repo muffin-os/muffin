@@ -43,7 +43,6 @@ fn virtio_probe(addr: PciAddress, cam: &dyn ConfigurationAccess) -> bool {
         && addr.subsystem_id(cam) == 0x02
 }
 
-#[allow(clippy::needless_pass_by_value)] // signature is required like this
 fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<(), Box<dyn Error>> {
     let transport = transport(addr, cam);
 

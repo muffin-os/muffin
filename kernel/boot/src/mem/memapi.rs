@@ -177,7 +177,7 @@ impl MemoryApi for LowerHalfMemoryApi {
 }
 
 trait Sealed {}
-#[allow(private_bounds)]
+#[expect(private_bounds)]
 pub trait AllocationType: Sealed {}
 #[derive(Debug)]
 pub struct Readonly;
@@ -205,7 +205,7 @@ impl<T: AllocationType> LowerHalfAllocation<T> {
         self.start
     }
 
-    #[allow(clippy::len_without_is_empty)]
+    #[expect(clippy::len_without_is_empty)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.layout.size()
@@ -430,7 +430,7 @@ impl<T: AllocationType> HigherHalfAllocation<T> {
         self.start
     }
 
-    #[allow(clippy::len_without_is_empty)]
+    #[expect(clippy::len_without_is_empty)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.layout.size()

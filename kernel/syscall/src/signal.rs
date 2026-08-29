@@ -71,7 +71,7 @@ where
     Cx: SignalAccess + PermissionAccess + ProcessesAccess,
     I: Iterator<Item = <Cx as ProcessesAccess>::Process>,
 {
-    #[allow(clippy::manual_try_fold)] // doesn't provide any benefit in this case
+    #[expect(clippy::manual_try_fold)] // doesn't provide any benefit in this case
     iter.fold(Err(ESRCH), |state, proc| {
         match cx.check_permission(proc.process_id(), Capability::Signal) {
             Ok(_) => {

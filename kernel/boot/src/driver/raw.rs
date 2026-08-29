@@ -12,7 +12,7 @@ static RAW_DEVICES: RwLock<RawDeviceRegistry<KernelDeviceId>> =
 pub struct RawDevices;
 
 impl RawDevices {
-    #[allow(clippy::missing_errors_doc)] // TODO: add documentation
+    #[expect(clippy::missing_errors_doc)] // TODO: add documentation
     pub fn register_raw_device<D>(device: Arc<RwLock<D>>) -> Result<(), RegisterDeviceError>
     where
         D: RawDevice<KernelDeviceId> + 'static,

@@ -119,7 +119,6 @@ impl MemoryRegions {
     /// per-region state locks must be taken with interrupts enabled. A
     /// pager on another CPU holds them across file page-ins whose storage
     /// IRQ may be routed to this CPU.
-    #[allow(dead_code)]
     pub fn clone_for_fork(
         &self,
         address_space: &AddressSpace,
@@ -520,7 +519,6 @@ impl PrivateMemoryRegion {
     /// A fork caller must NOT CoW-clone a task's FX area region. The
     /// scheduler's `_fxsave` into a write-protected page would fault with
     /// interrupts disabled. Fork must give the child a fresh FX area.
-    #[allow(dead_code)]
     pub fn clone_for_fork(
         &self,
         address_space: &AddressSpace,
@@ -704,7 +702,6 @@ impl FileBackedMemoryRegion {
         }
     }
 
-    #[allow(dead_code)]
     pub fn clone_for_fork(
         &self,
         address_space: &AddressSpace,
@@ -782,7 +779,6 @@ impl SharedMemoryRegion {
         }
     }
 
-    #[allow(dead_code)]
     pub fn clone_for_fork(
         &self,
         child_vmm: &Arc<RwLock<VirtualMemoryManager>>,

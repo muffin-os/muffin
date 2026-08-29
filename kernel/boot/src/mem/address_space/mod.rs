@@ -223,7 +223,7 @@ pub const fn virt_addr_from_page_table_indices(indices: [u16; 4], offset: u64) -
 
 #[must_use]
 pub const fn sign_extend_vaddr(vaddr: u64) -> u64 {
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
     let result = ((vaddr << 16) as i64 >> 16) as u64; // only works for 48-bit addresses
     result
 }
@@ -318,7 +318,6 @@ impl AddressSpace {
         self.level4_frame.start_address().as_u64().into_usize()
     }
 
-    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         self.inner.read().is_active()
     }
@@ -367,7 +366,6 @@ impl AddressSpace {
 
     /// # Errors
     /// Returns an error if the page is already mapped or flags are invalid.
-    #[allow(dead_code)]
     pub fn map<S: PageSize>(
         &self,
         page: Page<S>,
@@ -437,7 +435,6 @@ impl AddressSpace {
         self.inner.write().remap_range(pages.into(), &f)
     }
 
-    #[allow(dead_code)]
     pub fn translate(&self, vaddr: VirtAddr) -> Option<PhysAddr> {
         self.inner.read().translate(vaddr)
     }

@@ -10,7 +10,7 @@ pub mod memapi;
 pub mod phys;
 pub mod virt;
 
-#[allow(clippy::missing_panics_doc)]
+#[expect(clippy::missing_panics_doc)]
 pub fn init() {
     let response = MEMORY_MAP_REQUEST
         .get_response()

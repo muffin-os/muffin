@@ -81,7 +81,7 @@ pub fn init() {
     IO_APIC.init_once(|| Mutex::new(ioapic));
 }
 
-#[allow(clippy::similar_names)]
+#[expect(clippy::similar_names)]
 fn disable_8259() {
     unsafe {
         let mut cmd_8259a = Port::<u8>::new(0x20);

@@ -60,7 +60,7 @@ impl ChildrenMut<'_> {
 }
 
 impl Process {
-    #[allow(clippy::missing_panics_doc)] // this panic must not happen, so the caller shouldn't have to care about it
+    #[expect(clippy::missing_panics_doc)] // this panic must not happen, so the caller shouldn't have to care about it
     pub fn parent(&self) -> Arc<Process> {
         process_tree()
             .read()

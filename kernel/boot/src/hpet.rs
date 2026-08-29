@@ -26,7 +26,7 @@ pub fn hpet_maybe() -> Option<&'static RwLock<Hpet<'static>>> {
     HPET.try_get().ok()
 }
 
-#[allow(clippy::missing_panics_doc)]
+#[expect(clippy::missing_panics_doc)]
 pub fn init() {
     let acpi_tables = acpi_tables();
     let guard = acpi_tables.lock();
@@ -58,7 +58,7 @@ pub fn init() {
 }
 
 pub struct Hpet<'a> {
-    #[allow(dead_code)] // upon drop, the memory segment is released
+    #[expect(dead_code)] // upon drop, the memory segment is released
     segment: OwnedSegment<'a>,
     inner: VolatilePtr<'a, Inner>,
 }

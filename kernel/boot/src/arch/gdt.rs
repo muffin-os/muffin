@@ -38,7 +38,6 @@ fn allocate_exception_stack(usable_pages: usize) -> VirtAddr {
     top
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Selectors {
     pub kernel_code: SegmentSelector,

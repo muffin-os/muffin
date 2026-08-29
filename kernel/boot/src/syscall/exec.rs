@@ -27,7 +27,7 @@ use crate::mcore::mtask::task::Task;
 /// Every fallible check runs before the old image is torn down, so an error
 /// return leaves the caller intact. Once teardown starts, a failure kills the
 /// process, because there is no image left to return into.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn dispatch_sys_execve(
     path_ptr: usize,
     path_len: usize,

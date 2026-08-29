@@ -118,7 +118,7 @@ pub fn shutdown() -> ! {
     info!("powering off");
 
     let cpu_count = unsafe {
-        #[allow(static_mut_refs)] // only written during boot, read-only here
+        #[expect(static_mut_refs)] // only written during boot, read-only here
         MP_REQUEST.get_response()
     }
     .expect("MP response should exist")
