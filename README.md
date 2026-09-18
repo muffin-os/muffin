@@ -12,7 +12,7 @@ The project is structured as a modular Bazel build with a kernel and userspace c
 ## I'm in the fast lane, how do I try this?
 
 1. Install `bazel`
-2. Install `xorriso`, `e2fsprogs` and `qemu-system-x86`
+2. Install `qemu-system-x86` and a C compiler with `make`
 3. Run `bazel run //muffinos`
 
 ## Key Features
@@ -35,7 +35,8 @@ Muffin OS aims for basic POSIX.1-2024 compliance, implementing standard system f
 
 ### Prerequisites
 
-`bazel`, `xorriso`, `e2fsprogs` and `qemu-system-x86`.
+`bazel`, `qemu-system-x86`, and a C compiler with `make` (Bazel builds
+`xorriso` and `e2fsprogs` from source for the image targets).
 
 I would like to use cargo workspaces, but [cargo#10444](https://github.com/rust-lang/cargo/issues/10444) makes that impossible right now.
 

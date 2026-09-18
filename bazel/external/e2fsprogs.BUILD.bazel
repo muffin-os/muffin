@@ -1,0 +1,54 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+)
+
+# Only mke2fs is consumed, but e2fsprogs has no target that builds it alone, so
+# the whole suite is configured down to the parts that build without host
+# libraries. The private uuid and blkid libraries stay enabled on purpose:
+# disabling them means "link the host's libuuid/libblkid" instead.
+configure_make(
+    name = "e2fsprogs_build",
+    configure_options = [
+        "--enable-libuuid",
+        "--enable-libblkid",
+        "--disable-uuidd",
+        "--disable-debugfs",
+        "--disable-imager",
+        "--disable-resizer",
+        "--disable-defrag",
+        "--disable-fuse2fs",
+        "--disable-nls",
+        "--disable-testio-debug",
+        "--disable-backtrace",
+        "--disable-dependency-tracking",
+        # scrub/ installs udev rules, crontabs and systemd units to absolute
+        # system paths, which fails the install step under the sandbox.
+        "--without-udev-rules-dir",
+        "--without-crond-dir",
+        "--without-systemd-unit-dir",
+    ],
+    lib_source = ":srcs",
+    # mke2fs installs to sbin, not bin.
+    out_bin_dir = "sbin",
+    out_binaries = ["mke2fs"],
+)
+
+filegroup(
+    name = "mke2fs",
+    srcs = [":e2fsprogs_build"],
+    output_group = "mke2fs",
+)
+
+# `make install` copies misc/mke2fs.conf.in to $prefix/etc/mke2fs.conf byte for
+# byte, so the source file already is the installed config. Taking it straight
+# from the tarball keeps it a plain file: out_data_dirs would hand the rules a
+# directory output instead.
+filegroup(
+    name = "mke2fs_conf",
+    srcs = ["misc/mke2fs.conf.in"],
+)

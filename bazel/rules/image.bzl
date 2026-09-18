@@ -1,8 +1,9 @@
 """Bootable image assembly.
 
-Both rules shell out to host tools, `mke2fs` from e2fsprogs and `xorriso`. They
-are host prerequisites rather than Bazel toolchains, so a machine missing either
-fails the build with that tool's own "not found" message.
+Both rules shell out to `mke2fs` and `xorriso`, which are built from source by
+`@e2fsprogs` and `@xorriso` and reach the actions as declared tool inputs. No
+host install of either is involved, so the action cache sees the tool the same
+way it sees the kernel binary.
 """
 
 # Runs a command, discarding its output unless it fails. Both streams are merged
@@ -28,13 +29,15 @@ def _stage(dest, src_path):
 
 def _ext2_image_impl(ctx):
     out = ctx.actions.declare_file(ctx.label.name + ".img")
+    mke2fs = ctx.file._mke2fs
 
-    inputs = []
+    inputs = [ctx.file._mke2fs_conf]
 
-    # mke2fs ships in sbin, which is absent from the default action PATH.
     cmds = [
         "set -eu",
-        'export PATH="$PATH:/usr/sbin:/sbin"',
+        # Without this mke2fs reads the host's /etc/mke2fs.conf, so filesystem
+        # defaults would track whatever e2fsprogs the machine has installed.
+        'export MKE2FS_CONFIG="$PWD/{}"'.format(ctx.file._mke2fs_conf.path),
         'root="$(mktemp -d)"',
         "trap 'rm -rf \"$root\"' EXIT",
     ]
@@ -53,16 +56,15 @@ def _ext2_image_impl(ctx):
         inputs.append(staged)
         cmds.extend(_stage(dest, staged.path))
 
-    cmds.append('mke2fs -q -d "$root" -m 5 -t ext2 {} {}'.format(out.path, ctx.attr.image_size))
+    cmds.append('{} -q -d "$root" -m 5 -t ext2 {} {}'.format(mke2fs.path, out.path, ctx.attr.image_size))
 
     ctx.actions.run_shell(
         outputs = [out],
         inputs = inputs,
+        tools = [mke2fs],
         command = "\n".join(cmds),
         mnemonic = "Ext2Image",
         progress_message = "Building ext2 image %{output}",
-        # The host e2fsprogs install has to stay reachable from the action.
-        execution_requirements = {"no-sandbox": "1"},
     )
 
     return [DefaultInfo(files = depset([out]))]
@@ -86,12 +88,22 @@ ext2_image = rule(
             default = "64M",
             doc = "Filesystem size passed to mke2fs.",
         ),
+        "_mke2fs": attr.label(
+            allow_single_file = True,
+            cfg = "exec",
+            default = "@e2fsprogs//:mke2fs",
+        ),
+        "_mke2fs_conf": attr.label(
+            allow_single_file = True,
+            default = "@e2fsprogs//:mke2fs_conf",
+        ),
     },
 )
 
 def _limine_iso_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out or ctx.label.name + ".iso")
     limine = ctx.executable._limine
+    xorriso = ctx.file._xorriso
 
     cmds = [
         "set -eu",
@@ -115,7 +127,7 @@ def _limine_iso_impl(ctx):
         cmds.append('cp {} "$root/EFI/BOOT/{}"'.format(f.path, f.basename))
 
     cmds.append(" ".join([
-        "quiet xorriso -as mkisofs",
+        "quiet {} -as mkisofs".format(xorriso.path),
         "-b boot/limine/limine-bios-cd.bin",
         "-no-emul-boot",
         "-boot-load-size 4",
@@ -136,7 +148,7 @@ def _limine_iso_impl(ctx):
     ctx.actions.run_shell(
         outputs = [out],
         inputs = [ctx.file.kernel, ctx.file.limine_conf] + ctx.files._bios + ctx.files._efi,
-        tools = [limine],
+        tools = [limine, xorriso],
         command = "\n".join(cmds),
         mnemonic = "LimineIso",
         progress_message = "Building bootable ISO %{output}",
@@ -168,6 +180,11 @@ limine_iso = rule(
             cfg = "exec",
             default = "@limine//:limine",
             executable = True,
+        ),
+        "_xorriso": attr.label(
+            allow_single_file = True,
+            cfg = "exec",
+            default = "@xorriso//:xorriso",
         ),
     },
 )

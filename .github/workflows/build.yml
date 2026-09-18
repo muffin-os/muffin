@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y xorriso e2fsprogs qemu-system-x86
+          sudo apt install -y qemu-system-x86
       - name: Test
         run: bazel test -c ${{ matrix.compilation_mode }} //...
 
@@ -121,10 +121,6 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           disk-cache: ${{ github.job }}
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y xorriso e2fsprogs
       - name: Build
         run: bazel build -c opt //muffinos:iso
       - uses: actions/upload-artifact@v7

@@ -1,0 +1,39 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**"]),
+)
+
+# The GNU tarball vendors libburn, libisofs, libisoburn and libjte, so the only
+# thing a static build links against is libc. Every optional dependency is
+# switched off: none of readline, ACLs, xattrs, zlib, bzip2 or the filter and
+# frontend subprocesses affect `-as mkisofs` output for a hybrid boot image,
+# and leaving them on would silently bind the binary to whatever the build
+# machine happens to have installed.
+configure_make(
+    name = "xorriso_build",
+    configure_options = [
+        "--disable-libreadline",
+        "--disable-libedit",
+        "--disable-libacl",
+        "--disable-xattr",
+        "--disable-zlib",
+        "--disable-libbz2",
+        "--disable-external-filters",
+        "--disable-launch-frontend",
+        "--disable-shared",
+        "--enable-static",
+        "--disable-dependency-tracking",
+    ],
+    lib_source = ":srcs",
+    out_binaries = ["xorriso"],
+)
+
+filegroup(
+    name = "xorriso",
+    srcs = [":xorriso_build"],
+    output_group = "xorriso",
+)

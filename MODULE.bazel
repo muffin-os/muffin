@@ -8,6 +8,10 @@ bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "rules_shell", version = "0.6.1")
+# 0.16.0 requires rules_cc 0.2.18, whose toolchain autodetection compiles C++
+# helper binaries; that link crashes binutils 2.47's bfd linker. 0.15.1 floors
+# rules_cc at 0.1.1, so the version above stays selected.
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
@@ -42,6 +46,13 @@ register_toolchains(
     "//bazel/toolchains:x86_64-unknown-muffin-bootstrap",
 )
 register_toolchains("@rust_toolchains//:all")
+
+# rules_foreign_cc otherwise resolves its own built_pkgconfig_toolchain, which
+# compiles pkg-config from source and with it all of glib. Neither the xorriso
+# nor the e2fsprogs configure run needs pkg-config, so the preinstalled
+# toolchain - a thin wrapper over whatever is on PATH, if anything - is enough.
+# A root module's registrations outrank a dependency's.
+register_toolchains("@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
@@ -167,6 +178,14 @@ use_repo(crate, "crates")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
+    name = "e2fsprogs",
+    build_file = "//bazel/external:e2fsprogs.BUILD.bazel",
+    sha256 = "da274408bebbfd13a5a2fc3cfc66e3ffff17c48534673aa67f88d49b99123b96",
+    strip_prefix = "e2fsprogs-1.47.4",
+    urls = ["https://cdn.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.4/e2fsprogs-1.47.4.tar.gz"],
+)
+
+http_archive(
     name = "limine",
     build_file = "//bazel/external:limine.BUILD.bazel",
     sha256 = "4c760c09c53560d859b362319a3dc63b79cca3d47f35d69ab0106a13b8057055",
@@ -188,4 +207,12 @@ http_archive(
     sha256 = "99c110f203f38294e3b1565950809a45a5b0a91749244fa3a2ea94dd77e5be5b",
     strip_prefix = "rust-src-nightly/rust-src/lib/rustlib/src/rust",
     urls = ["https://static.rust-lang.org/dist/2026-07-12/rust-src-nightly.tar.xz"],
+)
+
+http_archive(
+    name = "xorriso",
+    build_file = "//bazel/external:xorriso.BUILD.bazel",
+    sha256 = "319e3675cd7d986bf71d36596ca7b03dac172a758462bedcbbd298a7f86f36cc",
+    strip_prefix = "xorriso-1.5.8",
+    urls = ["https://ftp.gnu.org/gnu/xorriso/xorriso-1.5.8.tar.gz"],
 )

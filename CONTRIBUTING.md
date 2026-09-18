@@ -45,13 +45,15 @@ version in `.bazelversion` is honored. Bazel downloads the Rust toolchain itself
 from the pin in `MODULE.bazel`, so a `rustup` install is not needed to build or
 test.
 
-The toolchain is the only thing Bazel provides for you. `xorriso` and
-`e2fsprogs` are still host prerequisites, because `//muffinos:iso` and every
-`ext2_image` target shell out to `xorriso` and `mke2fs`. `qemu-system-x86` is
-needed to run the OS and to run the `//tests` integration tests.
+Bazel also builds `xorriso` and `mke2fs` from source, so neither has to be
+installed: `//muffinos:iso` and every `ext2_image` target take them as declared
+inputs from `@xorriso` and `@e2fsprogs`. Those source builds do need a C
+compiler and `make` on the host, which `@limine//:limine` already required.
+`qemu-system-x86` is needed to run the OS and to run the `//tests` integration
+tests.
 
 ```bash
-sudo apt update && sudo apt install -y bazelisk xorriso e2fsprogs qemu-system-x86
+sudo apt update && sudo apt install -y bazelisk build-essential qemu-system-x86
 ```
 
 `rustup` with the `miri` component is required only for the Miri targets, which
@@ -80,7 +82,7 @@ bazel build -c opt //...
 To build the complete bootable ISO:
 
 ```bash
-# Requires xorriso and e2fsprogs to be installed
+# Builds xorriso and e2fsprogs from source on the first run
 bazel build -c opt //muffinos:iso //muffinos:disk
 ```
 
@@ -93,8 +95,8 @@ The build process automatically:
 1. Fetches the pinned Limine bootloader release and builds its `limine` tool
 2. Fetches the pinned OVMF firmware for UEFI support
 3. Compiles the kernel for bare-metal x86-64
-4. Creates a bootable ISO with xorriso
-5. Builds an ext2 filesystem image with mke2fs
+4. Builds xorriso from source and creates a bootable ISO with it
+5. Builds e2fsprogs from source and creates an ext2 filesystem image with mke2fs
 
 ### Updating External Crates
 
