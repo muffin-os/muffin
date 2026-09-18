@@ -3,7 +3,7 @@ use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::Ordering::{Acquire, Release};
 
-use tracing::{Level, instrument, trace};
+use tracing::{instrument, trace, Level};
 use x86_64::instructions::segmentation::{CS, DS, SS};
 use x86_64::instructions::tables::load_tss;
 use x86_64::instructions::{hlt, interrupts};
@@ -58,9 +58,11 @@ pub fn init() {
 
     // then call the `cpu_init` function on the bootstrap CPU
     unsafe { cpu_init_and_return(resp.cpus()[0]) };
-    interrupts::enable();
 
+    // the timer is running and could trigger an interrupt,
+    // so the idle task must exist before `sti`
     install_idle_task();
+    interrupts::enable();
 }
 
 #[instrument(name = "init cpu", level = Level::INFO, fields(cpu = cpu.id))]
@@ -113,17 +115,19 @@ unsafe extern "C" fn cpu_init(cpu: &limine::mp::Cpu) -> ! {
 }
 
 fn install_idle_task() {
+    assert!(
+        !interrupts::are_enabled(),
+        "interrupts must be disabled, since the interrupt tasks must exist before timer interrupts can arrive"
+    );
     let idle_task = Task::create_new(Process::root(), idle, ptr::null_mut())
         .expect("should be able to create the idle task");
-    interrupts::disable();
     unsafe {
-        // Safety: interrupts were disabled above, so the context is this
-        // CPU's while the idle task is installed.
+        // Safety: interrupts are disabled, so the context is this CPU's
+        // while the idle task is installed.
         ExecutionContext::load()
             .scheduler_mut()
             .set_idle_task(Box::pin(idle_task));
     }
-    interrupts::enable();
 }
 
 extern "C" fn idle(_: *mut c_void) {

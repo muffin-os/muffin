@@ -66,6 +66,11 @@ impl Scheduler {
             self.route(zombie_task, disposal);
         }
 
+        debug_assert!(
+            self.idle_task.is_some() || self.idle_tid == Some(self.current_task.id()),
+            "reschedule without this CPU's idle task installed"
+        );
+
         // A parking task cannot stay on the CPU, so an idle task is an
         // acceptable target even while the run queue is empty. The ticket is
         // taken only after a switch target exists, because an early return
@@ -73,6 +78,7 @@ impl Scheduler {
         let must_switch = self.current_task.has_park_ticket();
 
         let Some(next_task) = self.next_task(must_switch) else {
+            assert!(!must_switch, "parking task found no switch target");
             return;
         };
         let cr3_value = next_task.process().address_space().cr3_value();
@@ -152,8 +158,13 @@ impl Scheduler {
         }
     }
 
+    /// Once per CPU, with interrupts disabled, before the first reschedule.
     pub fn set_idle_task(&mut self, task: Pin<Box<Task>>) {
         assert!(!interrupts::are_enabled());
+        assert!(
+            self.idle_tid.is_none(),
+            "idle task already installed on this CPU"
+        );
         self.idle_tid = Some(task.id());
         self.idle_task = Some(task);
     }
