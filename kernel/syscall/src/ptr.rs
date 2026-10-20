@@ -82,22 +82,13 @@ impl<T> UserspacePtr<T> {
     }
 }
 
-/// Checks if an address is in the upper half (kernel space).
-///
-/// Uses VirtAddr to validate that the address is canonical and then checks
-/// if it's in the upper half. On x86_64 with 4-level paging:
-/// - Lower half (userspace): 0x0000_0000_0000_0000 to 0x0000_7FFF_FFFF_FFFF
-/// - Upper half (kernel):    0xFFFF_8000_0000_0000 to 0xFFFF_FFFF_FFFF_FFFF
-///
-/// Returns an error if the address is not canonical.
+const UPPER_HALF_START: u64 = 0xFFFF_8000_0000_0000;
+
+// Errors on a non-canonical address.
 #[inline]
 fn is_upper_half(addr: usize) -> Result<bool, NotUserspace> {
-    // Use VirtAddr to check if the address is canonical
     let virt_addr = VirtAddr::try_new(addr as u64).map_err(|_| NotUserspace(addr))?;
-
-    // Check if it's in the upper half (kernel space)
-    // Upper half starts at 0xFFFF_8000_0000_0000
-    Ok(virt_addr.as_u64() >= 0xFFFF_8000_0000_0000)
+    Ok(virt_addr.as_u64() >= UPPER_HALF_START)
 }
 
 pub struct UserspaceMutPtr<T> {
