@@ -156,8 +156,8 @@ pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory_
     HEAP_INITIALIZED.store(true, Relaxed);
 }
 
-// In stage2, we already have the physical memory manager that uses the heap, which is much faster
-// than the one we use on boot, so we allocate the largest portion of memory for the heap in stage2.
+// Stage 1 only hands out 4 KiB frames, so the bulk of the heap is mapped here
+// with 2 MiB pages.
 pub(in crate::mem) fn init_stage2() {
     assert!(HEAP_INITIALIZED.load(Relaxed));
 
