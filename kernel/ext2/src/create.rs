@@ -17,7 +17,7 @@ where
 
         self.write_inode(inode_address, &inode)?;
 
-        self.add_entry_to_dir(parent, name, inode_address, inode.typ().into())?;
+        self.add_entry_to_dir(parent, name, inode_address, typ.into())?;
 
         Ok((inode_address, inode))
     }

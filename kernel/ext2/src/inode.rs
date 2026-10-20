@@ -42,7 +42,7 @@ macro_rules! inode_type {
             type Error = (InodeAddress, Inode);
 
             fn try_from(v: (InodeAddress, Inode)) -> Result<Self, Self::Error> {
-                if v.1.typ() == $typ {
+                if v.1.typ() == Some($typ) {
                     Ok(Self(v.0, v.1))
                 } else {
                     Err(v)
@@ -132,7 +132,7 @@ impl Inode {
     /// All other fields are uninitialized (zeroed).
     pub fn new(typ: Type) -> Self {
         Self {
-            type_and_perm: typ.bits(),
+            type_and_perm: typ as u16,
             user_id: 0,
             byte_size_lower: 0,
             last_access_time: 0,
@@ -156,8 +156,9 @@ impl Inode {
         }
     }
 
-    pub fn typ(&self) -> Type {
-        Type::from_bits_truncate(self.type_and_perm)
+    /// `None` if the on-disk type code is not one ext2 defines.
+    pub fn typ(&self) -> Option<Type> {
+        Type::try_from(self.type_and_perm).ok()
     }
 
     pub fn perm(&self) -> Permissions {
@@ -239,7 +240,7 @@ impl Inode {
     }
 
     pub fn len(&self) -> usize {
-        if self.typ() == Type::Directory {
+        if self.typ() == Some(Type::Directory) {
             self.byte_size_lower as usize
         } else {
             self.byte_size_lower as usize | ((self.byte_size_upper_or_dir_acl as usize) << 32)
@@ -251,16 +252,33 @@ impl Inode {
     }
 }
 
-bitflags! {
-    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-    pub struct Type: u16 {
-        const FIFO = 0x1000;
-        const CharacterDevice = 0x2000;
-        const Directory = 0x4000;
-        const BlockDevice = 0x6000;
-        const RegularFile = 0x8000;
-        const SymLink = 0xA000;
-        const UnixSocket = 0xC000;
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[repr(u16)]
+pub enum Type {
+    FIFO = 0x1000,
+    CharacterDevice = 0x2000,
+    Directory = 0x4000,
+    BlockDevice = 0x6000,
+    RegularFile = 0x8000,
+    SymLink = 0xA000,
+    UnixSocket = 0xC000,
+}
+
+/// Decodes the file type from the top four bits of `i_mode` and ignores the permission bits.
+impl TryFrom<u16> for Type {
+    type Error = ();
+
+    fn try_from(type_and_perm: u16) -> Result<Self, ()> {
+        Ok(match type_and_perm & 0xF000 {
+            0x1000 => Self::FIFO,
+            0x2000 => Self::CharacterDevice,
+            0x4000 => Self::Directory,
+            0x6000 => Self::BlockDevice,
+            0x8000 => Self::RegularFile,
+            0xA000 => Self::SymLink,
+            0xC000 => Self::UnixSocket,
+            _ => return Err(()),
+        })
     }
 }
 

@@ -161,8 +161,8 @@ impl VirtualExt2Inode {
     pub fn try_new(inode_num: InodeAddress, inode: Inode) -> Option<Self> {
         let inner = match inode.typ() {
             // the unwraps don't actually panic, we check the type, try_into checks again
-            Type::RegularFile => Inner::RegularFile((inode_num, inode).try_into().unwrap()),
-            Type::Directory => Inner::Directory((inode_num, inode).try_into().unwrap()),
+            Some(Type::RegularFile) => Inner::RegularFile((inode_num, inode).try_into().unwrap()),
+            Some(Type::Directory) => Inner::Directory((inode_num, inode).try_into().unwrap()),
             _ => return None,
         };
         Some(Self {

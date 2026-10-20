@@ -2,7 +2,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 
-use bitflags::bitflags;
 use kernel_device::block::BlockDevice;
 
 use crate::error::Error;
@@ -19,7 +18,7 @@ where
     T: BlockDevice,
 {
     pub fn list_dir(&self, dir: &Inode) -> Result<Vec<DirEntry>, Error> {
-        if dir.typ() != Type::Directory {
+        if dir.typ() != Some(Type::Directory) {
             return Err(Error::NotDirectory);
         }
 
@@ -37,7 +36,7 @@ where
 
             let mut offset = 0;
             while offset < block_size - 8 {
-                let dir_entry = DirEntry::from(dir_entries_have_type, &data[offset..]);
+                let dir_entry = DirEntry::from(dir_entries_have_type, &data[offset..])?;
                 // we don't need to align the offset, as there must be no space between entries
                 offset += dir_entry.total_size as usize;
                 entries.push(dir_entry);
@@ -102,7 +101,7 @@ where
             while offset < block_size - 8 {
                 debug_assert_eq!(offset % 4, 0, "offset is not aligned");
 
-                let mut entry = DirEntry::from(dir_entries_have_type, &block_data[offset..]);
+                let mut entry = DirEntry::from(dir_entries_have_type, &block_data[offset..])?;
                 let entry_size = DirEntry::size(entry.name_bytes.len() as u16);
                 if entry.total_size >= required_size + entry_size {
                     let old_total_size = entry.total_size;
@@ -161,7 +160,7 @@ impl DirEntry {
         (unaligned_size + 3) & !3
     }
 
-    fn from(dir_entries_have_type: bool, value: &[u8]) -> Self {
+    fn from(dir_entries_have_type: bool, value: &[u8]) -> Result<Self, Error> {
         let required_size = Self::size(0);
         debug_assert!(
             value.len() >= required_size as usize,
@@ -176,9 +175,8 @@ impl DirEntry {
             arr.name_length_lsb as u16 | ((arr.type_indicator_or_name_length_msb as u16) << 8)
         };
         let type_indicator = if dir_entries_have_type {
-            Some(DirType::from_bits_truncate(
-                arr.type_indicator_or_name_length_msb,
-            ))
+            let code = arr.type_indicator_or_name_length_msb;
+            Some(DirType::try_from(code).map_err(|()| Error::InvalidDirEntryType(code))?)
         } else {
             None
         };
@@ -192,12 +190,12 @@ impl DirEntry {
         );
 
         let name_bytes = value[8..8 + name_length as usize].to_vec();
-        Self {
+        Ok(Self {
             inode: InodeAddress::new(arr.inode).unwrap(),
             total_size: arr.total_size,
             type_indicator,
             name_bytes,
-        }
+        })
     }
 
     pub fn serialize(self, dir_entries_have_type: bool) -> Vec<u8> {
@@ -209,7 +207,7 @@ impl DirEntry {
         entry_no_name.total_size = self.total_size;
         entry_no_name.name_length_lsb = name_length as u8;
         if dir_entries_have_type {
-            entry_no_name.type_indicator_or_name_length_msb = self.type_indicator.unwrap().bits();
+            entry_no_name.type_indicator_or_name_length_msb = self.type_indicator.unwrap() as u8;
         } else {
             entry_no_name.type_indicator_or_name_length_msb = (name_length >> 8) as u8;
         }
@@ -258,16 +256,35 @@ bytefield! {
     }
 }
 
-bitflags! {
-    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-    pub struct DirType: u8 {
-        const RegularFile = 1;
-        const Directory = 2;
-        const CharacterDevice = 3;
-        const BlockDevice = 4;
-        const FIFO = 5;
-        const UnixSocket = 6;
-        const SymLink = 7;
+/// On-disk directory entry type codes (`EXT2_FT_*`).
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
+pub enum DirType {
+    Unknown = 0,
+    RegularFile = 1,
+    Directory = 2,
+    CharacterDevice = 3,
+    BlockDevice = 4,
+    FIFO = 5,
+    UnixSocket = 6,
+    SymLink = 7,
+}
+
+impl TryFrom<u8> for DirType {
+    type Error = ();
+
+    fn try_from(code: u8) -> Result<Self, ()> {
+        Ok(match code {
+            0 => Self::Unknown,
+            1 => Self::RegularFile,
+            2 => Self::Directory,
+            3 => Self::CharacterDevice,
+            4 => Self::BlockDevice,
+            5 => Self::FIFO,
+            6 => Self::UnixSocket,
+            7 => Self::SymLink,
+            _ => return Err(()),
+        })
     }
 }
 
@@ -281,7 +298,6 @@ impl From<Type> for DirType {
             Type::FIFO => Self::FIFO,
             Type::UnixSocket => Self::UnixSocket,
             Type::SymLink => Self::SymLink,
-            _ => panic!("invalid type"),
         }
     }
 }

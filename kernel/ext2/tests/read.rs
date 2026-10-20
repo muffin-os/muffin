@@ -114,7 +114,7 @@ fn do_test_read_file(sector_size: usize) {
         .try_into()
         .unwrap();
     assert_eq!(14, hello_txt.len());
-    assert_eq!(Type::RegularFile, hello_txt.typ());
+    assert_eq!(Some(Type::RegularFile), hello_txt.typ());
 
     {
         let mut hello_txt_data = [0xFC_u8; 20];
@@ -171,6 +171,14 @@ fn resolve_indirect_ptr_out_of_range() {
         res,
         "index beyond the pointer table must be rejected"
     );
+}
+
+#[test]
+fn inode_type_decodes_mode_nibble_only() {
+    assert_eq!(Ok(Type::RegularFile), Type::try_from(0x81A4_u16));
+    assert_eq!(Ok(Type::BlockDevice), Type::try_from(0x6000_u16));
+    assert_eq!(Err(()), Type::try_from(0x7000_u16));
+    assert_eq!(Err(()), DirType::try_from(8_u8));
 }
 
 fn open_read_fs() -> Ext2Fs<kernel_device::block::MemoryBlockDevice<Vec<u8>>> {
