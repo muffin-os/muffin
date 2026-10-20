@@ -23,36 +23,25 @@ pub enum Guarded {
     Yes,
 }
 
-/// This functions as an API type that components can require if they need
-/// to allocate mapped memory. When invoking the component, the kernel will pass
-/// a concrete implementation of this trait.
-///
-/// The [`MemoryApi::Allocation`] type is a type that will free the allocated memory
-/// upon drop.
+/// Allocates mapped memory. Dropping an allocation frees it.
 pub trait MemoryApi {
     type AllocOptions;
     type ReadonlyAllocation: Allocation;
     type WritableAllocation: WritableAllocation;
     type ExecutableAllocation: Allocation;
 
-    /// Allocates memory at the given location with the given layout (size and align).
-    /// The `options` value carries the implementation defined properties of the allocation,
-    /// such as whether the memory is reachable from user space.
-    /// By default, the returned memory region is writable and *not* executable.
-    /// To change this, the caller must convert the allocation with [`MemoryApi::make_executable`].
+    /// Allocates memory at the given location with the given layout. `options`
+    /// carries implementation defined properties of the allocation, such as
+    /// whether the memory is reachable from user space.
     ///
-    /// If the allocation should be guarded, then the implementation must ensure that on the lower
-    /// and higher end of the allocation, there is a guard page that will cause a page fault when
+    /// The returned memory is writable and *not* executable until converted
+    /// with [`MemoryApi::make_executable`].
+    ///
+    /// A guarded allocation has a guard page on either end that faults when
     /// accessed.
     ///
-    /// The implementation chooses the physical addresses, the address space and the memory region,
-    /// which is opaque to the caller of this function.
-    ///
-    /// This function must return `None` if the allocation cannot be created, for example, because
+    /// Returns `None` if the allocation cannot be created, for example because
     /// the requested size is too large or the location is invalid.
-    ///
-    /// After successful creation, the caller of this function owns the allocated memory. He can free
-    /// the memory by dropping the returned [`MemoryApi::Allocation`] type.
     fn allocate(
         &mut self,
         location: Location,
