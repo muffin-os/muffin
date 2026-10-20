@@ -9,12 +9,11 @@ pub trait TimestampExt {
 
 impl TimestampExt for Timestamp {
     fn now() -> Self {
-        let ns = hpet().read().elapsed_ns();
-        let secs = BOOT_TIME_SECONDS.get().unwrap();
-        let secs = secs + (ns / 1_000_000_000);
+        let since_boot = hpet().read().now().since_boot();
+        let secs = BOOT_TIME_SECONDS.get().unwrap() + since_boot.as_secs();
         Timestamp::new(
             i64::try_from(secs).expect("shouldn't have more seconds than i64::MAX"),
-            (ns % 1_000_000_000) as i32,
+            since_boot.subsec_nanos().cast_signed(),
         )
         .unwrap()
     }

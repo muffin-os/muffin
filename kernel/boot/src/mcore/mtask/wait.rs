@@ -6,7 +6,7 @@ use kernel_park::{ParkTicket, ParkingLot, Reservation, UnparkTicket, Waker};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-use crate::hpet::hpet_maybe;
+use crate::hpet::{Instant, hpet_maybe};
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::Task;
@@ -63,15 +63,15 @@ pub(in crate::mcore::mtask) fn block_current(ticket: TaskParkTicket) {
 }
 
 struct Sleeper {
-    deadline_ns: u64,
+    deadline: Instant,
     waker: TaskWaker,
 }
 
 static SLEEPERS: Mutex<Vec<Sleeper>> = Mutex::new(Vec::new());
 
 /// Task context, interrupts may be enabled.
-pub fn sleep_until(deadline_ns: u64, waker: TaskWaker) {
-    SLEEPERS.lock().push(Sleeper { deadline_ns, waker });
+pub fn sleep_until(deadline: Instant, waker: TaskWaker) {
+    SLEEPERS.lock().push(Sleeper { deadline, waker });
 }
 
 /// Wakes every sleeper whose deadline has passed.
@@ -82,10 +82,10 @@ pub fn wake_expired_sleepers() {
     let Some(hpet) = hpet_maybe() else {
         return;
     };
-    let now = hpet.read().elapsed_ns();
+    let now = hpet.read().now();
     let mut i = 0;
     while i < sleepers.len() {
-        if sleepers[i].deadline_ns <= now {
+        if sleepers[i].deadline <= now {
             let sleeper = sleepers.swap_remove(i);
             wake(&sleeper.waker);
         } else {

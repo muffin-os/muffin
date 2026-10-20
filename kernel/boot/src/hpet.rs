@@ -1,5 +1,6 @@
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
+use core::time::Duration;
 
 use acpi::HpetInfo;
 use bitfield::bitfield;
@@ -84,16 +85,38 @@ impl Hpet<'_> {
         self.inner.capabilities_and_id().read().counter_clk_period()
     }
 
-    /// Nanoseconds since boot derived from the main counter and its period
-    ///
-    /// The counter starts at 0 at boot and the HPET spec caps the period at 100ns
-    /// (0x05F5E100 fs), so overflowing u64 nanoseconds needs 584+ years of uptime
+    /// The current time on the HPET clock, which starts at zero at boot.
     #[must_use]
-    pub fn elapsed_ns(&self) -> u64 {
+    pub fn now(&self) -> Instant {
         let ns = u128::from(self.main_counter_value()) * u128::from(self.period_femtoseconds())
             / 1_000_000;
-        // saturation at the u64 horizon is acceptable, that is 584+ years of uptime
-        u64::try_from(ns).unwrap_or(u64::MAX)
+        // The HPET spec caps the period at 100ns, so saturating at the u64
+        // nanosecond horizon needs 584+ years of uptime.
+        Instant(Duration::from_nanos(u64::try_from(ns).unwrap_or(u64::MAX)))
+    }
+}
+
+/// A point in time on the HPET clock, measured from boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Instant(Duration);
+
+impl Instant {
+    /// Returns the time between boot and this instant.
+    #[must_use]
+    pub fn since_boot(self) -> Duration {
+        self.0
+    }
+
+    /// Returns the instant `duration` later, clamped at the latest representable instant.
+    #[must_use]
+    pub fn saturating_add(self, duration: Duration) -> Self {
+        Self(self.0.saturating_add(duration))
+    }
+
+    /// Returns the time elapsed since `earlier`, or zero if `earlier` is later.
+    #[must_use]
+    pub fn saturating_duration_since(self, earlier: Self) -> Duration {
+        self.0.saturating_sub(earlier.0)
     }
 }
 

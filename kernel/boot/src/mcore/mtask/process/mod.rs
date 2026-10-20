@@ -33,6 +33,7 @@ use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::arch::gdt::Selectors;
 use crate::file::{OpenFileDescription, vfs};
+use crate::hpet::Instant;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::MemoryRegions;
 use crate::mcore::mtask::process::telemetry::Telemetry;
@@ -386,7 +387,7 @@ impl Process {
     /// every blocking syscall must wait through here.
     pub fn park_current_task(
         &self,
-        deadline_ns: Option<u64>,
+        deadline: Option<Instant>,
         mut should_wake: impl FnMut() -> bool,
     ) -> ParkOutcome {
         let task = Task::current();
@@ -405,8 +406,8 @@ impl Process {
             }
             let (park_ticket, unpark_ticket) = reserve().split();
             let waker = unpark_ticket.into_waker();
-            if let Some(deadline_ns) = deadline_ns {
-                sleep_until(deadline_ns, waker.clone());
+            if let Some(deadline) = deadline {
+                sleep_until(deadline, waker.clone());
             }
             self.register_interruptible_waker(tid, waker.clone());
             if should_wake() || self.reap_requested_for(tid) {

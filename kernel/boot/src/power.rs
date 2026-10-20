@@ -102,9 +102,9 @@ pub fn shutdown() -> ! {
         .cloned()
         .collect();
 
-    let deadline = hpet().read().elapsed_ns() + TERM_GRACE.as_nanos() as u64;
+    let deadline = hpet().read().now().saturating_add(TERM_GRACE);
     while !victims.iter().all(|p| p.exit_outcome().is_some()) {
-        if hpet().read().elapsed_ns() >= deadline {
+        if hpet().read().now() >= deadline {
             let survivors = victims
                 .iter()
                 .filter(|p| p.exit_outcome().is_none())
@@ -136,8 +136,8 @@ pub fn shutdown() -> ! {
         );
     }
 
-    let ack_deadline = hpet().read().elapsed_ns() + HALT_ACK_GRACE.as_nanos() as u64;
-    while HALTED_CPUS.load(Acquire) < cpu_count - 1 && hpet().read().elapsed_ns() < ack_deadline {
+    let ack_deadline = hpet().read().now().saturating_add(HALT_ACK_GRACE);
+    while HALTED_CPUS.load(Acquire) < cpu_count - 1 && hpet().read().now() < ack_deadline {
         core::hint::spin_loop();
     }
 

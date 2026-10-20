@@ -32,7 +32,10 @@ struct KernelEnvironment;
 impl Environment for KernelEnvironment {
     /// Nanoseconds since boot, or 0 while the HPET is not up yet.
     fn now_ns() -> u64 {
-        hpet_maybe().map_or(0, |hpet| hpet.read().elapsed_ns())
+        hpet_maybe().map_or(0, |hpet| {
+            // since_boot is built from u64 nanoseconds, so this never saturates.
+            u64::try_from(hpet.read().now().since_boot().as_nanos()).unwrap_or(u64::MAX)
+        })
     }
 
     fn critical<R>(f: impl FnOnce() -> R) -> R {

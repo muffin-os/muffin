@@ -372,7 +372,7 @@ fn dispatch_sys_lseek(fd: usize, offset: usize, whence: usize) -> Result<usize, 
 
 /// POSIX clock_gettime backed by the HPET main counter.
 fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno> {
-    let since_boot = Duration::from_nanos(hpet().read().elapsed_ns());
+    let since_boot = hpet().read().now().since_boot();
     let now = match clockid {
         kernel_abi::CLOCK_MONOTONIC => since_boot,
         kernel_abi::CLOCK_REALTIME => {
@@ -388,16 +388,14 @@ fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno>
 /// POSIX nanosleep. Wake precision is one LAPIC tick.
 fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
     let duration = Duration::try_from(read_user::<Timespec>(req)?)?;
-    let duration_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
-    let deadline = hpet().read().elapsed_ns().saturating_add(duration_ns);
+    let deadline = hpet().read().now().saturating_add(duration);
     let process = Process::current().clone();
 
     let outcome = process.park_current_task(Some(deadline), || {
-        hpet().read().elapsed_ns() >= deadline
-            || process.signals_read().has_interrupting_deliverable()
+        hpet().read().now() >= deadline || process.signals_read().has_interrupting_deliverable()
     });
 
-    let now = hpet().read().elapsed_ns();
+    let now = hpet().read().now();
     if now >= deadline {
         return Ok(0);
     }
@@ -405,8 +403,8 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
         ParkOutcome::Ready => {
             // POSIX allows a null rem, which skips the remainder writeback.
             if rem != 0 {
-                let left = deadline - now;
-                write_user::<Timespec>(rem, Timespec::from(Duration::from_nanos(left)))?;
+                let left = deadline.saturating_duration_since(now);
+                write_user::<Timespec>(rem, Timespec::from(left))?;
             }
             Err(EINTR)
         }
