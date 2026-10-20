@@ -380,6 +380,7 @@ impl AddressSpace {
 
     /// # Errors
     /// Returns an error if the pages are already mapped or flags are invalid.
+    /// No page of the range is left mapped after an error.
     pub fn map_range<S: PageSize>(
         &self,
         pages: impl Into<PageRangeInclusive<S>>,

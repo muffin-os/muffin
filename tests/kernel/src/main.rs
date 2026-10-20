@@ -16,10 +16,14 @@ use kernel::mcore;
 use kernel::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use kernel::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use kernel::mcore::mtask::task::Task;
+use kernel::mem::address_space::AddressSpace;
+use kernel::mem::phys::PhysicalMemory;
+use kernel::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use kernel_ext2::Ext2Fs;
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
 use tracing::info;
+use x86_64::structures::paging::{Page, PageTableFlags, Size4KiB};
 
 /// Boots the real kernel, mounts the root ext2 filesystem, then spawns one
 /// process per line of the `/spawn` manifest baked into the disk image. Each
@@ -56,6 +60,44 @@ unsafe extern "C" fn main() -> ! {
             .expect("should be able to create the stack overflow task");
         kernel::serial_println!("test-kernel: kernel stack overflow armed");
         GlobalTaskQueue::enqueue(Box::pin(task));
+    }
+
+    // A mid-range map failure cannot be provoked from userspace either, so the
+    // probe pre-maps one page to make `map_range` fail partway through.
+    if AbsolutePath::try_new("/map-range-rollback")
+        .is_ok_and(|marker| vfs().write().open(marker).is_ok())
+    {
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
+        let window = VirtualMemoryHigherHalf
+            .reserve(4)
+            .expect("should be able to reserve the probe window");
+        let first = Page::<Size4KiB>::containing_address(window.start);
+        let blocker = PhysicalMemory::allocate_frame::<Size4KiB>().expect("should have a frame");
+        AddressSpace::kernel()
+            .map(first + 2, blocker, flags)
+            .expect("should be able to pre-map the blocking page");
+        let owned =
+            PhysicalMemory::allocate_frames::<Size4KiB>(4).expect("should have four frames");
+        assert!(
+            AddressSpace::kernel()
+                .map_range::<Size4KiB>(&*window, *owned, flags)
+                .is_err(),
+            "map_range should fail on the pre-mapped page"
+        );
+        let still_mapped = (0..2)
+            .filter(|i| {
+                AddressSpace::kernel()
+                    .translate((first + *i).start_address())
+                    .is_some()
+            })
+            .count();
+        if let Some(frame) = AddressSpace::kernel().unmap(first + 2) {
+            PhysicalMemory::deallocate_frame(frame);
+        }
+        kernel::serial_println!(
+            "test-kernel: map-range rollback still_mapped={}",
+            still_mapped
+        );
     }
 
     let attach_exec_sibling = AbsolutePath::try_new("/exec-sibling")

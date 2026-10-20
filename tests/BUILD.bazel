@@ -83,6 +83,15 @@ ext2_image(
 )
 
 ext2_image(
+    name = "map_range_rollback_disk",
+    contents = {
+        "map-range-rollback": "1\n",
+        "spawn": "/bin/exit-code\n",
+    },
+    files = {"//tests/bins:exit_code": "bin/exit-code"},
+)
+
+ext2_image(
     name = "posix_disk",
     contents = {
         "data/hello.txt": _HELLO,
@@ -214,6 +223,7 @@ ext2_image(
         "file_read",
         "floats",
         "kstack_overflow",
+        "map_range_rollback",
         "mmap",
         "posix",
         "shutdown",

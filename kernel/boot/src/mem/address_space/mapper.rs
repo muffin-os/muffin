@@ -77,9 +77,19 @@ impl AddressSpaceMapper {
 
         let mut frames = frames.into_iter();
 
-        for page in pages {
-            let frame = frames.next().ok_or(MapToError::FrameAllocationFailed)?;
-            self.map(page, frame, flags)?;
+        for (mapped, page) in pages.enumerate() {
+            let result = frames
+                .next()
+                .ok_or(MapToError::FrameAllocationFailed)
+                .and_then(|frame| self.map(page, frame, flags));
+            if let Err(e) = result {
+                // Callers free the frames on error, so no page may still
+                // point at them.
+                for page in pages.take(mapped) {
+                    self.unmap(page);
+                }
+                return Err(e);
+            }
         }
 
         Ok(())
