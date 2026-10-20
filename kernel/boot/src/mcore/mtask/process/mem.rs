@@ -289,8 +289,7 @@ impl PrivateRegionState {
         }
         let (first, backing) = self.ranges.range(..=page).next_back()?;
         let offset = page - *first;
-        let frames = backing.end - backing.start + 1;
-        (offset < frames).then(|| (Arc::strong_count(backing), backing.start + offset))
+        (offset < backing.len()).then(|| (Arc::strong_count(backing), backing.start + offset))
     }
 
     /// The caller holds the region lock and has already checked that `page`
@@ -448,7 +447,7 @@ impl PrivateMemoryRegion {
         // applies its flags last.
         for (first, backing) in &state.ranges {
             let shared = Arc::strong_count(backing) > 1;
-            for i in 0..(backing.end - backing.start + 1) {
+            for i in 0..backing.len() {
                 remap(*first + i, shared)?;
             }
         }
@@ -469,7 +468,7 @@ impl PrivateMemoryRegion {
     fn unmap_from(&self, address_space: &AddressSpace) {
         let state = self.state.lock();
         for (first, backing) in &state.ranges {
-            for i in 0..(backing.end - backing.start + 1) {
+            for i in 0..backing.len() {
                 address_space.unmap::<Size4KiB>(*first + i);
             }
         }
