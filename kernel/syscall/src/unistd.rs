@@ -66,7 +66,9 @@ pub fn sys_fsync<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd) -> Result<usize, Errno
 ///
 /// # Errors
 /// `EINVAL` for a result before the start of the file. `EOVERFLOW` when the
-/// result does not fit an offset.
+/// result does not fit an offset. Any error of [`FileAccess::position`],
+/// [`FileAccess::fstat`] or [`FileAccess::set_position`], such as `EBADF` or
+/// `ENOSYS`, is passed through.
 #[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_lseek<Cx: FileAccess>(
     cx: &Cx,
