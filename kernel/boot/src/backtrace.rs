@@ -2,7 +2,6 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::arch::asm;
 use core::fmt::{Debug, Display, Formatter};
-use core::iter;
 
 use addr2line::gimli::{EndianSlice, Error};
 use addr2line::{Context, gimli};
@@ -93,11 +92,7 @@ pub struct Backtrace {
 
 impl Backtrace {
     /// # Errors
-    /// This function returns an error if the symbol file cannot be found or if
-    /// the symbol file cannot be parsed.
-    ///
-    /// # Panics
-    /// This function panics if frames for an instruction pointer cannot be found.
+    /// This function returns an error if the symbol file cannot be found.
     pub fn try_capture() -> Result<Self, CaptureBacktraceError> {
         let ctx = &BACKTRACE_CONTEXT
             .get()
@@ -105,29 +100,30 @@ impl Backtrace {
             .0;
         let frames = ReturnAddressIterator::new()
             .flat_map(|ip| {
-                let mut it = ctx
+                let mut frames = Vec::new();
+                let lookup = ctx
                     .find_frames(ip.saturating_sub(1).into_u64())
                     .skip_all_loads()
-                    .unwrap();
-                iter::from_fn(move || it.next().unwrap().map(|frame| (ip, frame)))
+                    .and_then(|mut it| {
+                        while let Some(frame) = it.next()? {
+                            frames.push(Frame {
+                                instruction_pointer: ip,
+                                kind: Kind::from(frame),
+                            });
+                        }
+                        Ok(())
+                    });
+                // This runs inside the panic handler, so a broken DWARF entry
+                // degrades to an unknown frame instead of panicking again.
+                if lookup.is_err() {
+                    frames.push(Frame {
+                        instruction_pointer: ip,
+                        kind: Kind::Unknown,
+                    });
+                }
+                frames
             })
-            .map(|(ip, frame)| Frame {
-                instruction_pointer: ip,
-                kind: if let Some(function) = frame.function {
-                    Kind::Resolved {
-                        function_name: function.demangle().unwrap().to_string(),
-                        file_name: frame
-                            .location
-                            .as_ref()
-                            .map_or("<unknown>".to_string(), |l| l.file.unwrap().to_string()),
-                        line_number: frame.location.as_ref().and_then(|l| l.line),
-                        column_number: frame.location.as_ref().and_then(|l| l.column),
-                    }
-                } else {
-                    Kind::Unknown
-                },
-            })
-            .collect::<Vec<_>>();
+            .collect();
 
         Ok(Self { frames })
     }
@@ -177,6 +173,28 @@ enum Kind {
         line_number: Option<u32>,
         column_number: Option<u32>,
     },
+}
+
+impl From<addr2line::Frame<'_, EndianSlice<'static, gimli::NativeEndian>>> for Kind {
+    fn from(frame: addr2line::Frame<'_, EndianSlice<'static, gimli::NativeEndian>>) -> Self {
+        let Some(function) = frame.function else {
+            return Self::Unknown;
+        };
+        let function_name = function
+            .demangle()
+            .or_else(|_| function.raw_name())
+            .map_or_else(|_| "<unknown>".to_string(), |name| name.to_string());
+        let location = frame.location.as_ref();
+        Self::Resolved {
+            function_name,
+            file_name: location
+                .and_then(|l| l.file)
+                .unwrap_or("<unknown>")
+                .to_string(),
+            line_number: location.and_then(|l| l.line),
+            column_number: location.and_then(|l| l.column),
+        }
+    }
 }
 
 struct ReturnAddressIterator {
