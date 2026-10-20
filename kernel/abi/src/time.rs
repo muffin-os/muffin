@@ -1,10 +1,8 @@
-/// POSIX `clockid_t` values accepted by `clock_gettime`.
-///
-/// The system-wide wall clock. Measures seconds and nanoseconds since the
-/// Epoch (1970-01-01 00:00:00 UTC).
+/// The `clockid_t` of the system-wide wall clock, seconds and nanoseconds
+/// since the Epoch (1970-01-01 00:00:00 UTC).
 pub const CLOCK_REALTIME: usize = 0;
-/// A clock that cannot be set and never jumps backwards. Measures time since
-/// boot.
+/// The `clockid_t` of a clock that cannot be set and never jumps backwards.
+/// Measures time since boot.
 pub const CLOCK_MONOTONIC: usize = 1;
 
 /// POSIX `struct timespec` as defined in `<time.h>`.
