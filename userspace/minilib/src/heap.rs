@@ -11,11 +11,10 @@ use crate::{MapFlags, ProtFlags, mmap};
 
 const PAGE_SIZE: usize = 4096;
 
+// shortcut: `MAP_FIXED` growth needs the range above the heap top to stay free
+// and nothing reserves it, so the base sits 1 TiB up where no other mapping of
+// a process reaches. Growth fails once the kernel places something there.
 /// Base the heap grows upward from.
-///
-/// `MAP_FIXED` growth needs the range above the heap top to stay free. The
-/// kernel places an addressless mapping by first fit from 4 GiB, so the heap
-/// base is only reached once about a terabyte of lower mappings accumulates.
 const HEAP_BASE: usize = 0x100_0000_0000;
 
 /// Bytes per `mmap` while growing.
