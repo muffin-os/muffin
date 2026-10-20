@@ -127,7 +127,6 @@ continue"
         ovmf_vars.display()
     ));
 
-    // kernel binary
     cmd.arg("-device");
     cmd.arg("ahci,id=ahci0");
     cmd.arg("-drive");
