@@ -12,7 +12,7 @@ _HELLO = "muffin says hi\n"
 # in the order the assertions index them.
 ext2_image(
     name = "mmap_disk",
-    contents = {"spawn": "/bin/mmap\n"},
+    contents = {"spawn": "/bin/mmap\n/bin/mmap\n"},
     files = {"//tests/bins:mmap": "bin/mmap"},
 )
 

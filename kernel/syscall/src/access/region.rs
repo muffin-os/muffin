@@ -25,6 +25,7 @@ pub trait MemoryRegionAccess {
         location: Location,
         size: usize,
         allocation_strategy: AllocationStrategy,
+        prot: ProtFlags,
     ) -> Result<UserspacePtr<u8>, CreateMappingError>;
 
     /// Adds a memory region to the process's memory region tracking.
@@ -40,8 +41,13 @@ pub trait MemoryRegionAccess {
     /// # Errors
     /// Returns `ENODEV` when the context does not support device-backed
     /// mappings.
-    fn map_shared_file(&self, fd: i32, len: usize) -> Result<UserspacePtr<u8>, Errno> {
-        let _ = (fd, len);
+    fn map_shared_file(
+        &self,
+        fd: i32,
+        len: usize,
+        prot: ProtFlags,
+    ) -> Result<UserspacePtr<u8>, Errno> {
+        let _ = (fd, len, prot);
         Err(ENODEV)
     }
 

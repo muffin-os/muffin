@@ -179,6 +179,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         location: kernel_syscall::access::Location,
         size: usize,
         allocation_strategy: kernel_syscall::access::AllocationStrategy,
+        prot: ProtFlags,
     ) -> Result<kernel_syscall::UserspacePtr<u8>, kernel_syscall::access::CreateMappingError> {
         // Use the MemoryAccess trait to create the mapping
         let mapping = <Self as kernel_syscall::access::MemoryAccess>::create_mapping(
@@ -186,6 +187,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
             location,
             size,
             allocation_strategy,
+            prot,
         )?;
 
         let addr =
@@ -208,6 +210,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         &self,
         fd: i32,
         len: usize,
+        prot: ProtFlags,
     ) -> Result<kernel_syscall::UserspacePtr<u8>, Errno> {
         let fd = FdNum::from(fd);
 
@@ -253,14 +256,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
         self.process
             .address_space()
-            .map_range::<Size4KiB>(
-                &*segment,
-                frames,
-                PageTableFlags::PRESENT
-                    | PageTableFlags::WRITABLE
-                    | PageTableFlags::USER_ACCESSIBLE
-                    | PageTableFlags::NO_EXECUTE,
-            )
+            .map_range::<Size4KiB>(&*segment, frames, page_flags(prot))
             .map_err(|_| EINVAL)?;
 
         let user_ptr = addr.as_ptr::<u8>().try_into().map_err(|_| EINVAL)?;
@@ -310,18 +306,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         let segment = self.process.vmm().reserve(page_count).ok_or(ENOMEM)?;
         let addr = segment.start;
 
-        let flags = PageTableFlags::PRESENT
-            | PageTableFlags::USER_ACCESSIBLE
-            | if prot.contains(ProtFlags::WRITE) {
-                PageTableFlags::WRITABLE
-            } else {
-                PageTableFlags::empty()
-            }
-            | if prot.contains(ProtFlags::EXEC) {
-                PageTableFlags::empty()
-            } else {
-                PageTableFlags::NO_EXECUTE
-            };
+        let flags = page_flags(prot);
 
         let user_ptr = addr.as_ptr::<u8>().try_into().map_err(|_| EINVAL)?;
         // The region must carry the page-rounded size. `MemoryRegion::contains`
@@ -338,6 +323,21 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
         Ok(user_ptr)
     }
+}
+
+fn page_flags(prot: ProtFlags) -> PageTableFlags {
+    PageTableFlags::PRESENT
+        | PageTableFlags::USER_ACCESSIBLE
+        | if prot.contains(ProtFlags::WRITE) {
+            PageTableFlags::WRITABLE
+        } else {
+            PageTableFlags::empty()
+        }
+        | if prot.contains(ProtFlags::EXEC) {
+            PageTableFlags::empty()
+        } else {
+            PageTableFlags::NO_EXECUTE
+        }
 }
 
 /// A handle to a memory region that implements the MemoryRegion trait

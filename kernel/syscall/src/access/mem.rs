@@ -1,3 +1,5 @@
+use kernel_abi::ProtFlags;
+
 use crate::UserspacePtr;
 
 pub enum AllocationStrategy {
@@ -31,5 +33,6 @@ pub trait MemoryAccess {
         location: Location,
         size: usize,
         allocation_strategy: AllocationStrategy,
+        prot: ProtFlags,
     ) -> Result<Self::Mapping, CreateMappingError>;
 }

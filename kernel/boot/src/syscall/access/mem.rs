@@ -1,15 +1,16 @@
+use kernel_abi::ProtFlags;
 use kernel_syscall::UserspacePtr;
 use kernel_syscall::access::{
     AllocationStrategy, CreateMappingError, Location, Mapping, MemoryAccess,
 };
 use kernel_virtual_memory::Segment;
 use x86_64::VirtAddr;
-use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::UsizeExt;
 use crate::mcore::mtask::process::mem::{MemoryRegion, PrivateMemoryRegion};
 use crate::mem::virt::VirtualMemoryAllocator;
-use crate::syscall::access::{KernelAccess, KernelMemoryRegionHandle};
+use crate::syscall::access::{KernelAccess, KernelMemoryRegionHandle, page_flags};
 
 impl MemoryAccess for KernelAccess {
     type Mapping = KernelMapping;
@@ -19,6 +20,7 @@ impl MemoryAccess for KernelAccess {
         location: Location,
         size: usize,
         _allocation_strategy: AllocationStrategy,
+        prot: ProtFlags,
     ) -> Result<Self::Mapping, CreateMappingError> {
         let page_aligned_size = size.next_multiple_of(Size4KiB::SIZE as usize);
         let page_count = page_aligned_size / Size4KiB::SIZE as usize;
@@ -43,10 +45,7 @@ impl MemoryAccess for KernelAccess {
         let region = MemoryRegion::Private(PrivateMemoryRegion::new(
             segment,
             page_aligned_size,
-            PageTableFlags::PRESENT
-                | PageTableFlags::WRITABLE
-                | PageTableFlags::USER_ACCESSIBLE
-                | PageTableFlags::NO_EXECUTE,
+            page_flags(prot),
         ));
 
         Ok(KernelMapping {
