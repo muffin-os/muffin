@@ -22,13 +22,11 @@ where
         let relative_offset = (offset % block_size) as usize;
         let block_count = (end_block - start_block + 1) as usize;
 
-        // This is the data that we want to write. We pad the data with data from the disk
-        // to align it with the block boundaries (start and length). This data can be written
-        // back to disk (block aligned) as is.
+        // Pad with the on-disk bytes so every chunk is a full block that can be
+        // written back as is.
         let data = {
             let mut data = vec![0_u8; block_count * block_size as usize];
-            self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?; // TODO: we don't need to read what will be overwritten anyways
-            // overwrite the part that should be written
+            self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?;
             data[relative_offset..relative_offset + buf.len()].copy_from_slice(buf);
             data
         };
@@ -40,7 +38,6 @@ where
                 if let Some(block_address) = self.resolve_block_index(file, block)? {
                     block_address
                 } else {
-                    // TODO: we don't need to allocate if the full content of this block would be zero if the fs allows sparse files
                     let free_block_address = self.allocate_block()?;
                     if free_block_address.is_none() {
                         return Err(Error::NoSpace);
