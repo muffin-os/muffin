@@ -16,7 +16,12 @@ use spin::RwLock;
 
 pub struct VirtualExt2Fs<T> {
     ext2fs: Ext2Fs<T>,
-    handles: BTreeMap<FsHandle, Arc<(AbsoluteOwnedPath, RwLock<VirtualExt2Inode>)>>,
+    handles: BTreeMap<FsHandle, Arc<OpenFile>>,
+}
+
+struct OpenFile {
+    path: AbsoluteOwnedPath,
+    inode: RwLock<VirtualExt2Inode>,
 }
 
 impl<T> From<Ext2Fs<T>> for VirtualExt2Fs<T> {
@@ -50,7 +55,7 @@ where
         static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         // instead of creating a new inode, check whether we already have that inode open behind another handle
-        if let Some(v) = self.handles.values().find(|v| path == v.0.as_ref()) {
+        if let Some(v) = self.handles.values().find(|v| path == v.path.as_ref()) {
             let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
             self.handles.insert(handle, v.clone());
             return Ok(handle);
@@ -67,8 +72,13 @@ where
         let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
         let inode = VirtualExt2Inode::try_new(found_num, found).ok_or(OpenError::NotFound)?;
 
-        self.handles
-            .insert(handle, Arc::new((path.to_owned(), RwLock::new(inode))));
+        self.handles.insert(
+            handle,
+            Arc::new(OpenFile {
+                path: path.to_owned(),
+                inode: RwLock::new(inode),
+            }),
+        );
         Ok(handle)
     }
 
@@ -86,7 +96,11 @@ where
         buf: &mut [u8],
         offset: usize,
     ) -> Result<usize, ReadError> {
-        let inode = &self.handles.get(&handle).ok_or(FsError::InvalidHandle)?.1;
+        let inode = &self
+            .handles
+            .get(&handle)
+            .ok_or(FsError::InvalidHandle)?
+            .inode;
 
         let guard = inode.read();
         match &guard.inner {
@@ -108,7 +122,11 @@ where
     }
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
-        let inode = &self.handles.get(&handle).ok_or(FsError::InvalidHandle)?.1;
+        let inode = &self
+            .handles
+            .get(&handle)
+            .ok_or(FsError::InvalidHandle)?
+            .inode;
 
         stat.size = inode.read().inner.as_ref().len();
         Ok(())
