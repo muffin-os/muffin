@@ -134,7 +134,7 @@ impl PhysicalMemoryManager {
 
                 if all_free {
                     let frame_start_idx = current_start;
-                    let frame_end_idx = current_start + small_frame_count - 1;
+                    let frame_end_idx = current_start + small_frame_count;
 
                     let start_addr = self.regions[region_idx]
                         .frame_address(frame_start_idx)
@@ -144,7 +144,7 @@ impl PhysicalMemoryManager {
                         .frame_address(last_page_start_idx)
                         .expect("frame_address(last_page_start_idx) should succeed: frame exists and is free");
 
-                    self.regions[region_idx].frames_mut()[frame_start_idx..=frame_end_idx]
+                    self.regions[region_idx].frames_mut()[frame_start_idx..frame_end_idx]
                         .fill(FrameState::Allocated);
 
                     let allocated_start = RegionFrameIndex {
@@ -154,7 +154,7 @@ impl PhysicalMemoryManager {
                     if allocated_start <= ff {
                         self.update_first_free(RegionFrameIndex {
                             region_idx,
-                            frame_idx: frame_end_idx + 1,
+                            frame_idx: frame_end_idx,
                         });
                     }
 
