@@ -30,17 +30,19 @@ impl<T> TryFrom<*const T> for UserspacePtr<T> {
     type Error = NotUserspace;
 
     fn try_from(ptr: *const T) -> Result<Self, Self::Error> {
-        unsafe {
-            // Safety: we use a valid pointer
-            Self::try_from_usize(ptr as usize)
-        }
+        // Safety: try_from_usize places no obligation on the caller.
+        unsafe { Self::try_from_usize(ptr as usize) }
     }
 }
 
 impl<T> UserspacePtr<T> {
+    /// # Errors
+    /// Returns [`NotUserspace`] if `ptr` is non-canonical or in the upper half.
+    ///
     /// # Safety
-    /// The caller must ensure that the passed address is a valid pointer.
-    /// It is explicitly safe to pass a pointer that is not in userspace.
+    /// None. The address is only inspected, never dereferenced.
+    // TODO(tpdenk): make this a safe fn and drop the `unsafe {}` blocks around
+    // the callers in kernel/boot.
     pub unsafe fn try_from_usize(ptr: usize) -> Result<Self, NotUserspace> {
         #[cfg(not(target_pointer_width = "64"))]
         compile_error!("only 64bit pointer width is supported");
@@ -110,19 +112,21 @@ impl<T> TryFrom<*mut T> for UserspaceMutPtr<T> {
     type Error = NotUserspace;
 
     fn try_from(ptr: *mut T) -> Result<Self, Self::Error> {
-        unsafe {
-            // Safety: we use a valid pointer
-            Self::try_from_usize(ptr as usize)
-        }
+        // Safety: try_from_usize places no obligation on the caller.
+        unsafe { Self::try_from_usize(ptr as usize) }
     }
 }
 
 impl<T> !Clone for UserspaceMutPtr<T> {}
 
 impl<T> UserspaceMutPtr<T> {
+    /// # Errors
+    /// Returns [`NotUserspace`] if `ptr` is non-canonical or in the upper half.
+    ///
     /// # Safety
-    /// The caller must ensure that the passed address is a valid mutable pointer.
-    /// It is explicitly safe to pass a pointer that is not in userspace.
+    /// None. The address is only inspected, never dereferenced.
+    // TODO(tpdenk): make this a safe fn and drop the `unsafe {}` blocks around
+    // the callers in kernel/boot.
     pub unsafe fn try_from_usize(ptr: usize) -> Result<Self, NotUserspace> {
         #[cfg(not(target_pointer_width = "64"))]
         compile_error!("only 64bit pointer width is supported");
