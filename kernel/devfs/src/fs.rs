@@ -293,7 +293,12 @@ mod tests {
             .open(path)
             .expect("should be able to open registered file");
 
-        devfs.close(file).expect("should be able to close file");
+        assert_eq!(Ok(()), devfs.close(file));
+        assert_eq!(
+            Err(ReadError::FsError(FsError::InvalidHandle)),
+            devfs.read(file, &mut [0; 1], 0)
+        );
+        assert_eq!(Err(CloseError::NotOpen), devfs.close(file));
     }
 
     #[test]
