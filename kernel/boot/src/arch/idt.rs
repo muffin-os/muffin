@@ -208,7 +208,6 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
 
     wake_expired_sleepers();
 
-    // only deliver signals when we're in userspace
     if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3
         && !signal::reap_current_if_requested(Task::current())
     {
@@ -404,15 +403,12 @@ extern "sysv64" fn page_fault_classify(
     let accessed_address = Cr2::read().ok();
     let from_user = frame.code_segment.rpl() == PrivilegeLevel::Ring3;
 
-    // if we know the address...
     if let Some(addr) = accessed_address
         && let Some(task) = Task::try_current()
     {
         let process = task.process();
         process.telemetry().page_faults.fetch_add(1, Relaxed);
 
-        // ...and the current task has stack, then the accessed address must not be within the
-        // guard page of the stack, otherwise we have a stack overflow...
         if let Some(stack) = task.kstack()
             && stack.guard_page().contains(addr)
         {
