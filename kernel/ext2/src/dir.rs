@@ -97,17 +97,14 @@ where
 
         let inode = &mut dir.inode_mut();
 
-        // compute the size of the directory entry that we need
         let required_size = DirEntry::size(name.len() as u16);
 
-        // find a free slot and insert the entry
         for block in inode.direct_ptrs().flatten() {
             let mut block_data = vec![0_u8; block_size];
             self.read_block(block, &mut block_data)?;
 
-            // In the block, we need to find the first entry, where
-            // entry.total_size - DirEntry::size(..., entry.name_length) >= required_size,
-            // adapt that entry and store our entry there.
+            // Every entry owns the slack up to the next one, so the new entry is
+            // carved out of the first entry whose slack can hold it.
             let mut offset = 0;
             while offset < block_size - 8 {
                 debug_assert_eq!(offset % 4, 0, "offset is not aligned");
@@ -115,12 +112,9 @@ where
                 let mut entry = DirEntry::from(dir_entries_have_type, &block_data[offset..]);
                 let entry_size = DirEntry::size(entry.name_bytes.len() as u16);
                 if entry.total_size >= required_size + entry_size {
-                    // we found a slot that is big enough
-
                     let old_total_size = entry.total_size;
-                    entry.total_size = entry_size; // resize the old entry
+                    entry.total_size = entry_size;
 
-                    // merge the old entry back into the block data
                     let entry_serialized = entry.serialize(dir_entries_have_type);
                     block_data[offset..offset + entry_serialized.len()]
                         .copy_from_slice(&entry_serialized);
@@ -140,12 +134,10 @@ where
                         name_bytes: name.as_bytes().to_vec(),
                     };
 
-                    // merge the new entry into the block data
                     let new_entry_serialized = new_entry.serialize(dir_entries_have_type);
                     block_data[new_entry_offset..new_entry_offset + new_entry_serialized.len()]
                         .copy_from_slice(&new_entry_serialized);
 
-                    // write the block back to the device
                     self.write_block(block, &block_data)?;
 
                     return Ok(());
@@ -198,7 +190,7 @@ impl DirEntry {
             None
         };
 
-        let required_size = Self::size(name_length); // now that we have the name length, we can compute the actual required size
+        let required_size = Self::size(name_length);
         debug_assert!(
             value.len() >= Self::size(name_length) as usize,
             "need at least {} byte, but have only {}",
