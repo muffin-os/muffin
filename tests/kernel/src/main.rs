@@ -28,8 +28,7 @@ use x86_64::structures::paging::{Page, PageTableFlags, Size4KiB};
 /// Boots the real kernel, mounts the root ext2 filesystem, then spawns one
 /// process per line of the `/spawn` manifest baked into the disk image. Each
 /// manifest line is an absolute in-OS path spawned in order, so the first
-/// entry becomes pid 1. This is the generic test kernel shared by every
-/// host-side integration test in `tests/`, replacing the per-suite kernels.
+/// entry becomes pid 1.
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
     assert!(BASE_REVISION.is_supported());
@@ -217,13 +216,12 @@ fn handle_panic(info: &core::panic::PanicInfo) {
 }
 
 /// Recurses until RSP walks into the kernel stack guard page.
-///
-/// Each frame has to stay far below the 4 KiB guard page. A frame larger than
-/// the guard page can step over it into unreserved virtual memory, where the
-/// fault is no longer recognizable as a stack overflow. The volatile access
-/// keeps the frame live, and the addition after the recursive call keeps the
-/// call from becoming a tail call that the optimizer folds into a loop.
 extern "C" fn overflow_kernel_stack(_: *mut c_void) {
+    // Each frame has to stay far below the 4 KiB guard page, or it could step
+    // over it into unreserved virtual memory, where the fault is no longer
+    // recognizable as a stack overflow. The volatile access keeps the frame
+    // live, and the addition after the recursive call keeps it from becoming a
+    // tail call the optimizer folds into a loop.
     #[inline(never)]
     #[expect(unconditional_recursion)]
     fn recurse(depth: u64) -> u64 {
@@ -237,8 +235,7 @@ extern "C" fn overflow_kernel_stack(_: *mut c_void) {
 }
 
 /// Parks like a task blocked in a syscall, so the execve reaper must wake it
-/// before it can observe the termination request. Returning falls into
-/// `Task::exit`, which the task stack seeds as the return address.
+/// before it can observe the termination request.
 extern "C" fn exec_sibling(_: *mut c_void) {
     let task = kernel::mcore::mtask::task::Task::current();
     let process = task.process().clone();
@@ -250,4 +247,6 @@ extern "C" fn exec_sibling(_: *mut c_void) {
             kernel::serial_println!("test-kernel: sibling woke without a reap");
         }
     }
+    // Returning falls into `Task::exit`, which the task stack seeds as the
+    // return address.
 }
