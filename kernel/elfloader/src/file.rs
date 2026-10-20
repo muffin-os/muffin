@@ -1,13 +1,14 @@
 use core::ffi::CStr;
 use core::fmt::{Debug, Display, Formatter};
+use core::ops::Range;
 
 use thiserror::Error;
-use zerocopy::{Immutable, KnownLayout, TryFromBytes};
+use zerocopy::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
 #[derive(Copy, Clone, Debug)]
 pub struct ElfFile<'a> {
     pub(crate) source: &'a [u8],
-    pub(crate) header: &'a ElfHeader,
+    pub(crate) header: ElfHeader,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
@@ -28,6 +29,10 @@ pub enum ElfParseError {
     UnsupportedEndian,
     #[error("buffer shorter than the elf header")]
     TruncatedHeader,
+    #[error("unsupported elf class")]
+    UnsupportedClass,
+    #[error("header table lies outside the buffer")]
+    HeaderTableOutOfBounds,
 }
 
 impl<'a> ElfFile<'a> {
@@ -43,13 +48,16 @@ impl<'a> ElfFile<'a> {
             return Err(ElfParseError::TruncatedHeader);
         }
 
-        let header = ElfHeader::try_ref_from_bytes(&source[..size_of::<ElfHeader>()])
+        let header = ElfHeader::try_read_from_bytes(&source[..size_of::<ElfHeader>()])
             .map_err(|_| ElfParseError::HeaderParseError)?;
 
         if header.ident.magic != [0x7F, 0x45, 0x4C, 0x46] {
             return Err(ElfParseError::InvalidMagic);
         }
 
+        if header.ident.class != 2 {
+            return Err(ElfParseError::UnsupportedClass);
+        }
         if header.ident.data != ENDIAN {
             return Err(ElfParseError::UnsupportedEndian);
         }
@@ -81,95 +89,127 @@ impl<'a> ElfFile<'a> {
         &self.header.typ
     }
 
+    /// `None` if the table end does not fit in `usize`.
     #[must_use]
-    pub fn program_header_table_end(&self) -> usize {
-        self.header.phoff + usize::from(self.header.phnum) * usize::from(self.header.phentsize)
+    pub fn program_header_table_end(&self) -> Option<usize> {
+        table_range::<ProgramHeader>(self.header.phoff, self.header.phnum).map(|r| r.end)
     }
 
-    pub fn program_headers(&self) -> impl Iterator<Item = &ProgramHeader> {
-        self.headers(self.header.phoff, usize::from(self.header.phnum))
+    /// # Errors
+    /// Returns an error if the table is not contained in the source buffer.
+    pub fn program_headers(
+        &self,
+    ) -> Result<impl Iterator<Item = ProgramHeader> + '_, ElfParseError> {
+        self.headers(self.header.phoff, self.header.phnum)
     }
 
+    /// # Errors
+    /// Returns an error if the table is not contained in the source buffer.
     pub fn program_headers_by_type(
         &self,
         typ: ProgramHeaderType,
-    ) -> impl Iterator<Item = &ProgramHeader> {
-        self.program_headers().filter(move |h| h.typ == typ)
+    ) -> Result<impl Iterator<Item = ProgramHeader> + '_, ElfParseError> {
+        Ok(self.program_headers()?.filter(move |h| h.typ == typ))
     }
 
-    pub fn section_headers(&self) -> impl Iterator<Item = &SectionHeader> {
-        self.headers(self.header.shoff, usize::from(self.header.shnum))
+    /// # Errors
+    /// Returns an error if the table is not contained in the source buffer.
+    pub fn section_headers(
+        &self,
+    ) -> Result<impl Iterator<Item = SectionHeader> + '_, ElfParseError> {
+        self.headers(self.header.shoff, self.header.shnum)
     }
 
+    /// # Errors
+    /// Returns an error if the table is not contained in the source buffer.
     pub fn section_headers_by_type(
         &self,
         typ: SectionHeaderType,
-    ) -> impl Iterator<Item = &SectionHeader> {
-        self.section_headers().filter(move |h| h.typ == typ)
+    ) -> Result<impl Iterator<Item = SectionHeader> + '_, ElfParseError> {
+        Ok(self.section_headers()?.filter(move |h| h.typ == typ))
     }
 
-    fn headers<T: TryFromBytes + KnownLayout + Immutable + 'a>(
+    fn headers<T: FromBytes>(
         &self,
-        header_offset: usize,
-        header_num: usize,
-    ) -> impl Iterator<Item = &T> {
-        let size = size_of::<T>();
-        let data = &self.source[header_offset..header_offset + (header_num * size)];
-
-        data.chunks_exact(size)
-            .map(T::try_ref_from_bytes)
-            .map(Result::unwrap)
+        offset: usize,
+        num: u16,
+    ) -> Result<impl Iterator<Item = T> + '_, ElfParseError> {
+        let data = table_range::<T>(offset, num)
+            .and_then(|r| self.source.get(r))
+            .ok_or(ElfParseError::HeaderTableOutOfBounds)?;
+        Ok(data.chunks_exact(size_of::<T>()).map(|c| {
+            T::read_from_bytes(c).expect("chunks_exact yields exactly size_of::<T>() bytes")
+        }))
     }
 
+    /// `None` if the section's byte range is not contained in the source buffer.
     #[must_use]
-    pub fn section_data(&self, header: &SectionHeader) -> &[u8] {
-        &self.source[header.offset..header.offset + header.size]
+    pub fn section_data(&self, header: &SectionHeader) -> Option<&[u8]> {
+        self.source
+            .get(header.offset..header.offset.checked_add(header.size)?)
     }
 
     #[must_use]
     pub fn section_name(&self, header: &SectionHeader) -> Option<&str> {
         let shstrtab = self
             .section_headers()
+            .ok()?
             .nth(usize::from(self.header.shstrndx))?;
-        let shstrtab_data = self.section_data(shstrtab);
-        CStr::from_bytes_until_nul(&shstrtab_data[header.name as usize..])
+        let shstrtab_data = self.section_data(&shstrtab)?;
+        CStr::from_bytes_until_nul(shstrtab_data.get(header.name as usize..)?)
             .ok()?
             .to_str()
             .ok()
     }
 
-    pub fn sections_by_name(&self, name: &str) -> impl Iterator<Item = &SectionHeader> {
-        self.section_headers()
-            .filter(move |h| self.section_name(h) == Some(name))
+    /// # Errors
+    /// Returns an error if the section header table is not contained in the source buffer.
+    pub fn sections_by_name(
+        &self,
+        name: &'a str,
+    ) -> Result<impl Iterator<Item = SectionHeader> + '_, ElfParseError> {
+        Ok(self
+            .section_headers()?
+            .filter(move |h| self.section_name(h) == Some(name)))
     }
 
+    /// `None` if the segment's file bytes are not contained in the source buffer.
     #[must_use]
-    pub fn program_data(&self, header: &ProgramHeader) -> &[u8] {
-        &self.source[header.offset..header.offset + header.filesz]
+    pub fn program_data(&self, header: &ProgramHeader) -> Option<&[u8]> {
+        self.source
+            .get(header.offset..header.offset.checked_add(header.filesz)?)
     }
 
+    /// `None` if the section's byte range is not contained in the source buffer.
     #[must_use]
-    pub fn symtab_data(&'a self, header: &'a SectionHeader) -> SymtabSection<'a> {
-        let data = self.section_data(header);
-        SymtabSection { header, data }
+    pub fn symtab_data(&'a self, header: &'a SectionHeader) -> Option<SymtabSection<'a>> {
+        let data = self.section_data(header)?;
+        Some(SymtabSection { header, data })
     }
 
     #[must_use]
     pub fn symbol_name(&self, symtab: &SymtabSection<'a>, symbol: &Symbol) -> Option<&str> {
-        let strtab_index = symtab.header.link as usize;
-        let strtab_hdr = self.section_headers().nth(strtab_index)?;
-        let strtab_data = self.section_data(strtab_hdr);
-        CStr::from_bytes_until_nul(&strtab_data[symbol.name as usize..])
+        let strtab_hdr = self
+            .section_headers()
+            .ok()?
+            .nth(symtab.header.link as usize)?;
+        let strtab_data = self.section_data(&strtab_hdr)?;
+        CStr::from_bytes_until_nul(strtab_data.get(symbol.name as usize..)?)
             .ok()
             .and_then(|cstr| cstr.to_str().ok())
     }
+}
+
+fn table_range<T>(offset: usize, num: u16) -> Option<Range<usize>> {
+    let len = usize::from(num).checked_mul(size_of::<T>())?;
+    Some(offset..offset.checked_add(len)?)
 }
 
 const _: () = {
     assert!(64 == size_of::<ElfHeader>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(C)]
 pub struct ElfHeader {
     pub ident: ElfIdent,
@@ -188,7 +228,7 @@ pub struct ElfHeader {
     pub shstrndx: u16,
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Clone)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(u16)]
 pub enum ElfType {
     None = 0x00,
@@ -202,7 +242,7 @@ const _: () = {
     assert!(16 == size_of::<ElfIdent>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(C)]
 pub struct ElfIdent {
     pub magic: [u8; 4],
@@ -218,7 +258,7 @@ const _: () = {
     assert!(56 == size_of::<ProgramHeader>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(FromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct ProgramHeader {
     pub typ: ProgramHeaderType,
@@ -231,9 +271,9 @@ pub struct ProgramHeader {
     pub align: usize,
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Eq, PartialEq)]
+#[derive(FromBytes, KnownLayout, Immutable, Eq, PartialEq, Copy, Clone)]
 #[repr(transparent)]
-pub struct ProgramHeaderType(pub u16);
+pub struct ProgramHeaderType(pub u32);
 
 impl ProgramHeaderType {
     pub const NULL: Self = Self(0x00);
@@ -268,7 +308,7 @@ impl Display for ProgramHeaderType {
     }
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Eq, PartialEq)]
+#[derive(FromBytes, KnownLayout, Immutable, Eq, PartialEq, Copy, Clone)]
 #[repr(transparent)]
 pub struct ProgramHeaderFlags(pub u32);
 
@@ -325,7 +365,7 @@ const _: () = {
     assert!(64 == size_of::<SectionHeader>());
 };
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(FromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct SectionHeader {
     pub name: u32,
@@ -340,7 +380,7 @@ pub struct SectionHeader {
     pub entsize: usize,
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
+#[derive(FromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq, Copy, Clone)]
 #[repr(transparent)]
 pub struct SectionHeaderType(pub u32);
 
@@ -365,7 +405,7 @@ impl SectionHeaderType {
     pub const NUM: Self = Self(0x13);
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(FromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct SectionHeaderFlags(pub u32);
 
@@ -393,17 +433,18 @@ pub struct SymtabSection<'a> {
 }
 
 impl SymtabSection<'_> {
-    pub fn symbols(&self) -> impl Iterator<Item = &Symbol> {
+    pub fn symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.data
             .as_chunks::<{ size_of::<Symbol>() }>()
             .0
             .iter()
-            .map(|v| Symbol::try_ref_from_bytes(&v[..]))
-            .map(Result::unwrap)
+            .map(|c| {
+                Symbol::read_from_bytes(c).expect("chunk is exactly size_of::<Symbol>() bytes")
+            })
     }
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
+#[derive(FromBytes, KnownLayout, Immutable, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct Symbol {
     pub name: u32,
@@ -487,6 +528,118 @@ mod tests {
             ElfFile::try_parse(&short).unwrap_err(),
             ElfParseError::TruncatedHeader,
             "a buffer shorter than the elf header must be rejected before slicing"
+        );
+    }
+
+    fn header(phoff: usize, phnum: u16, shoff: usize, shnum: u16) -> [u8; 64] {
+        use crate::file::{ProgramHeader, SectionHeader};
+
+        let mut h = [0u8; 64];
+        h[..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]);
+        h[4] = 2; // ELFCLASS64
+        h[5] = 1; // little-endian
+        h[6] = 1;
+        h[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        h[20..24].copy_from_slice(&1u32.to_le_bytes());
+        h[32..40].copy_from_slice(&phoff.to_le_bytes());
+        h[40..48].copy_from_slice(&shoff.to_le_bytes());
+        h[52..54].copy_from_slice(&64u16.to_le_bytes());
+        h[54..56].copy_from_slice(&(size_of::<ProgramHeader>() as u16).to_le_bytes());
+        h[56..58].copy_from_slice(&phnum.to_le_bytes());
+        h[58..60].copy_from_slice(&(size_of::<SectionHeader>() as u16).to_le_bytes());
+        h[60..62].copy_from_slice(&shnum.to_le_bytes());
+        h
+    }
+
+    fn load_phdr(p_type: u32) -> [u8; 56] {
+        let mut p = [0u8; 56];
+        p[..4].copy_from_slice(&p_type.to_le_bytes());
+        p
+    }
+
+    #[test]
+    fn try_parse_rejects_elf32_class() {
+        use crate::file::{ElfFile, ElfParseError};
+
+        let mut h = header(0, 0, 0, 0);
+        h[4] = 1;
+        assert_eq!(
+            ElfFile::try_parse(&h).unwrap_err(),
+            ElfParseError::UnsupportedClass
+        );
+    }
+
+    #[test]
+    fn program_header_table_end_rejects_overflow() {
+        use crate::file::ElfFile;
+
+        let h = header(usize::MAX - 10, 1, 0, 0);
+        assert_eq!(
+            ElfFile::try_parse(&h).unwrap().program_header_table_end(),
+            None
+        );
+    }
+
+    #[test]
+    fn program_headers_reject_table_outside_buffer() {
+        use crate::file::{ElfFile, ElfParseError};
+
+        let h = header(64, 1, 0, 0);
+        let elf = ElfFile::try_parse(&h).unwrap();
+        assert_eq!(
+            elf.program_headers().err(),
+            Some(ElfParseError::HeaderTableOutOfBounds)
+        );
+        let h = header(0, 0, 64, 1);
+        let elf = ElfFile::try_parse(&h).unwrap();
+        assert_eq!(
+            elf.section_headers().err(),
+            Some(ElfParseError::HeaderTableOutOfBounds)
+        );
+    }
+
+    #[test]
+    fn section_data_outside_buffer_is_none() {
+        use crate::file::{ElfFile, SectionHeader};
+
+        let mut buf = [0u8; 128];
+        buf[..64].copy_from_slice(&header(0, 0, 64, 1));
+        buf[64 + 24..64 + 32].copy_from_slice(&200usize.to_le_bytes()); // sh_offset
+        buf[64 + 32..64 + 40].copy_from_slice(&8usize.to_le_bytes()); // sh_size
+        let elf = ElfFile::try_parse(&buf).unwrap();
+        let sh: SectionHeader = elf.section_headers().unwrap().next().unwrap();
+        assert_eq!(elf.section_data(&sh), None);
+    }
+
+    #[test]
+    fn program_headers_parse_from_unaligned_buffer() {
+        use crate::file::{ElfFile, ProgramHeaderType};
+
+        #[repr(align(8))]
+        struct Buf([u8; 1 + 64 + 56]);
+        let mut buf = Buf([0; 1 + 64 + 56]);
+        buf.0[1..65].copy_from_slice(&header(64, 1, 0, 0));
+        buf.0[65..].copy_from_slice(&load_phdr(1));
+
+        let elf = ElfFile::try_parse(&buf.0[1..]).expect("header parses from odd address");
+        let mut headers = elf.program_headers().unwrap();
+        assert_eq!(headers.next().map(|h| h.typ), Some(ProgramHeaderType::LOAD));
+        assert!(headers.next().is_none());
+    }
+
+    #[test]
+    fn program_header_type_is_32_bits() {
+        use crate::file::{ElfFile, ProgramHeaderType};
+
+        let mut buf = [0u8; 64 + 56];
+        buf[..64].copy_from_slice(&header(64, 1, 0, 0));
+        buf[64..].copy_from_slice(&load_phdr(0x0001_0001));
+        let elf = ElfFile::try_parse(&buf).unwrap();
+        assert_eq!(
+            elf.program_headers_by_type(ProgramHeaderType::LOAD)
+                .unwrap()
+                .count(),
+            0
         );
     }
 }

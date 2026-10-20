@@ -102,7 +102,9 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
     let phte = {
         let mut header_buf = [0u8; size_of::<ElfHeader>()];
         read_exact(node, &mut header_buf, 0)?;
-        ElfFile::try_parse(&header_buf)?.program_header_table_end()
+        ElfFile::try_parse(&header_buf)?
+            .program_header_table_end()
+            .ok_or(LoadExecutableError::Truncated)?
     };
 
     if phte > stat.size {
@@ -114,12 +116,12 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
     let elf = ElfFile::try_parse(&buf)?;
 
     if *elf.typ() != ElfType::Exec {
-        return Err(LoadExecutableError::UnsupportedType(elf.typ().clone()));
+        return Err(LoadExecutableError::UnsupportedType(*elf.typ()));
     }
 
     let page_size = Size4KiB::SIZE.into_usize();
     let mut segments = vec![];
-    for hdr in elf.program_headers_by_type(ProgramHeaderType::LOAD) {
+    for hdr in elf.program_headers_by_type(ProgramHeaderType::LOAD)? {
         if hdr.filesz > hdr.memsz {
             return Err(LoadExecutableError::FileLongerThanMemory {
                 vaddr: hdr.vaddr,
@@ -178,7 +180,7 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
         }
     }
 
-    let mut tls_headers = elf.program_headers_by_type(ProgramHeaderType::TLS);
+    let mut tls_headers = elf.program_headers_by_type(ProgramHeaderType::TLS)?;
     let tls = if let Some(tls) = tls_headers.next() {
         if tls_headers.next().is_some() {
             return Err(LoadExecutableError::TooManyTlsHeaders);
