@@ -143,14 +143,23 @@ pub fn getpid() -> i64 {
     unsafe { syscall0(SYS_GETPID) as i64 }
 }
 
-pub fn install_handler(signo: Signal, handler: extern "C" fn(Signal)) -> Result<(), Errno> {
-    let action = SigAction {
+/// Builds the action that runs `handler` with an empty mask and returns
+/// through [`sigreturn_restorer`].
+pub fn handler_action(handler: extern "C" fn(Signal), flags: SaFlags) -> SigAction {
+    SigAction {
         handler: SigHandler::new(handler as usize),
         mask: SigSet::EMPTY,
-        flags: SaFlags::default(),
+        flags,
         restorer: sigreturn_restorer as *const () as usize,
-    };
-    sigaction(signo, Some(&action), None)
+    }
+}
+
+pub fn install_handler(signo: Signal, handler: extern "C" fn(Signal)) -> Result<(), Errno> {
+    sigaction(
+        signo,
+        Some(&handler_action(handler, SaFlags::default())),
+        None,
+    )
 }
 
 /// Issues raw syscall `n`.

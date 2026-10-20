@@ -5,8 +5,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use minilib::{
     EFAULT, EINVAL, ESRCH, SYS_KILL, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN,
-    SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal, getpid, install_handler, kill,
-    println, sigaction, sigprocmask, sigreturn_restorer, syscall0, syscall1, syscall2, syscall3,
+    SaFlags, SigAction, SigMaskHow, SigSet, Signal, getpid, handler_action, install_handler, kill,
+    println, sigaction, sigprocmask, syscall0, syscall1, syscall2, syscall3,
 };
 
 // Same spin as `PUMP_SPIN` in signals-init, which documents it.
@@ -51,15 +51,6 @@ fn wait_runs(counter: &AtomicU32, target: u32, budget: u32) -> bool {
         i += 1;
     }
     counter.load(Ordering::SeqCst) >= target
-}
-
-fn custom_action(handler: extern "C" fn(Signal), flags: SaFlags) -> SigAction {
-    SigAction {
-        handler: SigHandler::new(handler as usize),
-        mask: SigSet::EMPTY,
-        flags,
-        restorer: sigreturn_restorer as *const () as usize,
-    }
 }
 
 extern "C" fn urgent_handler(_signo: Signal) {
@@ -112,7 +103,7 @@ fn role_a() {
         println!("A: how einval ok");
     }
 
-    let protected = custom_action(noop_handler, SaFlags::default());
+    let protected = handler_action(noop_handler, SaFlags::default());
     let kill_rc = sigaction(Signal::Kill, Some(&protected), None);
     let stop_rc = sigaction(Signal::Stop, Some(&protected), None);
     if kill_rc == Err(EINVAL) && stop_rc == Err(EINVAL) {
@@ -120,10 +111,8 @@ fn role_a() {
     }
 
     let no_restorer = SigAction {
-        handler: SigHandler::new(noop_handler as *const () as usize),
-        mask: SigSet::EMPTY,
-        flags: SaFlags::default(),
         restorer: 0,
+        ..handler_action(noop_handler, SaFlags::default())
     };
     if sigaction(Signal::Usr1, Some(&no_restorer), None) == Err(EINVAL) {
         println!("A: restorer einval ok");
@@ -152,7 +141,7 @@ fn role_a() {
     }
     let _ = sigprocmask(SigMaskHow::SetMask, Some(&SigSet::EMPTY), None);
 
-    let urgent = custom_action(urgent_handler, SaFlags::RESETHAND);
+    let urgent = handler_action(urgent_handler, SaFlags::RESETHAND);
     let _ = sigaction(Signal::Urgent, Some(&urgent), None);
     let mut installed = SigAction::default();
     let _ = sigaction(Signal::Urgent, None, Some(&mut installed));
@@ -175,7 +164,7 @@ fn role_a() {
         println!("A: redeliver ok");
     }
 
-    let child = custom_action(child_handler, SaFlags::NODEFER);
+    let child = handler_action(child_handler, SaFlags::NODEFER);
     let _ = sigaction(Signal::Child, Some(&child), None);
     let _ = kill(1, Signal::Child);
     wait_runs(&CHILD_RUNS, 2, NEST_BUDGET);

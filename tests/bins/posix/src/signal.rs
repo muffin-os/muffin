@@ -1,7 +1,7 @@
 use minilib::{
     EFAULT, EINVAL, ESRCH, SYS_KILL, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SaFlags,
-    SigAction, SigHandler, SigMaskHow, SigSet, Signal, getpid, kill, ret, sigaction, sigpending,
-    sigprocmask, sigreturn_restorer, syscall1, syscall2, syscall3,
+    SigAction, SigMaskHow, SigSet, Signal, getpid, handler_action, kill, ret, sigaction,
+    sigpending, sigprocmask, syscall1, syscall2, syscall3,
 };
 
 use crate::check;
@@ -72,12 +72,7 @@ pub fn run() {
         EINVAL,
     );
 
-    let installed = SigAction {
-        handler: SigHandler::new(usr1_handler as *const () as usize),
-        mask: SigSet::EMPTY,
-        flags: SaFlags::default(),
-        restorer: sigreturn_restorer as *const () as usize,
-    };
+    let installed = handler_action(usr1_handler, SaFlags::default());
     check::expect_ok(
         "signal/sigaction_install",
         sigaction(Signal::Usr1, Some(&installed), None),
