@@ -1,8 +1,11 @@
 use kernel_abi::{EBADF, EINVAL, ENOMEM, Errno, MapFlags, ProtFlags};
 use tracing::{Level, instrument};
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::UserspacePtr;
 use crate::access::{AllocationStrategy, Location, MemoryRegionAccess};
+
+const PAGE_SIZE: usize = Size4KiB::SIZE as usize;
 
 #[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_mmap<Cx: MemoryRegionAccess>(
@@ -33,11 +36,9 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
         }
 
         let location = if flags.contains(MapFlags::FIXED) {
-            // when MAP_FIXED is set, addr must not be null
-            if addr.as_ptr().is_null() {
+            if addr.as_ptr().is_null() || !addr.addr().is_multiple_of(PAGE_SIZE) {
                 return Err(EINVAL);
             }
-            // validate that addr and addr+len are in lower half
             addr.validate_range(len)?;
             Location::Fixed(addr)
         } else {
@@ -243,6 +244,24 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), fixed_addr);
+    }
+
+    #[test]
+    fn mmap_fixed_unaligned_addr_rejected() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = unsafe { UserspacePtr::try_from_usize(0x1001).unwrap() };
+
+        let result = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            (ProtFlags::READ | ProtFlags::WRITE).bits(),
+            (MapFlags::ANONYMOUS | MapFlags::PRIVATE | MapFlags::FIXED).bits(),
+            0,
+            0,
+        );
+
+        assert_eq!(result, Err(EINVAL));
     }
 
     #[test]
