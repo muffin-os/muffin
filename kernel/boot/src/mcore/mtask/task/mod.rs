@@ -190,9 +190,14 @@ impl Task {
         }
     }
 
-    /// The drops unmap lower-half pages, so the owning process's address
-    /// space must be active on this CPU.
+    /// Drops the user stack, TLS and FX area, unmapping their lower-half
+    /// pages.
+    ///
+    /// # Panics
+    /// In debug builds, panics if the owning process's address space is not
+    /// active on this CPU.
     pub fn free_user_allocations(&self) {
+        debug_assert!(self.process.address_space().is_active());
         let _ = self.fx_area.write().take();
         let _ = self.tls.write().take();
         let _ = self.ustack.write().take();
