@@ -5,9 +5,10 @@ use core::time::Duration;
 use access::KernelAccess;
 use kernel_abi::{
     EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno, IoctlRequest,
-    ProcessId, SigAction, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence, syscall_name,
+    MapFlags, ProcessId, ProtFlags, SigAction, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence,
+    syscall_name,
 };
-use kernel_syscall::access::{FileAccess, PermissionAccess, ProcessesAccess};
+use kernel_syscall::access::{FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
@@ -278,9 +279,9 @@ fn dispatch_sys_mmap(
     let cx = KernelAccess::new();
 
     let addr = UserspacePtr::try_from_usize(addr)?;
-    let prot = i32::try_from(prot)?;
-    let flags = i32::try_from(flags)?;
-    let fd = i32::try_from(fd)?;
+    let prot = ProtFlags::from_bits(i32::try_from(prot)?).ok_or(EINVAL)?;
+    let flags = MapFlags::from_bits(i32::try_from(flags)?).ok_or(EINVAL)?;
+    let fd = <KernelAccess as MemoryRegionAccess>::Fd::from(i32::try_from(fd)?);
     sys_mmap(&cx, addr, len, prot, flags, fd, offset)
 }
 

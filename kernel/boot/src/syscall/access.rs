@@ -181,6 +181,7 @@ impl FileAccess for KernelAccess {
 
 impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
     type Region = KernelMemoryRegionHandle;
+    type Fd = FdNum;
 
     fn create_and_track_mapping(
         &self,
@@ -228,12 +229,10 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
     fn map_shared_file(
         &self,
-        fd: i32,
+        fd: FdNum,
         len: usize,
         prot: ProtFlags,
     ) -> Result<kernel_syscall::UserspacePtr<u8>, Errno> {
-        let fd = FdNum::from(fd);
-
         // Clone the node so the region keeps the device file open for its
         // whole lifetime. OpenFileDescription derefs to VfsNode.
         let node = {
@@ -291,9 +290,9 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
     fn map_private_file(
         &self,
-        fd: i32,
-        len: usize,
+        fd: FdNum,
         offset: usize,
+        len: usize,
         prot: ProtFlags,
     ) -> Result<kernel_syscall::UserspacePtr<u8>, Errno> {
         let page_size = Size4KiB::SIZE.into_usize();
@@ -306,7 +305,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         let node = {
             let fds = self.process.file_descriptors();
             let guard = fds.read();
-            let desc = guard.get(&FdNum::from(fd)).ok_or(EBADF)?;
+            let desc = guard.get(&fd).ok_or(EBADF)?;
             VfsNode::clone(desc.file_description())
         };
 

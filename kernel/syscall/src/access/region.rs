@@ -1,3 +1,5 @@
+use core::ffi::c_int;
+
 use kernel_abi::{ENODEV, Errno, ProtFlags};
 
 use crate::UserspacePtr;
@@ -14,6 +16,7 @@ pub trait MemoryRegion {
 
 pub trait MemoryRegionAccess {
     type Region: MemoryRegion;
+    type Fd: From<c_int> + core::fmt::Debug;
 
     /// Creates a mapping and immediately tracks it as a memory region in the process.
     /// Returns the address of the created mapping.
@@ -40,7 +43,7 @@ pub trait MemoryRegionAccess {
     /// mappings.
     fn map_shared_file(
         &self,
-        fd: i32,
+        fd: Self::Fd,
         len: usize,
         prot: ProtFlags,
     ) -> Result<UserspacePtr<u8>, Errno> {
@@ -58,12 +61,12 @@ pub trait MemoryRegionAccess {
     /// Returns `ENODEV` when the context does not support file-backed mappings.
     fn map_private_file(
         &self,
-        fd: i32,
-        len: usize,
+        fd: Self::Fd,
         offset: usize,
+        len: usize,
         prot: ProtFlags,
     ) -> Result<UserspacePtr<u8>, Errno> {
-        let _ = (fd, len, offset, prot);
+        let _ = (fd, offset, len, prot);
         Err(ENODEV)
     }
 }

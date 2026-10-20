@@ -1,4 +1,4 @@
-use kernel_abi::{EBADF, EINVAL, ENOMEM, Errno, MapFlags, ProtFlags};
+use kernel_abi::{EINVAL, ENOMEM, Errno, MapFlags, ProtFlags};
 use tracing::{Level, instrument};
 use x86_64::structures::paging::{PageSize, Size4KiB};
 
@@ -12,18 +12,14 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
     cx: &Cx,
     addr: UserspacePtr<u8>,
     len: usize,
-    prot: i32,
-    flags: i32,
-    fd: i32,
+    prot: ProtFlags,
+    flags: MapFlags,
+    fd: Cx::Fd,
     offset: usize,
 ) -> Result<usize, Errno> {
     if len == 0 {
         return Err(EINVAL);
     }
-
-    let flags = MapFlags::from_bits(flags).ok_or(EINVAL)?;
-
-    let prot = ProtFlags::from_bits(prot).ok_or(EINVAL)?;
 
     // W^X
     if prot.contains(ProtFlags::WRITE) && prot.contains(ProtFlags::EXEC) {
@@ -54,9 +50,6 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
 
         Ok(mapped_addr.addr())
     } else {
-        if fd < 0 {
-            return Err(EBADF);
-        }
         // The kernel picks the address for a file-backed mapping, so a
         // caller-supplied one cannot be honored.
         if flags.contains(MapFlags::FIXED) {
@@ -75,7 +68,7 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
                 }
                 cx.map_shared_file(fd, len, prot)?
             }
-            (false, true) => cx.map_private_file(fd, len, offset, prot)?,
+            (false, true) => cx.map_private_file(fd, offset, len, prot)?,
             _ => return Err(EINVAL),
         };
         Ok(mapped_addr.addr())
@@ -87,7 +80,7 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec::Vec;
 
-    use kernel_abi::{EBADF, EINVAL, ENODEV, MapFlags, ProtFlags};
+    use kernel_abi::{EINVAL, ENODEV, MapFlags, ProtFlags};
     use spin::mutex::Mutex;
 
     use crate::UserspacePtr;
@@ -129,6 +122,7 @@ mod tests {
 
     impl MemoryRegionAccess for Arc<TestMemoryAccess> {
         type Region = TestRegion;
+        type Fd = i32;
 
         fn create_and_track_mapping(
             &self,
@@ -182,8 +176,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            (ProtFlags::READ | ProtFlags::WRITE).bits(),
-            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::ANONYMOUS | MapFlags::PRIVATE,
             0,
             0,
         );
@@ -208,8 +202,8 @@ mod tests {
                 &cx,
                 addr,
                 4096,
-                prot.bits(),
-                (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
+                prot,
+                MapFlags::ANONYMOUS | MapFlags::PRIVATE,
                 0,
                 0,
             )
@@ -228,8 +222,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            ProtFlags::READ.bits(),
-            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
+            ProtFlags::READ,
+            MapFlags::ANONYMOUS | MapFlags::PRIVATE,
             0,
             0,
         )
@@ -247,8 +241,8 @@ mod tests {
             &cx,
             addr,
             0,
-            (ProtFlags::READ | ProtFlags::WRITE).bits(),
-            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::ANONYMOUS | MapFlags::PRIVATE,
             0,
             0,
         );
@@ -265,8 +259,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            (ProtFlags::READ | ProtFlags::WRITE).bits(),
-            MapFlags::ANONYMOUS.bits(), // Missing MAP_PRIVATE
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::ANONYMOUS, // Missing MAP_PRIVATE
             0,
             0,
         );
@@ -284,8 +278,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            (ProtFlags::READ | ProtFlags::WRITE).bits(),
-            (MapFlags::ANONYMOUS | MapFlags::PRIVATE | MapFlags::FIXED).bits(),
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::ANONYMOUS | MapFlags::PRIVATE | MapFlags::FIXED,
             0,
             0,
         );
@@ -303,8 +297,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            (ProtFlags::READ | ProtFlags::WRITE).bits(),
-            (MapFlags::ANONYMOUS | MapFlags::PRIVATE | MapFlags::FIXED).bits(),
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::ANONYMOUS | MapFlags::PRIVATE | MapFlags::FIXED,
             0,
             0,
         );
@@ -321,8 +315,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            (ProtFlags::WRITE | ProtFlags::EXEC).bits(), // Both WRITE and EXEC
-            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
+            ProtFlags::WRITE | ProtFlags::EXEC, // Both WRITE and EXEC
+            MapFlags::ANONYMOUS | MapFlags::PRIVATE,
             0,
             0,
         );
@@ -336,7 +330,7 @@ mod tests {
         let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         for flags in [MapFlags::empty(), MapFlags::SHARED | MapFlags::PRIVATE] {
-            let result = sys_mmap(&cx, addr, 4096, ProtFlags::READ.bits(), flags.bits(), 3, 0);
+            let result = sys_mmap(&cx, addr, 4096, ProtFlags::READ, flags, 3, 0);
 
             assert_eq!(
                 result,
@@ -351,15 +345,7 @@ mod tests {
         let cx = Arc::new(TestMemoryAccess::new());
         let addr = UserspacePtr::try_from_usize(0).unwrap();
 
-        let result = sys_mmap(
-            &cx,
-            addr,
-            4096,
-            ProtFlags::READ.bits(),
-            MapFlags::PRIVATE.bits(),
-            3,
-            0,
-        );
+        let result = sys_mmap(&cx, addr, 4096, ProtFlags::READ, MapFlags::PRIVATE, 3, 0);
 
         assert_eq!(
             result,
@@ -377,8 +363,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            ProtFlags::READ.bits(),
-            (MapFlags::PRIVATE | MapFlags::FIXED).bits(),
+            ProtFlags::READ,
+            MapFlags::PRIVATE | MapFlags::FIXED,
             3,
             0,
         );
@@ -391,41 +377,11 @@ mod tests {
     }
 
     #[test]
-    fn mmap_file_bad_fd() {
-        let cx = Arc::new(TestMemoryAccess::new());
-        let addr = UserspacePtr::try_from_usize(0).unwrap();
-
-        let result = sys_mmap(
-            &cx,
-            addr,
-            4096,
-            ProtFlags::READ.bits(),
-            MapFlags::PRIVATE.bits(),
-            -1,
-            0,
-        );
-
-        assert_eq!(
-            result,
-            Err(EBADF),
-            "a negative fd must be rejected before any mode check"
-        );
-    }
-
-    #[test]
     fn mmap_shared_fd_unsupported() {
         let cx = Arc::new(TestMemoryAccess::new());
         let addr = UserspacePtr::try_from_usize(0).unwrap();
 
-        let result = sys_mmap(
-            &cx,
-            addr,
-            4096,
-            ProtFlags::READ.bits(),
-            MapFlags::SHARED.bits(),
-            3,
-            0,
-        );
+        let result = sys_mmap(&cx, addr, 4096, ProtFlags::READ, MapFlags::SHARED, 3, 0);
 
         assert_eq!(
             result,
@@ -443,8 +399,8 @@ mod tests {
             &cx,
             addr,
             4096,
-            ProtFlags::READ.bits(),
-            MapFlags::SHARED.bits(),
+            ProtFlags::READ,
+            MapFlags::SHARED,
             3,
             4096, // non-zero offset is unsupported
         );
