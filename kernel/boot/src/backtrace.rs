@@ -28,7 +28,7 @@ unsafe impl Send for BacktraceContext {}
 /// during parsing.
 #[instrument(name = "init backtrace context", level = Level::DEBUG)]
 pub fn init() {
-    // TODO: make this work in release builds as well
+    // TODO(tpdenk): load the symbol context in release builds too, try_capture fails with NoSymbolFile there
     #[cfg(all(debug_assertions, feature = "backtrace"))]
     BACKTRACE_CONTEXT.init_once(|| {
         use core::slice::from_raw_parts;
