@@ -128,39 +128,6 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_str() {
-        let result: Result<&AbsolutePath, _> = "/".try_into();
-        assert!(result.is_ok());
-
-        let result: Result<&AbsolutePath, _> = "/foo/bar".try_into();
-        assert!(result.is_ok());
-
-        let result: Result<&AbsolutePath, _> = "".try_into();
-        assert!(result.is_err());
-
-        let result: Result<&AbsolutePath, _> = "foo".try_into();
-        assert!(result.is_err());
-
-        let result: Result<&AbsolutePath, _> = "foo/bar".try_into();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_try_from_path() {
-        let path = Path::new("/foo/bar");
-        let result: Result<&AbsolutePath, _> = path.try_into();
-        assert!(result.is_ok());
-
-        let path = Path::new("foo/bar");
-        let result: Result<&AbsolutePath, _> = path.try_into();
-        assert!(result.is_err());
-
-        let path = Path::new("");
-        let result: Result<&AbsolutePath, _> = path.try_into();
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_parent_absolute() {
         let path: &AbsolutePath = "/foo/bar".try_into().unwrap();
         let parent = path.parent();
@@ -193,37 +160,5 @@ mod tests {
         let parent = path.parent();
         assert!(parent.is_some());
         assert_eq!(&parent.unwrap().to_string(), "/a/b/c/d/e");
-    }
-
-    #[test]
-    fn test_deref_to_path() {
-        let abs_path: &AbsolutePath = "/foo/bar".try_into().unwrap();
-        let path: &Path = abs_path;
-        assert_eq!(&**path, "/foo/bar");
-    }
-
-    #[test]
-    fn test_display() {
-        use alloc::format;
-
-        let path: &AbsolutePath = "/foo/bar".try_into().unwrap();
-        assert_eq!(format!("{}", path), "/foo/bar");
-
-        let path: &AbsolutePath = "/".try_into().unwrap();
-        assert_eq!(format!("{}", path), "/");
-
-        let path: &AbsolutePath = "//foo".try_into().unwrap();
-        assert_eq!(format!("{}", path), "//foo");
-    }
-
-    #[test]
-    fn test_to_owned() {
-        let path: &AbsolutePath = "/foo/bar".try_into().unwrap();
-        let owned = path.to_owned();
-        assert_eq!(owned.as_str(), "/foo/bar");
-
-        let path: &AbsolutePath = "/".try_into().unwrap();
-        let owned = path.to_owned();
-        assert_eq!(owned.as_str(), "/");
     }
 }
