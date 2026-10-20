@@ -25,7 +25,7 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
 
     let prot = ProtFlags::from_bits(prot).ok_or(EINVAL)?;
 
-    // ensure WRITE and EXEC are mutually exclusive (W^X policy)
+    // W^X
     if prot.contains(ProtFlags::WRITE) && prot.contains(ProtFlags::EXEC) {
         return Err(EINVAL);
     }
@@ -42,7 +42,6 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
             addr.validate_range(len)?;
             Location::Fixed(addr)
         } else {
-            // when MAP_FIXED is not set, addr is just a hint and is ignored
             Location::Anywhere
         };
 

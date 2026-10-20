@@ -3,18 +3,15 @@ use kernel_abi::{ENODEV, Errno, ProtFlags};
 use crate::UserspacePtr;
 use crate::access::{AllocationStrategy, CreateMappingError, Location};
 
-/// Represents a tracked memory region within a process.
-/// Memory regions can be accessed by kernel components like interrupt handlers.
+/// A memory region tracked by the process, visible to other kernel
+/// components such as interrupt handlers.
 pub trait MemoryRegion {
-    /// Returns the starting address of this memory region.
     fn addr(&self) -> UserspacePtr<u8>;
 
-    /// Returns the size in bytes of this memory region.
+    /// Size in bytes.
     fn size(&self) -> usize;
 }
 
-/// Trait for managing memory regions within a process.
-/// This provides an abstraction over the process's memory region tracking.
 pub trait MemoryRegionAccess {
     type Region: MemoryRegion;
 

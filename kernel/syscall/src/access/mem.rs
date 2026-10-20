@@ -13,10 +13,9 @@ pub enum Location {
 }
 
 pub trait Mapping {
-    /// Returns the address at which this mapping exists.
     fn addr(&self) -> UserspacePtr<u8>;
 
-    /// Returns the length of this mapping.
+    /// Size in bytes.
     fn size(&self) -> usize;
 }
 

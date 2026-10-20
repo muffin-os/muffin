@@ -31,7 +31,7 @@ pub fn sys_getcwd<Cx: CwdAccess>(
     slice.iter_mut().zip(guard.bytes()).for_each(|(s, b)| {
         *s = b;
     });
-    slice[bytelen] = 0; // Null-terminate the string
+    slice[bytelen] = 0;
 
     Ok(buf.addr())
 }
