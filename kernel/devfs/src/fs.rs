@@ -253,12 +253,12 @@ mod tests {
         }
 
         fn write(&mut self, buf: &[u8], offset: usize) -> Result<usize, WriteError> {
-            if offset == self.data.len() {
-                self.data.extend_from_slice(buf);
-                return Ok(buf.len());
+            let end = offset + buf.len();
+            if end > self.data.len() {
+                self.data.resize(end, 0);
             }
-
-            todo!()
+            self.data[offset..end].copy_from_slice(buf);
+            Ok(buf.len())
         }
 
         fn stat(&mut self, _stat: &mut Stat) -> Result<(), StatError> {
@@ -358,5 +358,23 @@ mod tests {
         assert_eq!(bytes_read, write_buf.len(), "should read all bytes");
 
         assert_eq!(read_buf, write_buf, "read buffer should match written data");
+    }
+
+    #[test]
+    fn test_write_read_at_offset() {
+        let path = AbsolutePath::try_new("/testfile").unwrap();
+
+        let mut devfs = DevFs::new();
+        devfs
+            .register_file(path, || Ok(TestDevFile::new()))
+            .expect("should be able to register file");
+        let file = devfs.open(path).unwrap();
+
+        assert_eq!(Ok(5), devfs.write(file, b"hello", 0));
+        assert_eq!(Ok(2), devfs.write(file, b"LL", 2));
+
+        let mut read_buf = [0; 2];
+        assert_eq!(Ok(2), devfs.read(file, &mut read_buf, 3));
+        assert_eq!(b"Lo", &read_buf);
     }
 }
