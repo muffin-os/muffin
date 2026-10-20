@@ -122,7 +122,7 @@ mod tests {
 
     use crate::path::{AbsolutePath, ROOT};
     use crate::testing::TestFs;
-    use crate::{MountError, Stat, Vfs};
+    use crate::{MountError, OpenError, Stat, UnmountError, Vfs};
 
     #[test]
     fn test_read() {
@@ -234,6 +234,78 @@ mod tests {
         assert_eq!(
             Ok(()),
             vfs.unmount(AbsolutePath::try_new("//dev/").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_open_strips_mount_prefix() {
+        let mut root_fs = TestFs::default();
+        root_fs.insert_file(
+            AbsolutePath::try_new("/dev/x").unwrap(),
+            vec![0xAA; 1],
+            Stat::default(),
+        );
+        let mut dev_fs = TestFs::default();
+        dev_fs.insert_file(
+            AbsolutePath::try_new("/x").unwrap(),
+            vec![0xBB; 1],
+            Stat::default(),
+        );
+
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, root_fs).unwrap();
+        vfs.mount(AbsolutePath::try_new("/dev").unwrap(), dev_fs)
+            .unwrap();
+
+        let node = vfs.open(AbsolutePath::try_new("/dev/x").unwrap()).unwrap();
+        let mut buf = [0_u8; 1];
+        assert_eq!(Ok(1), node.read(&mut buf, 0));
+        assert_eq!([0xBB], buf, "must resolve in the fs mounted at /dev");
+        assert_eq!(
+            Err(OpenError::NotFound),
+            vfs.open(AbsolutePath::try_new("/x").unwrap()).map(|_| ()),
+            "a mounted fs must not be reachable through the root fs"
+        );
+    }
+
+    #[test]
+    fn test_unmount() {
+        let mut fs = TestFs::default();
+        fs.insert_file(
+            AbsolutePath::try_new("/x").unwrap(),
+            vec![0x00; 1],
+            Stat::default(),
+        );
+        let dev = AbsolutePath::try_new("/dev").unwrap();
+
+        let mut vfs = Vfs::new();
+        vfs.mount(dev, fs).unwrap();
+        assert!(vfs.open(AbsolutePath::try_new("/dev/x").unwrap()).is_ok());
+
+        assert_eq!(Ok(()), vfs.unmount(dev));
+        assert_eq!(
+            Err(OpenError::NotFound),
+            vfs.open(AbsolutePath::try_new("/dev/x").unwrap())
+                .map(|_| ())
+        );
+        assert_eq!(Err(UnmountError::NotMounted), vfs.unmount(dev));
+    }
+
+    #[test]
+    fn test_open_missing_file() {
+        let mut fs = TestFs::default();
+        fs.insert_file(
+            AbsolutePath::try_new("/x").unwrap(),
+            vec![0x00; 1],
+            Stat::default(),
+        );
+
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, fs).unwrap();
+
+        assert_eq!(
+            Err(OpenError::NotFound),
+            vfs.open(AbsolutePath::try_new("/y").unwrap()).map(|_| ())
         );
     }
 }
