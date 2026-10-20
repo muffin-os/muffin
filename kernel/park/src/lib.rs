@@ -1,12 +1,10 @@
 //! A lock-free parking lot for values whose owner must hand them off in a
 //! context where neither locking nor allocation is available.
 //!
-//! A task that must block reserves a slot, keeps the [`ParkTicket`] where
-//! the scheduler finds it, and hands the [`UnparkTicket`] to the subsystem
-//! that will wake it. The scheduler parks the task after the context
-//! switch with interrupts disabled, so [`ParkTicket::park`] neither locks nor
-//! allocates. The waking subsystem unparks it and moves it to the run
-//! queue. The two sides race, so the unpark may run first.
+//! The parker reserves a slot and splits it into a [`ParkTicket`], which it
+//! keeps, and an [`UnparkTicket`], which it hands to whoever will wake it.
+//! [`ParkTicket::park`] neither locks nor allocates. The two sides race, so
+//! the unpark may run first.
 
 #![no_std]
 
@@ -260,8 +258,7 @@ impl<T> ParkTicket<'_, T> {
     ///
     /// Returns [`ParkError::Unparked`] carrying `value` back when the
     /// unpark side already ran, because the caller has nowhere else to put
-    /// it. The scheduler then enqueues the task on the global run queue
-    /// instead of parking it.
+    /// it.
     pub fn park(self, value: T) -> Result<(), ParkError<T>> {
         // Safety: the slot is `Reserved` or `Unparked`, and in neither state
         // does another party touch the cell. `unpark` only claims the state
