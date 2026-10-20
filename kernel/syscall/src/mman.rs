@@ -113,6 +113,7 @@ mod tests {
 
     struct TestMemoryAccess {
         mappings: Mutex<Vec<(usize, usize, ProtFlags)>>, // (addr, size, prot)
+        regions: Mutex<Vec<(usize, usize)>>,             // (addr, size)
         next_addr: Mutex<usize>,
     }
 
@@ -120,6 +121,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 mappings: Mutex::new(Vec::new()),
+                regions: Mutex::new(Vec::new()),
                 next_addr: Mutex::new(0x1000), // Start at page boundary
             }
         }
@@ -164,8 +166,10 @@ mod tests {
             Ok(ptr)
         }
 
-        fn add_memory_region(&self, _region: Self::Region) {
-            // Just a placeholder for testing
+        fn add_memory_region(&self, region: Self::Region) {
+            self.regions
+                .lock()
+                .push((region.addr().addr(), region.size()));
         }
     }
 
@@ -213,6 +217,25 @@ mod tests {
 
             assert_eq!(*cx.mappings.lock(), [(mapped, 4096, prot)]);
         }
+    }
+
+    #[test]
+    fn anonymous_mapping_is_tracked_as_region() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
+
+        let mapped = sys_mmap(
+            &cx,
+            addr,
+            4096,
+            ProtFlags::READ.bits(),
+            (MapFlags::ANONYMOUS | MapFlags::PRIVATE).bits(),
+            0,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(*cx.regions.lock(), [(mapped, 4096)]);
     }
 
     #[test]

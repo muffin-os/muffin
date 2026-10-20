@@ -5,10 +5,13 @@ use kernel_abi::{
     EBADF, EINVAL, EIO, EISDIR, ENODEV, ENOENT, ENOMEM, ENOTTY, Errno, IoctlRequest, ProtFlags,
     Stat,
 };
-use kernel_syscall::access::{CwdAccess, FileAccess};
+use kernel_syscall::access::{
+    AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location, MemoryRegion as _,
+};
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat};
+use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
@@ -24,7 +27,6 @@ use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
-mod mem;
 mod signal;
 
 pub struct KernelAccess {
@@ -182,26 +184,40 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
     fn create_and_track_mapping(
         &self,
-        location: kernel_syscall::access::Location,
+        location: Location,
         size: usize,
-        allocation_strategy: kernel_syscall::access::AllocationStrategy,
+        _allocation_strategy: AllocationStrategy,
         prot: ProtFlags,
-    ) -> Result<kernel_syscall::UserspacePtr<u8>, kernel_syscall::access::CreateMappingError> {
-        let mapping = <Self as kernel_syscall::access::MemoryAccess>::create_mapping(
-            self,
-            location,
-            size,
-            allocation_strategy,
-            prot,
-        )?;
+    ) -> Result<kernel_syscall::UserspacePtr<u8>, CreateMappingError> {
+        let page_aligned_size = size.next_multiple_of(Size4KiB::SIZE as usize);
+        let page_count = page_aligned_size / Size4KiB::SIZE as usize;
 
-        let addr =
-            <crate::syscall::access::mem::KernelMapping as kernel_syscall::access::Mapping>::addr(
-                &mapping,
-            );
+        let segment = if let Location::Fixed(addr) = location {
+            self.process
+                .vmm()
+                .mark_as_reserved(Segment::new(
+                    VirtAddr::from_ptr(addr.as_ptr()),
+                    page_aligned_size.into_u64(),
+                ))
+                .map_err(|_| CreateMappingError::LocationAlreadyMapped)?
+        } else {
+            self.process
+                .vmm()
+                .reserve(page_count)
+                .ok_or(CreateMappingError::OutOfMemory)?
+        };
 
-        let region_handle = mapping.into_region_handle();
-        self.add_memory_region(region_handle);
+        // The region spans the page-aligned size so the fault handler can
+        // serve the last partial page.
+        let region = KernelMemoryRegionHandle {
+            inner: MemoryRegion::Private(PrivateMemoryRegion::new(
+                segment,
+                page_aligned_size,
+                page_flags(prot),
+            )),
+        };
+        let addr = region.addr();
+        self.add_memory_region(region);
 
         Ok(addr)
     }
@@ -268,11 +284,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         // but not the physical frames, so process exit never frees them.
         let inner =
             MemoryRegion::Shared(SharedMemoryRegion::new(segment, page_aligned, frames, node));
-        self.add_memory_region(KernelMemoryRegionHandle {
-            addr: user_ptr,
-            size: page_aligned,
-            inner,
-        });
+        self.add_memory_region(KernelMemoryRegionHandle { inner });
 
         Ok(user_ptr)
     }
@@ -317,8 +329,6 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         // partial page unservable and any access to it kills the process.
         let private = PrivateMemoryRegion::new(segment, size, flags);
         self.add_memory_region(KernelMemoryRegionHandle {
-            addr: user_ptr,
-            size,
             inner: MemoryRegion::FileBacked(FileBackedMemoryRegion::new(
                 private, node, offset, file_len,
             )),
@@ -344,17 +354,19 @@ fn page_flags(prot: ProtFlags) -> PageTableFlags {
 }
 
 pub struct KernelMemoryRegionHandle {
-    addr: kernel_syscall::UserspacePtr<u8>,
-    size: usize,
-    inner: crate::mcore::mtask::process::mem::MemoryRegion,
+    inner: MemoryRegion,
 }
 
 impl kernel_syscall::access::MemoryRegion for KernelMemoryRegionHandle {
     fn addr(&self) -> kernel_syscall::UserspacePtr<u8> {
-        self.addr
+        self.inner
+            .addr()
+            .as_ptr::<u8>()
+            .try_into()
+            .expect("memory region should be located in user space")
     }
 
     fn size(&self) -> usize {
-        self.size
+        self.inner.size()
     }
 }
