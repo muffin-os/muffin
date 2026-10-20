@@ -65,14 +65,16 @@ pub fn run() {
         clock_gettime(UNKNOWN_CLOCK, &mut sink),
         EINVAL,
     );
+    // Safety: these pointers are deliberately invalid, and the kernel rejecting
+    // them before any access is what each check asserts.
     check::expect_err(
         "time/gettime_null_tp",
-        ret(syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, 0)),
+        ret(unsafe { syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, 0) }),
         EFAULT,
     );
     check::expect_err(
         "time/gettime_kernel_tp",
-        ret(syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, KERNEL_PTR)),
+        ret(unsafe { syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, KERNEL_PTR) }),
         EFAULT,
     );
 
@@ -109,14 +111,16 @@ pub fn run() {
         ),
         EINVAL,
     );
+    // Safety: these pointers are deliberately invalid, and the kernel rejecting
+    // them before any access is what each check asserts.
     check::expect_err(
         "time/sleep_null_req",
-        ret(syscall2(SYS_NANOSLEEP, 0, 0)),
+        ret(unsafe { syscall2(SYS_NANOSLEEP, 0, 0) }),
         EFAULT,
     );
     check::expect_err(
         "time/sleep_kernel_req",
-        ret(syscall2(SYS_NANOSLEEP, KERNEL_PTR, 0)),
+        ret(unsafe { syscall2(SYS_NANOSLEEP, KERNEL_PTR, 0) }),
         EFAULT,
     );
 

@@ -15,7 +15,9 @@ fn raw_mmap(
     fd: usize,
     offset: usize,
 ) -> Result<usize, Errno> {
-    ret(syscall6(SYS_MMAP, addr, len, prot, flags, fd, offset))
+    // Safety: `addr` is a hint or a fixed address the kernel validates, never
+    // dereferenced here.
+    ret(unsafe { syscall6(SYS_MMAP, addr, len, prot, flags, fd, offset) })
 }
 
 fn fill_and_verify(name: &str, base: *mut u8, len: usize) {

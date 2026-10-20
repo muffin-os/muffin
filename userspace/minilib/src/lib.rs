@@ -28,14 +28,14 @@ pub use panic::catch_unwind;
 pub use start::{__muffin_start_inner, args, env};
 
 pub fn exit(code: i32) -> ! {
-    syscall1(SYS_EXIT, code as usize);
+    unsafe { syscall1(SYS_EXIT, code as usize) };
     loop {
         _mm_pause();
     }
 }
 
 pub fn shutdown() -> ! {
-    syscall0(SYS_SHUTDOWN);
+    unsafe { syscall0(SYS_SHUTDOWN) };
     loop {
         _mm_pause();
     }
@@ -48,77 +48,57 @@ pub fn ret(raw: usize) -> Result<usize, Errno> {
 }
 
 pub fn read(fd: c_int, buf: &mut [u8]) -> Result<usize, Errno> {
-    ret(syscall3(
-        SYS_READ,
-        fd as usize,
-        buf.as_mut_ptr() as usize,
-        buf.len(),
-    ))
+    // Safety: `buf` is a live, exclusive slice for the whole call.
+    ret(unsafe { syscall3(SYS_READ, fd as usize, buf.as_mut_ptr() as usize, buf.len()) })
 }
 
 pub fn write(fd: c_int, buf: &[u8]) -> Result<usize, Errno> {
-    ret(syscall3(
-        SYS_WRITE,
-        fd as usize,
-        buf.as_ptr() as usize,
-        buf.len(),
-    ))
+    // Safety: `buf` is a live slice for the whole call.
+    ret(unsafe { syscall3(SYS_WRITE, fd as usize, buf.as_ptr() as usize, buf.len()) })
 }
 
 pub fn lseek(fd: c_int, offset: i64, whence: Whence) -> Result<u64, Errno> {
-    ret(syscall3(
-        SYS_LSEEK,
-        fd as usize,
-        offset as usize,
-        whence as usize,
-    ))
-    .map(|off| off as u64)
+    ret(unsafe { syscall3(SYS_LSEEK, fd as usize, offset as usize, whence as usize) })
+        .map(|off| off as u64)
 }
 
 pub fn fstat(fd: c_int, stat: &mut Stat) -> Result<(), Errno> {
-    ret(syscall2(
-        SYS_FSTAT,
-        fd as usize,
-        core::ptr::from_mut(stat) as usize,
-    ))
-    .map(|_| ())
+    // Safety: `stat` is a live, exclusive reference for the whole call.
+    ret(unsafe { syscall2(SYS_FSTAT, fd as usize, core::ptr::from_mut(stat) as usize) }).map(|_| ())
 }
 
 pub fn ioctl<T>(fd: c_int, request: IoctlRequest, arg: &mut T) -> Result<usize, Errno> {
-    ret(syscall3(
-        SYS_IOCTL,
-        fd as usize,
-        request.number(),
-        core::ptr::from_mut(arg) as usize,
-    ))
+    // Safety: `arg` is a live, exclusive reference for the whole call.
+    ret(unsafe {
+        syscall3(
+            SYS_IOCTL,
+            fd as usize,
+            request.number(),
+            core::ptr::from_mut(arg) as usize,
+        )
+    })
 }
 
 pub fn fsync(fd: c_int) -> Result<(), Errno> {
-    ret(syscall1(SYS_FSYNC, fd as usize)).map(|_| ())
+    ret(unsafe { syscall1(SYS_FSYNC, fd as usize) }).map(|_| ())
 }
 
 pub fn clock_gettime(clockid: usize, tp: &mut Timespec) -> Result<(), Errno> {
-    ret(syscall2(
-        SYS_CLOCK_GETTIME,
-        clockid,
-        tp as *mut Timespec as usize,
-    ))
-    .map(|_| ())
+    // Safety: `tp` is a live, exclusive reference for the whole call.
+    ret(unsafe { syscall2(SYS_CLOCK_GETTIME, clockid, tp as *mut Timespec as usize) }).map(|_| ())
 }
 
 pub fn nanosleep(req: &Timespec, rem: Option<&mut Timespec>) -> Result<(), Errno> {
     let rem_ptr = rem.map_or(0, |r| r as *mut Timespec as usize);
-    ret(syscall2(
-        SYS_NANOSLEEP,
-        req as *const Timespec as usize,
-        rem_ptr,
-    ))
-    .map(|_| ())
+    // Safety: `req` and `rem` are live references for the whole call, `rem`
+    // exclusive.
+    ret(unsafe { syscall2(SYS_NANOSLEEP, req as *const Timespec as usize, rem_ptr) }).map(|_| ())
 }
 
 /// Returns the number of path bytes written into `buf`.
 pub fn exe_path(buf: &mut [u8]) -> Result<usize, Errno> {
-    ret(syscall2(SYS_EXE_PATH, buf.as_mut_ptr() as usize, buf.len()))
+    // Safety: `buf` is a live, exclusive slice for the whole call.
+    ret(unsafe { syscall2(SYS_EXE_PATH, buf.as_mut_ptr() as usize, buf.len()) })
 }
 
 #[unsafe(naked)]
@@ -127,7 +107,7 @@ pub extern "C" fn sigreturn_restorer() {
 }
 
 pub fn kill(pid: i64, signo: Signal) -> Result<(), Errno> {
-    ret(syscall2(SYS_KILL, pid as usize, signo.number() as usize)).map(|_| ())
+    ret(unsafe { syscall2(SYS_KILL, pid as usize, signo.number() as usize) }).map(|_| ())
 }
 
 pub fn sigaction(
@@ -137,13 +117,9 @@ pub fn sigaction(
 ) -> Result<(), Errno> {
     let new_ptr = new.map_or(0, |a| a as *const SigAction as usize);
     let old_ptr = old.map_or(0, |a| a as *mut SigAction as usize);
-    ret(syscall3(
-        SYS_SIGACTION,
-        signo.number() as usize,
-        new_ptr,
-        old_ptr,
-    ))
-    .map(|_| ())
+    // Safety: `new` and `old` are live references for the whole call, `old`
+    // exclusive.
+    ret(unsafe { syscall3(SYS_SIGACTION, signo.number() as usize, new_ptr, old_ptr) }).map(|_| ())
 }
 
 pub fn sigprocmask(
@@ -153,15 +129,18 @@ pub fn sigprocmask(
 ) -> Result<(), Errno> {
     let set_ptr = set.map_or(0, |s| s as *const SigSet as usize);
     let old_ptr = old.map_or(0, |s| s as *mut SigSet as usize);
-    ret(syscall3(SYS_SIGPROCMASK, how as usize, set_ptr, old_ptr)).map(|_| ())
+    // Safety: `set` and `old` are live references for the whole call, `old`
+    // exclusive.
+    ret(unsafe { syscall3(SYS_SIGPROCMASK, how as usize, set_ptr, old_ptr) }).map(|_| ())
 }
 
 pub fn sigpending(out: &mut SigSet) -> Result<(), Errno> {
-    ret(syscall1(SYS_SIGPENDING, out as *mut SigSet as usize)).map(|_| ())
+    // Safety: `out` is a live, exclusive reference for the whole call.
+    ret(unsafe { syscall1(SYS_SIGPENDING, out as *mut SigSet as usize) }).map(|_| ())
 }
 
 pub fn getpid() -> i64 {
-    syscall0(SYS_GETPID) as i64
+    unsafe { syscall0(SYS_GETPID) as i64 }
 }
 
 pub fn install_handler(signo: Signal, handler: extern "C" fn(Signal)) -> Result<(), Errno> {
@@ -174,11 +153,18 @@ pub fn install_handler(signo: Signal, handler: extern "C" fn(Signal)) -> Result<
     sigaction(signo, Some(&action), None)
 }
 
-pub fn syscall0(n: usize) -> usize {
+/// Issues raw syscall `n`.
+///
+/// # Safety
+///
+/// The kernel reads and writes memory through whichever arguments syscall `n`
+/// takes as pointers. The caller must keep every such pointer valid, correctly
+/// typed and unaliased for the duration of the call.
+pub unsafe fn syscall0(n: usize) -> usize {
     let result;
+    // Safety: the kernel preserves every register except rax across int 0x80,
+    // and the memory it touches is the caller's obligation.
     unsafe {
-        // Safety: traps into the kernel via int 0x80. Only the declared ABI
-        // registers are read and the kernel preserves every register except rax.
         asm!(
             "int 0x80",
             inlateout("rax") n => result,
@@ -188,11 +174,15 @@ pub fn syscall0(n: usize) -> usize {
     result
 }
 
-pub fn syscall1(n: usize, arg1: usize) -> usize {
+/// Issues raw syscall `n`.
+///
+/// # Safety
+///
+/// See [`syscall0`].
+pub unsafe fn syscall1(n: usize, arg1: usize) -> usize {
     let result;
+    // Safety: see `syscall0`.
     unsafe {
-        // Safety: traps into the kernel via int 0x80. Only the declared ABI
-        // registers are read and the kernel preserves every register except rax.
         asm!(
             "int 0x80",
             inlateout("rax") n => result,
@@ -203,11 +193,15 @@ pub fn syscall1(n: usize, arg1: usize) -> usize {
     result
 }
 
-pub fn syscall2(n: usize, arg1: usize, arg2: usize) -> usize {
+/// Issues raw syscall `n`.
+///
+/// # Safety
+///
+/// See [`syscall0`].
+pub unsafe fn syscall2(n: usize, arg1: usize, arg2: usize) -> usize {
     let result;
+    // Safety: see `syscall0`.
     unsafe {
-        // Safety: traps into the kernel via int 0x80. Only the declared ABI
-        // registers are read and the kernel preserves every register except rax.
         asm!(
             "int 0x80",
             inlateout("rax") n => result,
@@ -219,11 +213,15 @@ pub fn syscall2(n: usize, arg1: usize, arg2: usize) -> usize {
     result
 }
 
-pub fn syscall3(n: usize, arg1: usize, arg2: usize, arg3: usize) -> usize {
+/// Issues raw syscall `n`.
+///
+/// # Safety
+///
+/// See [`syscall0`].
+pub unsafe fn syscall3(n: usize, arg1: usize, arg2: usize, arg3: usize) -> usize {
     let result;
+    // Safety: see `syscall0`.
     unsafe {
-        // Safety: traps into the kernel via int 0x80. Only the declared ABI
-        // registers are read and the kernel preserves every register except rax.
         asm!(
             "int 0x80",
             inlateout("rax") n => result,
@@ -236,7 +234,12 @@ pub fn syscall3(n: usize, arg1: usize, arg2: usize, arg3: usize) -> usize {
     result
 }
 
-pub fn syscall6(
+/// Issues raw syscall `n`.
+///
+/// # Safety
+///
+/// See [`syscall0`].
+pub unsafe fn syscall6(
     n: usize,
     arg1: usize,
     arg2: usize,
@@ -246,9 +249,8 @@ pub fn syscall6(
     arg6: usize,
 ) -> usize {
     let result;
+    // Safety: see `syscall0`.
     unsafe {
-        // Safety: traps into the kernel via int 0x80. Only the declared ABI
-        // registers are read and the kernel preserves every register except rax.
         asm!(
             "int 0x80",
             inlateout("rax") n => result,
@@ -272,43 +274,41 @@ pub fn mmap(
     fd: usize,
     offset: usize,
 ) -> Result<*mut u8, Errno> {
-    ret(syscall6(
-        SYS_MMAP,
-        addr,
-        len,
-        prot.bits() as usize,
-        flags.bits() as usize,
-        fd,
-        offset,
-    ))
+    ret(unsafe {
+        syscall6(
+            SYS_MMAP,
+            addr,
+            len,
+            prot.bits() as usize,
+            flags.bits() as usize,
+            fd,
+            offset,
+        )
+    })
     .map(|a| a as *mut u8)
 }
 
 pub fn open(path: &str) -> Result<c_int, Errno> {
-    ret(syscall6(
-        SYS_OPEN,
-        path.as_ptr() as usize,
-        path.len(),
-        0,
-        0,
-        0,
-        0,
-    ))
-    .map(|fd| fd as c_int)
+    // Safety: `path` is a live slice for the whole call.
+    ret(unsafe { syscall6(SYS_OPEN, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) })
+        .map(|fd| fd as c_int)
 }
 
 /// Never returns on success, so the result is always the failure reason.
 pub fn execve(path: &str, argv: &[&str], envp: &[&str]) -> Errno {
     let argv_v = argv.iter().map(|&s| StrSlice::from(s)).collect::<Vec<_>>();
     let envp_v = envp.iter().map(|&s| StrSlice::from(s)).collect::<Vec<_>>();
-    let raw = syscall6(
-        SYS_EXECVE,
-        path.as_ptr() as usize,
-        path.len(),
-        argv_v.as_ptr() as usize,
-        argv_v.len(),
-        envp_v.as_ptr() as usize,
-        envp_v.len(),
-    );
+    // Safety: `path`, `argv_v` and `envp_v` are live for the whole call.
+    let raw = unsafe {
+        syscall6(
+            SYS_EXECVE,
+            path.as_ptr() as usize,
+            path.len(),
+            argv_v.as_ptr() as usize,
+            argv_v.len(),
+            envp_v.as_ptr() as usize,
+            envp_v.len(),
+        )
+    };
     Errno::from(-(raw as isize))
 }

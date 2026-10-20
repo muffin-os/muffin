@@ -95,19 +95,19 @@ extern "C" fn b_segv_handler(_signo: Signal) {
 fn role_a() {
     println!("A: start");
 
-    if syscall2(SYS_KILL, 1, 0) == 0 {
+    if unsafe { syscall2(SYS_KILL, 1, 0) } == 0 {
         println!("A: sig0 self ok");
     }
 
-    if syscall2(SYS_KILL, 999, 0) as isize == -isize::from(ESRCH) {
+    if unsafe { syscall2(SYS_KILL, 999, 0) } as isize == -isize::from(ESRCH) {
         println!("A: sig0 esrch ok");
     }
 
-    if syscall2(SYS_KILL, 1, Signal::COUNT + 1) as isize == -isize::from(EINVAL) {
+    if unsafe { syscall2(SYS_KILL, 1, Signal::COUNT + 1) } as isize == -isize::from(EINVAL) {
         println!("A: kill einval ok");
     }
 
-    if syscall3(SYS_SIGPROCMASK, 99, 0, 0) as isize == -isize::from(EINVAL) {
+    if unsafe { syscall3(SYS_SIGPROCMASK, 99, 0, 0) } as isize == -isize::from(EINVAL) {
         println!("A: how einval ok");
     }
 
@@ -128,13 +128,17 @@ fn role_a() {
         println!("A: restorer einval ok");
     }
 
-    let unmapped = syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0x43, 0) as isize;
-    let upper = syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 1 << 63, 0) as isize;
+    // Safety: both pointers are deliberately invalid, and the kernel rejecting
+    // them before any access is what the check asserts.
+    let unmapped =
+        unsafe { syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0x43, 0) } as isize;
+    let upper =
+        unsafe { syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 1 << 63, 0) } as isize;
     if unmapped == -isize::from(EFAULT) && upper == -isize::from(EFAULT) {
         println!("A: efault new ok");
     }
 
-    if syscall1(SYS_SIGPENDING, 0) as isize == -isize::from(EINVAL) {
+    if unsafe { syscall1(SYS_SIGPENDING, 0) } as isize == -isize::from(EINVAL) {
         println!("A: sigpending einval ok");
     }
 
@@ -191,7 +195,7 @@ fn forged_sigreturn() {
         i += 64;
     }
     println!("A: forged sigreturn next");
-    syscall0(SYS_SIGRETURN);
+    unsafe { syscall0(SYS_SIGRETURN) };
 }
 
 fn role_b() {
@@ -210,7 +214,7 @@ fn role_b() {
 
 fn role_c() {
     println!("C: forged sigreturn next");
-    syscall0(SYS_SIGRETURN);
+    unsafe { syscall0(SYS_SIGRETURN) };
 
     println!("C: UNREACHABLE");
 }

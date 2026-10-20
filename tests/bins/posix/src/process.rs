@@ -39,14 +39,16 @@ fn executable_path() {
     let mut empty = [FILL; 0];
     check::expect_err("process/exe_path_zero_len", exe_path(&mut empty), EINVAL);
 
+    // Safety: these buffers are deliberately invalid, and the kernel rejecting
+    // them before any access is what each check asserts.
     check::expect_err(
         "process/exe_path_null_buf",
-        ret(syscall2(SYS_EXE_PATH, 0, EXE_PATH.len())),
+        ret(unsafe { syscall2(SYS_EXE_PATH, 0, EXE_PATH.len()) }),
         EINVAL,
     );
     check::expect_err(
         "process/exe_path_kernel_buf",
-        ret(syscall2(SYS_EXE_PATH, KERNEL_ADDR, EXE_PATH.len())),
+        ret(unsafe { syscall2(SYS_EXE_PATH, KERNEL_ADDR, EXE_PATH.len()) }),
         EFAULT,
     );
 }
@@ -54,9 +56,11 @@ fn executable_path() {
 fn working_directory() {
     let mut buf = [FILL; 32];
     let addr = buf.as_mut_ptr() as usize;
+    // Safety: `buf` is live and exclusive for every call below, and the other
+    // addresses are deliberately invalid ones the kernel must reject.
     let returned = check::unwrap_or_fail(
         "process/getcwd_ok",
-        ret(syscall2(SYS_GETCWD, addr, buf.len())),
+        ret(unsafe { syscall2(SYS_GETCWD, addr, buf.len()) }),
     );
     check::require("process/getcwd_returns_buf_addr", returned == addr);
     check::require("process/getcwd_root", buf[0] == b'/');
@@ -65,32 +69,32 @@ fn working_directory() {
 
     check::expect_err(
         "process/getcwd_short_buf",
-        ret(syscall2(SYS_GETCWD, addr, 1)),
+        ret(unsafe { syscall2(SYS_GETCWD, addr, 1) }),
         ERANGE,
     );
     check::expect_err(
         "process/getcwd_zero_size",
-        ret(syscall2(SYS_GETCWD, addr, 0)),
+        ret(unsafe { syscall2(SYS_GETCWD, addr, 0) }),
         EINVAL,
     );
     check::expect_err(
         "process/getcwd_null_buf",
-        ret(syscall2(SYS_GETCWD, 0, buf.len())),
+        ret(unsafe { syscall2(SYS_GETCWD, 0, buf.len()) }),
         EFAULT,
     );
     check::expect_err(
         "process/getcwd_unmapped_buf",
-        ret(syscall2(SYS_GETCWD, 0x1000, buf.len())),
+        ret(unsafe { syscall2(SYS_GETCWD, 0x1000, buf.len()) }),
         EFAULT,
     );
     check::expect_err(
         "process/getcwd_noncanonical_buf",
-        ret(syscall2(SYS_GETCWD, 0x0001_0000_0000_0000, buf.len())),
+        ret(unsafe { syscall2(SYS_GETCWD, 0x0001_0000_0000_0000, buf.len()) }),
         EFAULT,
     );
     check::expect_err(
         "process/getcwd_kernel_buf",
-        ret(syscall2(SYS_GETCWD, KERNEL_ADDR, buf.len())),
+        ret(unsafe { syscall2(SYS_GETCWD, KERNEL_ADDR, buf.len()) }),
         EFAULT,
     );
 }

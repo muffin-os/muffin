@@ -49,7 +49,7 @@ pub fn run() {
     check::expect_err("fd/lseek_negative", lseek(fd, -1, Whence::Set), EINVAL);
     check::expect_err(
         "fd/lseek_bad_whence",
-        ret(minilib::syscall3(SYS_LSEEK, fd as usize, 0, 3)),
+        ret(unsafe { minilib::syscall3(SYS_LSEEK, fd as usize, 0, 3) }),
         EINVAL,
     );
 
@@ -61,12 +61,14 @@ pub fn run() {
     );
     check::expect_err(
         "fd/ioctl_unknown_request",
-        ret(minilib::syscall3(
-            SYS_IOCTL,
-            fd as usize,
-            2,
-            core::ptr::from_mut(&mut screen) as usize,
-        )),
+        ret(unsafe {
+            minilib::syscall3(
+                SYS_IOCTL,
+                fd as usize,
+                2,
+                core::ptr::from_mut(&mut screen) as usize,
+            )
+        }),
         ENOTTY,
     );
 
@@ -92,51 +94,47 @@ pub fn run() {
 
     check::expect_err(
         "fd/read_fd_above_i32",
-        ret(minilib::syscall3(
-            SYS_READ,
-            OVERSIZED_FD,
-            one.as_mut_ptr() as usize,
-            one.len(),
-        )),
+        ret(unsafe {
+            minilib::syscall3(SYS_READ, OVERSIZED_FD, one.as_mut_ptr() as usize, one.len())
+        }),
         EINVAL,
     );
     check::expect_err(
         "fd/write_fd_above_i32",
-        ret(minilib::syscall3(
-            SYS_WRITE,
-            OVERSIZED_FD,
-            HELLO.as_ptr() as usize,
-            HELLO.len(),
-        )),
+        ret(unsafe {
+            minilib::syscall3(
+                SYS_WRITE,
+                OVERSIZED_FD,
+                HELLO.as_ptr() as usize,
+                HELLO.len(),
+            )
+        }),
         EINVAL,
     );
 
     check::expect_err("fd/read_zero_len", read(fd, &mut []), EINVAL);
     check::expect_err("fd/write_zero_len", write(1, &[]), EINVAL);
 
+    // Safety: these buffers are deliberately invalid, and the kernel rejecting
+    // them before any access is what each check asserts.
     check::expect_err(
         "fd/read_null_buf",
-        ret(minilib::syscall3(SYS_READ, fd as usize, 0, one.len())),
+        ret(unsafe { minilib::syscall3(SYS_READ, fd as usize, 0, one.len()) }),
         EINVAL,
     );
     check::expect_err(
         "fd/read_kernel_buf",
-        ret(minilib::syscall3(SYS_READ, fd as usize, KERNEL_ADDR, 8)),
+        ret(unsafe { minilib::syscall3(SYS_READ, fd as usize, KERNEL_ADDR, 8) }),
         EFAULT,
     );
     check::expect_err(
         "fd/read_noncanonical_buf",
-        ret(minilib::syscall3(
-            SYS_READ,
-            fd as usize,
-            NONCANONICAL_ADDR,
-            8,
-        )),
+        ret(unsafe { minilib::syscall3(SYS_READ, fd as usize, NONCANONICAL_ADDR, 8) }),
         EFAULT,
     );
     check::expect_err(
         "fd/write_kernel_buf",
-        ret(minilib::syscall3(SYS_WRITE, fd as usize, KERNEL_ADDR, 8)),
+        ret(unsafe { minilib::syscall3(SYS_WRITE, fd as usize, KERNEL_ADDR, 8) }),
         EFAULT,
     );
 
@@ -154,7 +152,7 @@ pub fn run() {
 
     check::expect_err(
         "fd/close_unimplemented",
-        ret(minilib::syscall1(SYS_CLOSE, fd as usize)),
+        ret(unsafe { minilib::syscall1(SYS_CLOSE, fd as usize) }),
         ENOSYS,
     );
     let null = check::unwrap_or_fail("fd/open_dev_null", open("/dev/null"));

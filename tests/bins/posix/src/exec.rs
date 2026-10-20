@@ -11,15 +11,19 @@ const MISSING: &str = "/nonexistent";
 const SLOW_LIMIT_NANOS: i64 = 1_000_000_000;
 
 fn raw_execve(path: &str, argv_ptr: usize, argc: usize, envp_ptr: usize, envc: usize) -> Errno {
-    let raw = syscall6(
-        SYS_EXECVE,
-        path.as_ptr() as usize,
-        path.len(),
-        argv_ptr,
-        argc,
-        envp_ptr,
-        envc,
-    );
+    // Safety: `path` is live for the call, and the argv and envp values are the
+    // deliberately invalid inputs each check expects the kernel to reject.
+    let raw = unsafe {
+        syscall6(
+            SYS_EXECVE,
+            path.as_ptr() as usize,
+            path.len(),
+            argv_ptr,
+            argc,
+            envp_ptr,
+            envc,
+        )
+    };
     Errno::from(-(raw as isize))
 }
 

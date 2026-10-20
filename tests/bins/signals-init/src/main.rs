@@ -165,7 +165,8 @@ fn role_a() {
     // fail with EFAULT, not fault inside the kernel and panic it. Usr2 keeps
     // this disjoint from the handshake. new=0 leaves its disposition untouched
     // while old points at an unmapped lower-half address.
-    let efault = syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0, 0x43) as isize;
+    let efault =
+        unsafe { syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0, 0x43) } as isize;
     if efault == -isize::from(EFAULT) {
         println!("A: efault ok");
     }

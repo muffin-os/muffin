@@ -53,12 +53,12 @@ pub fn run() {
 
     check::expect_ok(
         "signal/kill_sig0_self",
-        ret(syscall2(SYS_KILL, pid as usize, 0)),
+        ret(unsafe { syscall2(SYS_KILL, pid as usize, 0) }),
         0,
     );
     check::expect_err(
         "signal/kill_sig0_missing_pid",
-        ret(syscall2(SYS_KILL, MISSING_PID, 0)),
+        ret(unsafe { syscall2(SYS_KILL, MISSING_PID, 0) }),
         ESRCH,
     );
     check::expect_err(
@@ -68,7 +68,7 @@ pub fn run() {
     );
     check::expect_err(
         "signal/kill_bad_signo",
-        ret(syscall2(SYS_KILL, pid as usize, BAD_SIGNO)),
+        ret(unsafe { syscall2(SYS_KILL, pid as usize, BAD_SIGNO) }),
         EINVAL,
     );
 
@@ -125,27 +125,19 @@ pub fn run() {
 
     check::expect_ok(
         "signal/sigaction_null_new_and_old",
-        ret(syscall3(
-            SYS_SIGACTION,
-            Signal::Usr1.number() as usize,
-            0,
-            0,
-        )),
+        ret(unsafe { syscall3(SYS_SIGACTION, Signal::Usr1.number() as usize, 0, 0) }),
         0,
     );
     check::expect_err(
         "signal/sigaction_bad_signo",
-        ret(syscall3(SYS_SIGACTION, BAD_SIGNO, 0, 0)),
+        ret(unsafe { syscall3(SYS_SIGACTION, BAD_SIGNO, 0, 0) }),
         EINVAL,
     );
+    // Safety: the pointer is deliberately invalid, and the kernel rejecting it
+    // before any access is what the check asserts.
     check::expect_err(
         "signal/sigaction_new_efault",
-        ret(syscall3(
-            SYS_SIGACTION,
-            Signal::Usr2.number() as usize,
-            KERNEL_PTR,
-            0,
-        )),
+        ret(unsafe { syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, KERNEL_PTR, 0) }),
         EFAULT,
     );
 
@@ -186,7 +178,7 @@ pub fn run() {
     );
     check::expect_err(
         "signal/mask_bad_how",
-        ret(syscall3(SYS_SIGPROCMASK, BAD_HOW, 0, 0)),
+        ret(unsafe { syscall3(SYS_SIGPROCMASK, BAD_HOW, 0, 0) }),
         EINVAL,
     );
 
@@ -195,7 +187,7 @@ pub fn run() {
     check::require("signal/pending_empty", pending == 0);
     check::expect_err(
         "signal/pending_null",
-        ret(syscall1(SYS_SIGPENDING, 0)),
+        ret(unsafe { syscall1(SYS_SIGPENDING, 0) }),
         EINVAL,
     );
 
