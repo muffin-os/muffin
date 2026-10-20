@@ -314,8 +314,8 @@ impl AddressSpace {
         unsafe { Self::create_from(new_frame, Self::kernel().inner.read().level4_vaddr) }
     }
 
-    pub fn cr3_value(&self) -> usize {
-        self.level4_frame.start_address().as_u64().into_usize()
+    pub fn level4_frame(&self) -> PhysFrame {
+        self.level4_frame
     }
 
     pub fn is_active(&self) -> bool {

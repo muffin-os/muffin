@@ -9,7 +9,9 @@ use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::model_specific::FsBase;
+use x86_64::structures::paging::PhysFrame;
 
+use crate::U64Ext;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::scheduler::switch::switch_impl;
@@ -89,7 +91,7 @@ impl Scheduler {
             assert!(!must_switch, "parking task found no switch target");
             return;
         };
-        let cr3_value = next_task.process().address_space().cr3_value();
+        let level4_frame = next_task.process().address_space().level4_frame();
 
         let mut old_task = self.swap_current_task(next_task);
         let requested = match old_task.take_park_ticket() {
@@ -144,7 +146,7 @@ impl Scheduler {
             Self::switch(
                 old_stack_ptr,
                 *self.current_task.last_stack_ptr(),
-                cr3_value,
+                level4_frame,
             );
         }
     }
@@ -177,9 +179,10 @@ impl Scheduler {
         self.idle_task = Some(task);
     }
 
-    unsafe fn switch(old_stack_ptr: *mut usize, new_stack_ptr: usize, new_cr3_value: usize) {
+    unsafe fn switch(old_stack_ptr: *mut usize, new_stack_ptr: usize, new_level4_frame: PhysFrame) {
+        let cr3_value = new_level4_frame.start_address().as_u64().into_usize();
         unsafe {
-            switch_impl(old_stack_ptr, new_stack_ptr as *const u8, new_cr3_value);
+            switch_impl(old_stack_ptr, new_stack_ptr as *const u8, cr3_value);
         }
     }
 
