@@ -31,7 +31,6 @@ pub fn init() {
         ))
     });
 
-    // recursive mapping
     {
         let recursive_index = *RECURSIVE_INDEX
             .get()
@@ -45,7 +44,6 @@ pub fn init() {
             .leak();
     }
 
-    // kernel code
     {
         let kernel_addr = KERNEL_ADDRESS_REQUEST
             .get_response()
@@ -66,7 +64,6 @@ pub fn init() {
             .leak();
     }
 
-    // kernel file and bootloader reclaimable
     {
         let hhdm_offset = HHDM_REQUEST.get_response().unwrap().offset();
         MEMORY_MAP_REQUEST
@@ -90,7 +87,6 @@ pub fn init() {
             });
     }
 
-    // heap
     let _ = VirtualMemoryHigherHalf
         .mark_as_reserved(Segment::new(Heap::bottom(), Heap::size() as u64))
         .expect("heap should not be reserved yet")
