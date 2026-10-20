@@ -128,14 +128,7 @@ pub fn run() {
     let hello = check::unwrap_or_fail("mmap/open_hello", open("/data/hello.txt"));
     let file = check::unwrap_or_fail(
         "mmap/file_private",
-        mmap(
-            0,
-            PAGE,
-            ProtFlags::READ,
-            MapFlags::PRIVATE,
-            hello as usize,
-            0,
-        ),
+        mmap(0, PAGE, ProtFlags::READ, MapFlags::PRIVATE, hello, 0),
     );
     // Offset 0 of the file must land at the returned address, so the tail of
     // the page reads as zero.

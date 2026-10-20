@@ -99,7 +99,7 @@ fn main() -> i32 {
         len,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::SHARED,
-        fd as usize,
+        fd,
         0,
     );
     report("mmap", t, now());

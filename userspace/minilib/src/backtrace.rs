@@ -131,7 +131,7 @@ fn map_own_image() -> Option<&'static [u8]> {
     // maps them. Mapping the file instead of reading it commits a frame only for
     // the pages the parse touches, which matters on the panic path where
     // committing a multi-megabyte image can itself fail.
-    let ptr = crate::mmap(0, len, ProtFlags::READ, MapFlags::PRIVATE, fd as usize, 0).ok()?;
+    let ptr = crate::mmap(0, len, ProtFlags::READ, MapFlags::PRIVATE, fd, 0).ok()?;
 
     LEN.store(len, Relaxed);
     IMAGE.store(ptr, Release);

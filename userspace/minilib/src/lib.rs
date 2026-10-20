@@ -280,7 +280,7 @@ pub fn mmap(
     len: usize,
     prot: ProtFlags,
     flags: MapFlags,
-    fd: usize,
+    fd: c_int,
     offset: usize,
 ) -> Result<*mut u8, Errno> {
     ret(unsafe {
@@ -290,7 +290,7 @@ pub fn mmap(
             len,
             prot.bits() as usize,
             flags.bits() as usize,
-            fd,
+            fd as usize,
             offset,
         )
     })

@@ -28,7 +28,7 @@ fn main() -> i32 {
         len,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::SHARED,
-        fd as usize,
+        fd,
         0,
     ) else {
         println!("fb-mmap: FAIL mmap");
@@ -67,7 +67,7 @@ fn main() -> i32 {
         4096,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::SHARED,
-        spawn_fd as usize,
+        spawn_fd,
         0,
     )
     .is_ok()
@@ -83,7 +83,7 @@ fn main() -> i32 {
         4096,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::PRIVATE,
-        fd as usize,
+        fd,
         0,
     ) else {
         println!("fb-mmap: FAIL private-file");
