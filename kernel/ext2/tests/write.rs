@@ -1,5 +1,5 @@
 use kernel_device::block::MemoryBlockDevice;
-use kernel_ext2::{Error, Ext2Fs};
+use kernel_ext2::{Error, Ext2Fs, RegularFile};
 
 mod common;
 
@@ -35,6 +35,54 @@ fn test_create_and_write_file(sector_size: usize) {
             data.len()
         );
     }
+
+    let direct_blocks = file.inode().direct_ptrs().count() as u32;
+    let expected_sectors = direct_blocks * fs.superblock().sectors_per_block();
+    assert_eq!(file.inode().num_disk_sectors(), expected_sectors);
+    let on_disk: RegularFile = fs
+        .find_and_resolve_entry(&root, |e| e.name() == Some(file_name))
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(on_disk.inode().num_disk_sectors(), expected_sectors);
+}
+
+generate_tests!(
+    test_write_into_hole_counts_sectors:
+    512 - test_write_into_hole_counts_sectors_standard,
+    1024 - test_write_into_hole_counts_sectors_1024,
+    4096 - test_write_into_hole_counts_sectors_4096,
+);
+
+fn test_write_into_hole_counts_sectors(sector_size: usize) {
+    let mut fs = cow_fs!("kernel/ext2/tests/filesystems/large.img", sector_size);
+    let root = fs.read_root_inode().unwrap();
+    let mut file: RegularFile = fs
+        .find_and_resolve_entry(&root, |e| e.name() == Some("sparse.bin"))
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let before = file.inode().num_disk_sectors();
+    let len_before = file.len();
+    let block_size = fs.superblock().block_size() as usize;
+
+    let data = vec![0xCD_u8; block_size];
+    assert_eq!(
+        fs.write_to_file(&mut file, block_size, &data).unwrap(),
+        block_size
+    );
+    assert_eq!(file.len(), len_before);
+    let expected = before + fs.superblock().sectors_per_block();
+    assert_eq!(file.inode().num_disk_sectors(), expected);
+    let on_disk: RegularFile = fs
+        .find_and_resolve_entry(&root, |e| e.name() == Some("sparse.bin"))
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(on_disk.inode().num_disk_sectors(), expected);
 }
 
 generate_tests!(

@@ -121,6 +121,13 @@ impl Superblock {
         u32::shl(1024, self.log2_block_size)
     }
 
+    /// Number of 512-byte sectors in one block. `Inode::num_disk_sectors` counts
+    /// those sectors no matter the block size.
+    pub fn sectors_per_block(&self) -> u32 {
+        const DISK_SECTOR_SIZE: u32 = 512;
+        self.block_size() / DISK_SECTOR_SIZE
+    }
+
     pub fn fragment_size(&self) -> u32 {
         u32::shl(1024, self.log2_fragment_size)
     }

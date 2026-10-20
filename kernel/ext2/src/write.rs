@@ -72,16 +72,16 @@ where
             "data to write was not block aligned"
         );
 
-        if file.len() < offset as usize + buf.len() {
-            let new_size = offset as usize + buf.len();
-            let new_size_lower = new_size as u32;
-            let new_size_upper = (new_size >> 32) as u32;
-
+        let grows = file.len() < offset as usize + buf.len();
+        if grows || num_new_allocated_blocks > 0 {
+            let sectors_per_block = self.superblock.sectors_per_block();
             let inode = file.inode_mut();
-            inode.set_file_size_lower(new_size_lower);
-            inode.set_file_size_upper(new_size_upper);
-
-            *inode.num_disk_sectors_mut() += num_new_allocated_blocks;
+            if grows {
+                let new_size = offset as usize + buf.len();
+                inode.set_file_size_lower(new_size as u32);
+                inode.set_file_size_upper((new_size >> 32) as u32);
+            }
+            *inode.num_disk_sectors_mut() += num_new_allocated_blocks * sectors_per_block;
 
             self.write_inode(file.inode_address(), file)?;
         }
