@@ -104,35 +104,41 @@ fn check_xmm(pid: u64) -> bool {
     true
 }
 
-/// `fstp` pops the value `fldpi` pushed, so the x87 stack is balanced on exit
-/// and needs no clobber declaration.
-fn check_x87() -> bool {
+/// `fstp` pops the value `fld` pushed, so the x87 stack is balanced on exit
+/// and needs no clobber declaration. A double survives the trip through the
+/// 80-bit x87 stack unchanged, so the readback is compared raw.
+fn check_x87(pid: u64) -> bool {
+    let input: u64 = 0x4000_0000_0000_0000 | (pid << 32) | pid;
     let mut out: u64 = 0;
     let cnt = SPIN;
     unsafe {
         asm!(
-            "fldpi",
+            "fld qword ptr [{inp}]",
             "2:",
             "dec {cnt}",
             "jnz 2b",
             "fstp qword ptr [{outp}]",
+            inp = in(reg) &input,
             outp = in(reg) &mut out,
             cnt = inout(reg) cnt => _,
             options(nostack),
         );
     }
-    out == 0x400921FB54442D18
+    out == input
 }
 
 /// Round toward zero and flush to zero stay in effect process wide, so the
 /// original `MXCSR` has to be put back or every later float in this process
-/// silently changes behaviour.
-fn check_mxcsr() -> bool {
+/// silently changes behaviour. The sticky exception flags carry the pid; they
+/// are masked, so setting them traps nothing.
+fn check_mxcsr(pid: u64) -> bool {
+    const ROUND_ZERO_FLUSH: u32 = 0xE000;
+    const EXCEPTION_FLAGS: u32 = 0x3F;
     let mut orig: u32 = 0;
     unsafe {
         asm!("stmxcsr [{p}]", p = in(reg) &mut orig, options(nostack));
     }
-    let modified = orig | 0xE000;
+    let modified = (orig & !EXCEPTION_FLAGS) | ROUND_ZERO_FLUSH | (pid as u32 & EXCEPTION_FLAGS);
     let mut readback: u32 = 0;
     let cnt = SPIN;
     unsafe {
@@ -150,21 +156,21 @@ fn check_mxcsr() -> bool {
             options(nostack),
         );
     }
-    readback & 0xE000 == 0xE000
+    readback == modified
 }
 
 /// Proves the rounding mode is semantically live, not merely byte preserved.
-/// `cvtsd2si` honours `MXCSR`, so `1.5` truncates to `1` under round toward zero
-/// and rounds to `2` under round to nearest. Requiring both answers fails a mode
-/// stuck in either state.
-fn check_rounding() -> bool {
+/// `cvtsd2si` honours `MXCSR`, so `pid + 0.75` truncates to `pid` under round
+/// toward zero and rounds to `pid + 1` under round to nearest. Requiring both
+/// answers fails a mode stuck in either state.
+fn check_rounding(pid: u64) -> bool {
     let mut orig: u32 = 0;
     unsafe {
         asm!("stmxcsr [{p}]", p = in(reg) &mut orig, options(nostack));
     }
     let rz = orig | 0x6000;
     let rn = orig & !0x6000u32;
-    let val: u64 = 0x3FF8_0000_0000_0000;
+    let val: u64 = (pid as f64 + 0.75).to_bits();
     let mut r_zero: i64 = 0;
     let mut r_near: i64 = 0;
     let cnt = SPIN;
@@ -190,16 +196,16 @@ fn check_rounding() -> bool {
             options(nostack),
         );
     }
-    r_zero == 1 && r_near == 2
+    r_zero == pid as i64 && r_near == pid as i64 + 1
 }
 
 /// NaN is never equal to itself, so a float comparison here would be
 /// meaningless. The round trip is checked on the raw `u64` bit patterns. A save
 /// path that canonicalises the NaN payload or normalises the subnormal fails
 /// here.
-fn check_special() -> bool {
-    let nan_in: u64 = 0x7FF8_0000_DEAD_BEEF;
-    let sub_in: u64 = 0x0000_0000_0000_0001;
+fn check_special(pid: u64) -> bool {
+    let nan_in: u64 = 0x7FF8_0000_DEAD_0000 | pid;
+    let sub_in: u64 = pid;
     let mut nan_out: u64 = 0;
     let mut sub_out: u64 = 0;
     let cnt = SPIN;
@@ -227,9 +233,9 @@ fn check_special() -> bool {
 /// Every partial sum stays an integer below 2^53, so each `addsd` is exact and
 /// the closed form has no rounding slack. The accumulation loop is the spin, so
 /// the accumulator is live in xmm0 across every preemption it spans.
-fn check_sum() -> bool {
+fn check_sum(pid: u64) -> bool {
     let one: u64 = 0x3FF0_0000_0000_0000;
-    let n: u64 = SPIN;
+    let n: u64 = SPIN + pid;
     let mut result: u64 = 0;
     let cnt = n;
     unsafe {
@@ -357,19 +363,19 @@ fn main() -> i32 {
     println!("floats: pid={pid} start");
 
     let ok = expect(check_xmm(pid), "floats: xmm ok", "floats: FAIL xmm")
-        && expect(check_x87(), "floats: x87 ok", "floats: FAIL x87")
-        && expect(check_mxcsr(), "floats: mxcsr ok", "floats: FAIL mxcsr")
+        && expect(check_x87(pid), "floats: x87 ok", "floats: FAIL x87")
+        && expect(check_mxcsr(pid), "floats: mxcsr ok", "floats: FAIL mxcsr")
         && expect(
-            check_rounding(),
+            check_rounding(pid),
             "floats: rounding ok",
             "floats: FAIL rounding",
         )
         && expect(
-            check_special(),
+            check_special(pid),
             "floats: special ok",
             "floats: FAIL special",
         )
-        && expect(check_sum(), "floats: sum ok", "floats: FAIL sum")
+        && expect(check_sum(pid), "floats: sum ok", "floats: FAIL sum")
         && expect(
             check_signal(pid),
             "floats: signal ok",
