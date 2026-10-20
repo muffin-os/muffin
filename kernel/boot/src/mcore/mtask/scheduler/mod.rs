@@ -57,8 +57,16 @@ impl Scheduler {
         }
     }
 
+    /// Switches to the next runnable task, or returns at once when there is
+    /// none and the current task can keep running.
+    ///
     /// # Safety
-    /// Trivially unsafe. If you don't know why, please don't call this function.
+    /// Interrupts must be disabled, `self` must be the scheduler of the CPU
+    /// this code runs on, and [`Scheduler::set_idle_task`] must have been
+    /// called on it.
+    ///
+    /// # Panics
+    /// Panics if interrupts are enabled.
     pub unsafe fn reschedule(&mut self) {
         assert!(!interrupts::are_enabled());
 
