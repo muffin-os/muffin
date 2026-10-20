@@ -48,9 +48,8 @@ fn color_vert(input: &[f32], output: &mut [f32]) {
 }
 
 /// Scales a unit-interval channel to 0..=255, saturating outside it.
-///
-/// Runs three times per covered pixel, so it must not become an out-of-line
-/// call. In an unoptimised build only `inline(always)` guarantees that.
+// Runs three times per covered pixel. In an unoptimised build only
+// `inline(always)` keeps it from becoming an out-of-line call.
 #[inline(always)]
 fn channel_to_u8(value: f32) -> u32 {
     if value <= 0.0 {
