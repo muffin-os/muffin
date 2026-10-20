@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
 use minilib::{
@@ -27,7 +28,19 @@ impl Role {
     }
 }
 
-extern "C" fn urgent_handler(_signo: Signal) {}
+/// The driver's ping and the victim's reply. Both default to `Ignore`, so one
+/// that lands before its handler is armed is dropped, never fatal, and an
+/// unhandled ping cannot cut the happy-path sleep short.
+const PING: Signal = Signal::Urgent;
+const ACK: Signal = Signal::WindowChanged;
+
+static ACKED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_ack(_signo: Signal) {
+    ACKED.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn on_ping(_signo: Signal) {}
 
 fn now() -> Duration {
     let mut ts = Timespec::default();
@@ -51,9 +64,12 @@ fn victim() {
         println!("sleep: UNREACHABLE duration");
     }
 
-    // SIGURG defaults to ignore, so the handler is what makes it interrupt
-    // the sleep. It must be installed before the driver's kill can land.
-    let _ = install_handler(Signal::Urgent, urgent_handler);
+    // The ping defaults to ignore, so the handler is what makes it interrupt
+    // the sleep.
+    if let Err(e) = install_handler(PING, on_ping) {
+        println!("sleep: FAIL install_handler {e}");
+        return;
+    }
 
     let before = now();
     let rc = nanosleep(&Duration::from_secs(10).into(), None);
@@ -63,13 +79,25 @@ fn victim() {
     } else {
         println!("sleep: UNREACHABLE eintr");
     }
+    // Replying only after the sleep was cut short means a ping that landed
+    // before the sleep began is simply followed by another.
+    if let Err(e) = kill(Role::Driver.pid(), ACK) {
+        println!("sleep: FAIL kill {e}");
+    }
 }
 
 fn driver() {
-    // Outlasts the victim's whole happy path, so the kill can only land inside
-    // its 10s sleep.
-    let _ = nanosleep(&Duration::from_secs(2).into(), None);
-    let _ = kill(Role::Victim.pid(), Signal::Urgent);
+    if let Err(e) = install_handler(ACK, on_ack) {
+        println!("sleep: FAIL install_handler {e}");
+        return;
+    }
+    while !ACKED.load(Ordering::SeqCst) {
+        if let Err(e) = kill(Role::Victim.pid(), PING) {
+            println!("sleep: FAIL kill {e}");
+            return;
+        }
+        let _ = nanosleep(&Duration::from_millis(50).into(), None);
+    }
 }
 
 minilib::entry!(main);

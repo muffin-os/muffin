@@ -39,7 +39,9 @@ fn victim() -> i32 {
 
 fn driver() -> ! {
     // Outlasts the victim's sigaction, so the shutdown's SIGTERM broadcast never
-    // finds the default action.
+    // finds the default action. A ping/ack handshake would end with the victim
+    // inside the ack syscall, and SIGTERM landing on that return path is the
+    // very delivery path this test must rule out.
     let _ = nanosleep(&Duration::from_secs(2).into(), None);
     minilib::shutdown()
 }

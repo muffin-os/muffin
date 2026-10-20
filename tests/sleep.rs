@@ -5,8 +5,9 @@
 //! `/bin/init`. The victim first proves the happy path, a 200ms sleep that
 //! parks the task and returns 0 only after the monotonic clock moved at least
 //! 200ms. It then parks in a 10s sleep with a SIGURG handler installed, and
-//! the driver interrupts that sleep with a kill after a settle delay, which
-//! must surface as `EINTR` long before the deadline.
+//! the driver pings it with SIGURG until the victim reports back that the
+//! sleep was cut short, which must surface as `EINTR` long before the
+//! deadline.
 
 use test_support::{KernelTest, host_env};
 
@@ -18,4 +19,5 @@ fn nanosleep_end_to_end() {
 
     report.assert_markers_in_order(&MARKERS);
     report.assert_no_line_contains("sleep: UNREACHABLE");
+    report.assert_no_line_contains("sleep: FAIL");
 }
