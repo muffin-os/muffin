@@ -1,10 +1,9 @@
 //! End-to-end test for POSIX execve.
 //!
-//! Boots the generic `test-kernel` under QEMU with `/bin/execve` in the
-//! `/spawn` manifest. The binary proves failed execs return with the old
-//! image intact, then replaces itself with `/bin/exec-target`, which checks
-//! argv and envp delivery, fd preservation, and the signal disposition reset.
-//! Exit code 42 at index 0 proves the pid survived the image swap.
+//! `/bin/execve` replaces itself with `/bin/exec-target`, which exits 42 only
+//! if argv, envp, open fds and the signal disposition reset all arrived
+//! intact. The ordered markers prove the swap happened, and the exit code at
+//! index 0 proves the pid survived it.
 
 use test_support::{KernelTest, host_env};
 

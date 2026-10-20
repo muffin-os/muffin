@@ -1,10 +1,8 @@
 //! End-to-end test for the anonymous `mmap` syscall.
 //!
-//! Boots the generic `test-kernel` under QEMU with `/bin/mmap` twice in the
-//! `/spawn` manifest. Pid 1 maps two anonymous pages, writes a byte pattern
-//! across both, and reads it back. Pid 2 maps a `PROT_READ` page, reads it,
-//! then writes to it, which must kill it with SIGSEGV. The test asserts on
-//! their serial output and outcomes.
+//! Pid 1 reports `mmap: ok` only if a pattern written across two anonymous
+//! pages reads back. Pid 2 writes to a `PROT_READ` page, which must kill it
+//! with SIGSEGV before it can report the write survived.
 
 use test_support::{KernelTest, host_env};
 

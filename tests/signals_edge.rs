@@ -1,27 +1,12 @@
 //! End-to-end signal edge-case test.
 //!
-//! Boots the shared generic `test-kernel` under QEMU with a `/spawn` manifest
-//! that launches one instance of a dedicated test init per role at
-//! `/bin/init`. The harness boots the images its Bazel target declared and
-//! parses the serial transcript.
-//!
-//! Role A walks the hostile syscall paths in order: the `kill(pid, 0)`
-//! existence probe, EINVAL and EFAULT returns from every signal syscall,
-//! unblockable SIGKILL and SIGSTOP, sigaction old-pointer copy-out, RESETHAND,
-//! default deferral plus redelivery of a signal during its own handler,
-//! NODEFER nesting, and finally a forged `sigreturn` that must kill the
-//! process on SIGSEGV without taking the kernel down. Role B blocks SIGSEGV
-//! with a handler installed and faults, which must kill it without ever
-//! running that handler. Role C forges a `sigreturn` with no readable frame
-//! at its stack pointer, which must also die on SIGSEGV. Role D raises a
-//! handled signal with its stack pointer in unmapped memory, so the kernel
-//! has nowhere to write the signal frame and must kill it on SIGSEGV. Role E
-//! executes `ud2`, which must kill it on SIGILL, and role F executes the
-//! privileged `hlt`, which must kill it on SIGSEGV.
-//!
-//! All six processes die by signal, so the run completes once each reports
-//! its outcome. The production kernel and init stay free of test-only
-//! branches.
+//! Six instances of `/bin/init` take a role each by pid. Role A prints one
+//! `ok` marker per hostile syscall path it survives, in `MARKERS` order, and
+//! then forges a `sigreturn` that must kill it on SIGSEGV. Roles B to F each
+//! announce a fault the kernel must answer by killing them, B to D and F on
+//! SIGSEGV and E on SIGILL, without the kernel going down. The run completes
+//! once all six report an outcome, and no role may reach its `UNREACHABLE`
+//! line.
 
 use test_support::KernelTest;
 

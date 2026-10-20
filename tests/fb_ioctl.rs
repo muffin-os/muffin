@@ -1,11 +1,9 @@
 //! End-to-end test for the ioctl syscall and the framebuffer screen-info query.
 //!
-//! Boots the generic `test-kernel` under QEMU with `/bin/fb-ioctl` in the
-//! `/spawn` manifest and a virtio-gpu device pinned to a fixed resolution. The
-//! binary opens `/dev/fb0`, issues an `FbGetScreenInfo` ioctl, and prints the
-//! reported geometry, then confirms the `ENOTTY` default path on a regular
-//! file. The test asserts on its serial output and exit code at two
-//! resolutions.
+//! `/bin/fb-ioctl` prints the geometry `FbGetScreenInfo` reports for
+//! `/dev/fb0`, which must match the resolution the virtio-gpu device was
+//! pinned to, and `enotty ok` only if the same request on a regular file fails
+//! with `ENOTTY`. Two resolutions prove the value is read, not assumed.
 
 use test_support::{KernelTest, host_env};
 

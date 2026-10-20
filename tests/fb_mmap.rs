@@ -1,13 +1,10 @@
 //! End-to-end test for shared, file-backed mmap of the framebuffer device.
 //!
-//! Boots the generic `test-kernel` under QEMU with `/bin/fb-mmap` in the
-//! `/spawn` manifest and a virtio-gpu device pinned to a fixed resolution. The
-//! binary opens `/dev/fb0`, queries its geometry, `mmap`s the framebuffer
-//! `MAP_SHARED`, stamps a pattern through the mapping, and reads the same bytes
-//! back through the read syscall to prove the mapping aliases the real device
-//! memory rather than a private copy. It also confirms that shared mmap of a
-//! regular file is rejected, and that a `MAP_PRIVATE` mapping of the same
-//! device sees the framebuffer content but never writes back to it.
+//! `/bin/fb-mmap` prints `fb-mmap: ok` and exits 0 only if bytes written
+//! through a `MAP_SHARED` mapping of `/dev/fb0` read back through the read
+//! syscall, shared mmap of a regular file is rejected, and a `MAP_PRIVATE`
+//! mapping never writes back. The virtio-gpu device is pinned to a fixed
+//! resolution so the geometry is known.
 
 use test_support::{KernelTest, host_env};
 

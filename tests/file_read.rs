@@ -1,9 +1,8 @@
 //! End-to-end test for the VFS and ext2 file read path.
 //!
-//! Boots the generic `test-kernel` under QEMU with `/bin/file-read` in the
-//! `/spawn` manifest and a known file baked into the disk image. The binary
-//! opens `/data/hello.txt`, reads it to EOF, and compares the content. The
-//! test asserts on its serial output and exit code.
+//! `/bin/file-read` reports `content ok` only if `/data/hello.txt`, baked
+//! into the disk image, reads to EOF with the expected bytes, and `seek ok`
+//! only if lseek repositions the read.
 
 use test_support::{KernelTest, host_env};
 
