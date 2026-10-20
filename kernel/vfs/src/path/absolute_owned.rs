@@ -278,7 +278,6 @@ mod tests {
 
     #[test]
     fn test_always_absolute() {
-        // All operations should maintain absolute path invariant
         let mut path = AbsoluteOwnedPath::new();
         assert!(path.is_absolute());
 

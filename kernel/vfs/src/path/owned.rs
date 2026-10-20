@@ -130,22 +130,18 @@ mod tests {
 
     #[test]
     fn test_append_str_edge_cases() {
-        // Empty append
         let mut path = OwnedPath::new("foo");
         path.append_str("");
         assert_eq!(path.as_str(), "foo");
 
-        // Multiple slashes
         let mut path = OwnedPath::new("foo");
         path.append_str("///bar");
         assert_eq!(path.as_str(), "foo///bar");
 
-        // Special characters
         let mut path = OwnedPath::new("foo");
         path.append_str("-bar_baz.txt");
         assert_eq!(path.as_str(), "foo-bar_baz.txt");
 
-        // Spaces
         let mut path = OwnedPath::new("foo");
         path.append_str(" bar");
         assert_eq!(path.as_str(), "foo bar");
@@ -153,22 +149,18 @@ mod tests {
 
     #[test]
     fn test_push_edge_cases() {
-        // Push to absolute path
         let mut path = OwnedPath::new("/");
         path.push("foo");
         assert_eq!(path.as_str(), "/foo");
 
-        // Push to path ending with slash
         let mut path = OwnedPath::new("/foo/");
         path.push("bar");
         assert_eq!(path.as_str(), "/foo/bar");
 
-        // Push empty string
         let mut path = OwnedPath::new("/foo");
         path.push("");
         assert_eq!(path.as_str(), "/foo/");
 
-        // Push empty string multiple times
         let mut path = OwnedPath::new("/foo");
         path.push("");
         assert_eq!(path.as_str(), "/foo/");
@@ -177,29 +169,24 @@ mod tests {
         path.append_str(".bar");
         assert_eq!(path.as_str(), "/foo//.bar");
 
-        // Push path with leading slash
         let mut path = OwnedPath::new("/foo");
         path.push("/bar");
         assert_eq!(path.as_str(), "/foo//bar");
 
-        // Push path with trailing slash
         let mut path = OwnedPath::new("/foo");
         path.push("bar/");
         assert_eq!(path.as_str(), "/foo/bar/");
 
-        // Push to relative path (makes it absolute)
         let mut path = OwnedPath::new("foo");
         path.push("bar");
         assert_eq!(path.as_str(), "foo/bar");
 
-        // Push multiple components
         let mut path = OwnedPath::new("");
         path.push("foo");
         path.push("bar");
         path.push("baz");
         assert_eq!(path.as_str(), "/foo/bar/baz");
 
-        // Push with dots
         let mut path = OwnedPath::new("/foo");
         path.push(".");
         assert_eq!(path.as_str(), "/foo/.");
@@ -208,7 +195,6 @@ mod tests {
         path.push("..");
         assert_eq!(path.as_str(), "/foo/..");
 
-        // Push hidden file
         let mut path = OwnedPath::new("/foo");
         path.push(".hidden");
         assert_eq!(path.as_str(), "/foo/.hidden");
@@ -216,19 +202,15 @@ mod tests {
 
     #[test]
     fn test_new() {
-        // From &str
         let path = OwnedPath::new("/foo/bar");
         assert_eq!(path.as_str(), "/foo/bar");
 
-        // From String
         let path = OwnedPath::new(alloc::string::String::from("/foo/bar"));
         assert_eq!(path.as_str(), "/foo/bar");
 
-        // Empty
         let path = OwnedPath::new("");
         assert_eq!(path.as_str(), "");
 
-        // With special characters
         let path = OwnedPath::new("/foo-bar_baz.txt");
         assert_eq!(path.as_str(), "/foo-bar_baz.txt");
     }
@@ -239,7 +221,6 @@ mod tests {
         let path: &Path = &owned;
         assert_eq!(&**path, "/foo/bar");
 
-        // Should have access to Path methods
         assert!(owned.is_absolute());
         assert_eq!(owned.file_name(), Some("bar"));
         assert_eq!(owned.parent(), Some(Path::new("/foo")));
@@ -295,7 +276,6 @@ mod tests {
 
     #[test]
     fn test_mixed_operations() {
-        // Mix append_str and push
         let mut path = OwnedPath::new("/foo");
         path.push("bar");
         path.append_str(".txt");

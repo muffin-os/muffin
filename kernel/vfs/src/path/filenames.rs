@@ -132,7 +132,6 @@ mod tests {
             ("///foo/bar/baz///", &["foo", "bar", "baz"]),
         ] {
             let path = Path::new(path);
-            // iterator
             {
                 let mut filenames = path.filenames();
                 for (i, expected) in expected.iter().enumerate() {
@@ -147,7 +146,6 @@ mod tests {
                 assert_eq!(filenames.next(), None, "for path '{}'", path);
             }
 
-            // double-ended iterator
             {
                 let mut filenames = path.filenames();
                 for (i, expected) in expected.iter().rev().enumerate() {
@@ -178,7 +176,6 @@ mod tests {
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
         assert_eq!(names, alloc::vec!["..", "foo"]);
 
-        // Single dot paths
         let path = Path::new("/.");
         let names: alloc::vec::Vec<&str> = path.filenames().collect();
         assert_eq!(names, alloc::vec!["."]);
@@ -293,7 +290,6 @@ mod tests {
 
     #[test]
     fn test_filenames_empty_components() {
-        // Multiple slashes create no empty components
         let path = Path::new("/////");
         assert_eq!(path.filenames().count(), 0);
 
@@ -315,7 +311,6 @@ mod tests {
 
     #[test]
     fn test_filenames_very_long_path() {
-        // Testing with a long path to ensure the iterator works correctly
         let path = Path::new("/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z");
         let count = path.filenames().count();
         assert_eq!(count, 26);

@@ -91,7 +91,6 @@ mod tests {
 
     #[test]
     fn test_try_new_valid() {
-        // Basic absolute paths
         assert!(AbsolutePath::try_new("/").is_ok());
         assert!(AbsolutePath::try_new("//").is_ok());
         assert!(AbsolutePath::try_new("///").is_ok());
@@ -99,13 +98,11 @@ mod tests {
         assert!(AbsolutePath::try_new("/foo/bar").is_ok());
         assert!(AbsolutePath::try_new("/foo/bar/baz").is_ok());
 
-        // Paths with special characters
         assert!(AbsolutePath::try_new("/foo-bar").is_ok());
         assert!(AbsolutePath::try_new("/foo_bar").is_ok());
         assert!(AbsolutePath::try_new("/foo.bar").is_ok());
         assert!(AbsolutePath::try_new("/foo bar").is_ok());
 
-        // Paths with dots
         assert!(AbsolutePath::try_new("/.").is_ok());
         assert!(AbsolutePath::try_new("/..").is_ok());
         assert!(AbsolutePath::try_new("/.hidden").is_ok());
@@ -113,7 +110,6 @@ mod tests {
 
     #[test]
     fn test_try_new_invalid() {
-        // Relative paths should fail
         assert!(AbsolutePath::try_new("").is_err());
         assert!(AbsolutePath::try_new("foo").is_err());
         assert!(AbsolutePath::try_new("foo/bar").is_err());
@@ -125,14 +121,12 @@ mod tests {
 
     #[test]
     fn test_try_from_str() {
-        // Valid conversions
         let result: Result<&AbsolutePath, _> = "/".try_into();
         assert!(result.is_ok());
 
         let result: Result<&AbsolutePath, _> = "/foo/bar".try_into();
         assert!(result.is_ok());
 
-        // Invalid conversions
         let result: Result<&AbsolutePath, _> = "".try_into();
         assert!(result.is_err());
 
@@ -145,12 +139,10 @@ mod tests {
 
     #[test]
     fn test_try_from_path() {
-        // Valid conversions
         let path = Path::new("/foo/bar");
         let result: Result<&AbsolutePath, _> = path.try_into();
         assert!(result.is_ok());
 
-        // Invalid conversions
         let path = Path::new("foo/bar");
         let result: Result<&AbsolutePath, _> = path.try_into();
         assert!(result.is_err());
@@ -162,7 +154,6 @@ mod tests {
 
     #[test]
     fn test_parent_absolute() {
-        // Basic parent tests
         let path: &AbsolutePath = "/foo/bar".try_into().unwrap();
         let parent = path.parent();
         assert!(parent.is_some());
@@ -176,24 +167,20 @@ mod tests {
         let parent = path.parent();
         assert!(parent.is_none());
 
-        // Multiple slashes
         let path: &AbsolutePath = "//foo//bar".try_into().unwrap();
         let parent = path.parent();
         assert!(parent.is_some());
         assert_eq!(&parent.unwrap().to_string(), "//foo");
 
-        // Double slash path
         let path: &AbsolutePath = "//foo".try_into().unwrap();
         let parent = path.parent();
         assert!(parent.is_none());
 
-        // Trailing slashes
         let path: &AbsolutePath = "/foo/bar/".try_into().unwrap();
         let parent = path.parent();
         assert!(parent.is_some());
         assert_eq!(&parent.unwrap().to_string(), "/foo");
 
-        // Deeply nested
         let path: &AbsolutePath = "/a/b/c/d/e/f".try_into().unwrap();
         let parent = path.parent();
         assert!(parent.is_some());
