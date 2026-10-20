@@ -13,6 +13,7 @@ pub enum SignalTarget {
     BroadcastAll,
     SpecificProcess(ProcessId),
     ProcessGroup(ProcessId),
+    CallerGroup,
 }
 
 #[instrument(level = Level::TRACE, skip(cx))]
@@ -56,12 +57,10 @@ pub fn sys_kill<Cx: SignalAccess + PermissionAccess + ProcessesAccess>(
             )
         }
         SignalTarget::ProcessGroup(process_group_id) => {
-            let effective_pgid = if process_group_id.is_root() {
-                current_pgid
-            } else {
-                process_group_id
-            };
-            distribute_signal(cx, cx.processes_in_group(effective_pgid), info)
+            distribute_signal(cx, cx.processes_in_group(process_group_id), info)
+        }
+        SignalTarget::CallerGroup => {
+            distribute_signal(cx, cx.processes_in_group(current_pgid), info)
         }
     }
 }
@@ -718,28 +717,20 @@ mod tests {
     }
 
     #[test]
-    fn test_process_group_with_root_pid() {
+    fn test_process_group_zero_is_the_kernel_group() {
         let current_pid = pid!(1);
         let current_pgid = pid!(5);
         let pid2 = pid!(2);
-        let pid3 = pid!(3);
-        let pid4 = pid!(4);
-        let pgid5 = pid!(5);
-        let pgid6 = pid!(6);
 
         let mut cx = TestContext::new(current_pid, current_pgid, 1000);
-        cx.add_process(pid2, pgid5, 1000);
-        cx.add_process(pid3, pgid5, 1000);
-        cx.add_process(pid4, pgid6, 1000);
+        cx.add_process(pid!(0), pid!(0), 0);
+        cx.add_process(pid2, current_pgid, 1000);
 
         let result = sys_kill(&cx, SignalTarget::ProcessGroup(pid!(0)), Signal::Interrupt);
-        assert_eq!(result, Ok(0), "group kill via root pid succeeds");
+        assert_eq!(result, Ok(0), "group 0 kill succeeds");
 
-        let delivered = cx.get_delivered();
-        assert_eq!(delivered.len(), 2, "two group members received");
-        let pids: Vec<_> = delivered.iter().map(|s| s.pid).collect();
-        assert!(pids.contains(&pid2), "pid2 in group received");
-        assert!(pids.contains(&pid3), "pid3 in group received");
+        let pids: Vec<_> = cx.get_delivered().iter().map(|s| s.pid).collect();
+        assert_eq!(pids, [pid!(0)], "only the member of group 0 received");
     }
 
     #[test]
@@ -992,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_group_zero_uses_current_pgid() {
+    fn test_caller_group_uses_current_pgid() {
         let current_pid = pid!(7);
         let pid8 = pid!(8);
         let pid9 = pid!(9);
@@ -1005,8 +996,8 @@ mod tests {
         cx.add_process(pid9, pgid7, 1000);
         cx.add_process(pid10, pgid8, 1000);
 
-        let result = sys_kill(&cx, SignalTarget::ProcessGroup(pid!(0)), Signal::Interrupt);
-        assert_eq!(result, Ok(0), "group zero uses caller pgid");
+        let result = sys_kill(&cx, SignalTarget::CallerGroup, Signal::Interrupt);
+        assert_eq!(result, Ok(0), "caller group kill succeeds");
 
         let delivered = cx.get_delivered();
         assert_eq!(delivered.len(), 2, "two caller-group members received");

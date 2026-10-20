@@ -7,7 +7,7 @@ use kernel_abi::{
     EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno, IoctlRequest,
     ProcessId, SigAction, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence, syscall_name,
 };
-use kernel_syscall::access::{FileAccess, ProcessesAccess};
+use kernel_syscall::access::{FileAccess, PermissionAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
@@ -94,11 +94,10 @@ fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
     // POSIX pid encoding: > 0 targets that process, 0 the caller's process
-    // group (sys_kill substitutes the caller's pgid for the root id), -1
-    // broadcasts, < -1 targets the group -pid.
+    // group, -1 broadcasts, < -1 targets the group -pid.
     let target = match pid as isize {
         1.. => SignalTarget::SpecificProcess(ProcessId::from(pid as u64)),
-        0 => SignalTarget::ProcessGroup(ProcessId::from(0_u64)),
+        0 => SignalTarget::CallerGroup,
         -1 => SignalTarget::BroadcastAll,
         v => SignalTarget::ProcessGroup(ProcessId::from(v.unsigned_abs() as u64)),
     };
@@ -107,14 +106,11 @@ fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
         // POSIX existence probe: no signal is sent, only the target is resolved.
         let exists = match target {
             SignalTarget::SpecificProcess(pid) => cx.process_by_id(pid).is_some(),
-            SignalTarget::ProcessGroup(pgid) => {
-                let effective = if pgid.is_root() {
-                    Process::current().pid()
-                } else {
-                    pgid
-                };
-                cx.processes_in_group(effective).next().is_some()
-            }
+            SignalTarget::ProcessGroup(pgid) => cx.processes_in_group(pgid).next().is_some(),
+            SignalTarget::CallerGroup => cx
+                .processes_in_group(cx.current_identity().process_group_id)
+                .next()
+                .is_some(),
             SignalTarget::BroadcastAll => true,
         };
         return if exists { Ok(0) } else { Err(ESRCH) };
