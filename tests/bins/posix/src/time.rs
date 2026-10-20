@@ -1,8 +1,8 @@
 use core::time::Duration;
 
 use minilib::{
-    CLOCK_MONOTONIC, CLOCK_REALTIME, EFAULT, EINVAL, SYS_CLOCK_GETTIME, SYS_NANOSLEEP, Timespec,
-    clock_gettime, nanosleep, ret, syscall2,
+    ClockId, EFAULT, EINVAL, SYS_CLOCK_GETTIME, SYS_NANOSLEEP, Timespec, clock_gettime, nanosleep,
+    ret, syscall2,
 };
 
 use crate::check;
@@ -15,7 +15,7 @@ const NS_PER_SEC: i64 = 1_000_000_000;
 const SLEEP: Duration = Duration::from_millis(20);
 const MAX_ELAPSED: Duration = Duration::from_secs(2);
 
-fn gettime(name: &str, clockid: usize) -> Duration {
+fn gettime(name: &str, clockid: ClockId) -> Duration {
     let mut ts = Timespec::default();
     check::unwrap_or_fail(name, clock_gettime(clockid, &mut ts));
     check::unwrap_or_fail(name, Duration::try_from(ts))
@@ -24,32 +24,34 @@ fn gettime(name: &str, clockid: usize) -> Duration {
 pub fn run() {
     check::group("time");
 
-    let first = gettime("time/monotonic_ok", CLOCK_MONOTONIC);
-    let second = gettime("time/monotonic_second_ok", CLOCK_MONOTONIC);
+    let first = gettime("time/monotonic_ok", ClockId::Monotonic);
+    let second = gettime("time/monotonic_second_ok", ClockId::Monotonic);
     check::require("time/monotonic_nondecreasing", second >= first);
 
-    let realtime = gettime("time/realtime_ok", CLOCK_REALTIME);
+    let realtime = gettime("time/realtime_ok", ClockId::Realtime);
     check::require(
         "time/realtime_at_or_after_monotonic",
         realtime.as_secs() >= second.as_secs(),
     );
 
+    // Only the raw syscall can hand the kernel a clockid `ClockId` cannot name.
     let mut sink = Timespec::default();
+    let sink_ptr = core::ptr::from_mut(&mut sink) as usize;
     check::expect_err(
         "time/unknown_clock",
-        clock_gettime(UNKNOWN_CLOCK, &mut sink),
+        ret(unsafe { syscall2(SYS_CLOCK_GETTIME, UNKNOWN_CLOCK, sink_ptr) }),
         EINVAL,
     );
     // Safety: these pointers are deliberately invalid, and the kernel rejecting
     // them before any access is what each check asserts.
     check::expect_err(
         "time/gettime_null_tp",
-        ret(unsafe { syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, 0) }),
+        ret(unsafe { syscall2(SYS_CLOCK_GETTIME, ClockId::Monotonic as usize, 0) }),
         EFAULT,
     );
     check::expect_err(
         "time/gettime_kernel_tp",
-        ret(unsafe { syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, KERNEL_PTR) }),
+        ret(unsafe { syscall2(SYS_CLOCK_GETTIME, ClockId::Monotonic as usize, KERNEL_PTR) }),
         EFAULT,
     );
 
@@ -101,9 +103,9 @@ pub fn run() {
 
     check::expect_ok("time/sleep_zero", nanosleep(&Timespec::default(), None), ());
 
-    let before = gettime("time/sleep_before_ok", CLOCK_MONOTONIC);
+    let before = gettime("time/sleep_before_ok", ClockId::Monotonic);
     check::expect_ok("time/sleep_20ms", nanosleep(&SLEEP.into(), None), ());
-    let after = gettime("time/sleep_after_ok", CLOCK_MONOTONIC);
+    let after = gettime("time/sleep_after_ok", ClockId::Monotonic);
     let elapsed = after.saturating_sub(before);
     check::require("time/sleep_20ms_lower_bound", elapsed >= SLEEP);
     check::require("time/sleep_20ms_upper_bound", elapsed <= MAX_ELAPSED);

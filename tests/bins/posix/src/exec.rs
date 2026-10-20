@@ -2,8 +2,8 @@ use alloc::vec;
 use core::time::Duration;
 
 use minilib::{
-    CLOCK_MONOTONIC, E2BIG, EFAULT, EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX, SYS_EXECVE,
-    StrSlice, Timespec, clock_gettime, execve, syscall6,
+    ClockId, E2BIG, EFAULT, EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX, SYS_EXECVE, StrSlice,
+    Timespec, clock_gettime, execve, syscall6,
 };
 
 use crate::check;
@@ -32,7 +32,7 @@ fn now() -> Duration {
     let mut ts = Timespec::default();
     check::unwrap_or_fail(
         "execve/clock_setup",
-        clock_gettime(CLOCK_MONOTONIC, &mut ts),
+        clock_gettime(ClockId::Monotonic, &mut ts),
     );
     check::unwrap_or_fail("execve/clock_setup", Duration::try_from(ts))
 }

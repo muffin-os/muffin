@@ -4,9 +4,9 @@ use core::time::Duration;
 
 use access::KernelAccess;
 use kernel_abi::{
-    EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno, IoctlRequest,
-    MapFlags, ProcessId, ProtFlags, SigAction, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence,
-    syscall_name,
+    ClockId, EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno,
+    IoctlRequest, MapFlags, ProcessId, ProtFlags, SigAction, SigMaskHow, SigSet, Signal, Stat,
+    Timespec, Whence, syscall_name,
 };
 use kernel_syscall::access::{FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
@@ -374,13 +374,12 @@ fn dispatch_sys_lseek(fd: usize, offset: usize, whence: usize) -> Result<usize, 
 /// POSIX clock_gettime backed by the HPET main counter.
 fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno> {
     let since_boot = hpet().read().now().since_boot();
-    let now = match clockid {
-        kernel_abi::CLOCK_MONOTONIC => since_boot,
-        kernel_abi::CLOCK_REALTIME => {
+    let now = match ClockId::try_from(clockid)? {
+        ClockId::Monotonic => since_boot,
+        ClockId::Realtime => {
             let boot = Duration::from_secs(*crate::BOOT_TIME_SECONDS.get().ok_or(EINVAL)?);
             boot.checked_add(since_boot).ok_or(EINVAL)?
         }
-        _ => return Err(EINVAL),
     };
     write_user::<Timespec>(tp, Timespec::from(now))?;
     Ok(0)

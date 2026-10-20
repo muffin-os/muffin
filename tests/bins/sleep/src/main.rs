@@ -4,7 +4,7 @@
 use core::time::Duration;
 
 use minilib::{
-    CLOCK_MONOTONIC, EINTR, Signal, Timespec, clock_gettime, exit, getpid, install_handler, kill,
+    ClockId, EINTR, Signal, Timespec, clock_gettime, exit, getpid, install_handler, kill,
     nanosleep, println,
 };
 
@@ -12,7 +12,7 @@ extern "C" fn urgent_handler(_signo: Signal) {}
 
 fn now() -> Duration {
     let mut ts = Timespec::default();
-    let Ok(now) = clock_gettime(CLOCK_MONOTONIC, &mut ts).and_then(|()| Duration::try_from(ts))
+    let Ok(now) = clock_gettime(ClockId::Monotonic, &mut ts).and_then(|()| Duration::try_from(ts))
     else {
         println!("sleep: UNREACHABLE clock");
         exit(1);

@@ -15,9 +15,9 @@ use core::ffi::c_int;
 
 pub use io::{Stderr, Stdout};
 pub use kernel_abi::{
-    ARG_MAX, CLOCK_MONOTONIC, CLOCK_REALTIME, DefaultAction, E2BIG, EACCES, EBADF, EFAULT, EINTR,
-    EINVAL, EISDIR, ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTDIR, ENOTTY, EOVERFLOW,
-    EPERM, ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, PATH_MAX, ProtFlags,
+    ARG_MAX, ClockId, DefaultAction, E2BIG, EACCES, EBADF, EFAULT, EINTR, EINVAL, EISDIR,
+    ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTDIR, ENOTTY, EOVERFLOW, EPERM, ERANGE,
+    ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, PATH_MAX, ProtFlags,
     SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FSTAT, SYS_FSYNC,
     SYS_GETCWD, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN,
     SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN,
@@ -83,9 +83,16 @@ pub fn fsync(fd: c_int) -> Result<(), Errno> {
     ret(unsafe { syscall1(SYS_FSYNC, fd as usize) }).map(|_| ())
 }
 
-pub fn clock_gettime(clockid: usize, tp: &mut Timespec) -> Result<(), Errno> {
+pub fn clock_gettime(clockid: ClockId, tp: &mut Timespec) -> Result<(), Errno> {
     // Safety: `tp` is a live, exclusive reference for the whole call.
-    ret(unsafe { syscall2(SYS_CLOCK_GETTIME, clockid, tp as *mut Timespec as usize) }).map(|_| ())
+    ret(unsafe {
+        syscall2(
+            SYS_CLOCK_GETTIME,
+            clockid as usize,
+            tp as *mut Timespec as usize,
+        )
+    })
+    .map(|_| ())
 }
 
 pub fn nanosleep(req: &Timespec, rem: Option<&mut Timespec>) -> Result<(), Errno> {

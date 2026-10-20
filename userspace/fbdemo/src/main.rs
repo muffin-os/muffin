@@ -12,13 +12,13 @@ use gfx::backend::software::{
 };
 use kernel_abi::gfx::BufferDesc;
 use minilib::{
-    CLOCK_MONOTONIC, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Timespec, clock_gettime,
-    exit, fsync, ioctl, mmap, open, println,
+    ClockId, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Timespec, clock_gettime, exit, fsync,
+    ioctl, mmap, open, println,
 };
 
 fn now() -> Duration {
     let mut tp = Timespec::default();
-    let Ok(now) = clock_gettime(CLOCK_MONOTONIC, &mut tp).and_then(|()| Duration::try_from(tp))
+    let Ok(now) = clock_gettime(ClockId::Monotonic, &mut tp).and_then(|()| Duration::try_from(tp))
     else {
         println!("fbdemo: FAIL clock");
         exit(1);

@@ -2,12 +2,31 @@ use core::time::Duration;
 
 use crate::{EINVAL, Errno};
 
-/// The `clockid_t` of the system-wide wall clock, seconds and nanoseconds
-/// since the Epoch (1970-01-01 00:00:00 UTC).
-pub const CLOCK_REALTIME: usize = 0;
-/// The `clockid_t` of a clock that cannot be set and never jumps backwards.
-/// Measures time since boot.
-pub const CLOCK_MONOTONIC: usize = 1;
+/// POSIX `clockid_t`.
+///
+/// The discriminants are the `CLOCK_REALTIME` and `CLOCK_MONOTONIC` numbers,
+/// which userspace passes raw in the syscall register.
+#[repr(usize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ClockId {
+    /// System-wide wall clock, seconds and nanoseconds since the Epoch
+    /// (1970-01-01 00:00:00 UTC).
+    Realtime = 0,
+    /// Cannot be set and never jumps backwards. Measures time since boot.
+    Monotonic = 1,
+}
+
+impl TryFrom<usize> for ClockId {
+    type Error = Errno;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Realtime),
+            1 => Ok(Self::Monotonic),
+            _ => Err(EINVAL),
+        }
+    }
+}
 
 /// POSIX `struct timespec` as defined in `<time.h>`.
 ///
