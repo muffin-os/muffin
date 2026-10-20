@@ -25,7 +25,7 @@ impl FrameState {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct RegionFrameIndex {
     region_idx: usize,
     frame_idx: usize,
@@ -73,21 +73,21 @@ impl PhysicalMemoryManager {
         None
     }
 
-    fn update_first_free(&mut self, start_region: usize, start_index: usize) {
-        if let Some(region) = self.regions.get(start_region)
-            && start_index < region.len()
-            && let Some(idx) = region.frames()[start_index..]
+    fn update_first_free(&mut self, start: RegionFrameIndex) {
+        if let Some(region) = self.regions.get(start.region_idx)
+            && start.frame_idx < region.len()
+            && let Some(idx) = region.frames()[start.frame_idx..]
                 .iter()
                 .position(|&s| s == FrameState::Free)
         {
             self.first_free = Some(RegionFrameIndex {
-                region_idx: start_region,
-                frame_idx: start_index + idx,
+                region_idx: start.region_idx,
+                frame_idx: start.frame_idx + idx,
             });
             return;
         }
 
-        for (region_idx, region) in self.regions.iter().enumerate().skip(start_region + 1) {
+        for (region_idx, region) in self.regions.iter().enumerate().skip(start.region_idx + 1) {
             if let Some(frame_idx) = region.frames().iter().position(|&s| s == FrameState::Free) {
                 self.first_free = Some(RegionFrameIndex {
                     region_idx,
@@ -147,8 +147,15 @@ impl PhysicalMemoryManager {
                     self.regions[region_idx].frames_mut()[frame_start_idx..=frame_end_idx]
                         .fill(FrameState::Allocated);
 
-                    if region_idx == ff.region_idx && frame_start_idx <= ff.frame_idx {
-                        self.update_first_free(region_idx, frame_end_idx + 1);
+                    let allocated_start = RegionFrameIndex {
+                        region_idx,
+                        frame_idx: frame_start_idx,
+                    };
+                    if allocated_start <= ff {
+                        self.update_first_free(RegionFrameIndex {
+                            region_idx,
+                            frame_idx: frame_end_idx + 1,
+                        });
                     }
 
                     return Some(PhysFrameRangeInclusive {
@@ -207,16 +214,7 @@ impl PhysicalFrameAllocator<Size4KiB> for PhysicalMemoryManager {
         if state == FrameState::Allocated {
             self.regions[loc.region_idx].frames_mut()[loc.frame_idx] = FrameState::Free;
 
-            // Update first_free if this is before the current first_free
-            let is_before_first_free = match self.first_free {
-                Some(ff) => {
-                    loc.region_idx < ff.region_idx
-                        || (loc.region_idx == ff.region_idx && loc.frame_idx < ff.frame_idx)
-                }
-                None => true,
-            };
-
-            if is_before_first_free {
+            if self.first_free.is_none_or(|ff| loc < ff) {
                 self.first_free = Some(loc);
             }
 
