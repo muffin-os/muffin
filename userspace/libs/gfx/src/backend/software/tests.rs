@@ -95,6 +95,15 @@ fn new_rejects_zero_height() {
 }
 
 #[test]
+#[should_panic(expected = "too small for 4x4 at stride 16px")]
+fn new_rejects_byte_pitch_passed_as_pixel_stride() {
+    // A 4x4 u32 target has a 16 byte pitch; handing that pitch to `stride_px`
+    // asks for four times the pixels the target holds.
+    let mut target = [0u32; 16];
+    let _ = SoftQueue::new(&mut target, 4, 4, 16);
+}
+
+#[test]
 fn no_draw_leaves_framebuffer_blank() {
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
     let pso = simple_pipeline(&mut backend, 8);

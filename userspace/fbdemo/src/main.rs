@@ -149,7 +149,7 @@ fn main() -> i32 {
     // The software queue writes one u32 per pixel, so any other depth would
     // scribble over neighbouring pixels.
     let pixel_bytes = size_of::<u32>();
-    let stride = info.pitch as usize / pixel_bytes;
+    let stride_px = info.pitch as usize / pixel_bytes;
     let width = info.width as usize;
     let height = info.height as usize;
     if info.bpp as usize != 8 * pixel_bytes
@@ -160,10 +160,10 @@ fn main() -> i32 {
         return 1;
     }
     // SAFETY: the mmap covers `len` bytes and is page-aligned, hence u32-aligned.
-    // The geometry check above keeps `stride * (height - 1) + width` u32 words
+    // The geometry check above keeps `stride_px * (height - 1) + width` u32 words
     // within `len = pitch * height` bytes.
     let fb_u32 = unsafe {
-        core::slice::from_raw_parts_mut(addr.cast::<u32>(), stride * (height - 1) + width)
+        core::slice::from_raw_parts_mut(addr.cast::<u32>(), stride_px * (height - 1) + width)
     };
     // The mapped framebuffer's initial content is undefined and `SoftQueue::new`
     // never clears its target, so uncovered pixels would keep whatever the device
@@ -171,7 +171,7 @@ fn main() -> i32 {
     fb_u32.fill(0);
 
     let t = now();
-    let mut q = SoftQueue::new(fb_u32, info.width, info.height, stride);
+    let mut q = SoftQueue::new(fb_u32, info.width, info.height, stride_px);
     report("queue_new", t, now());
 
     for frame in 0..5u32 {

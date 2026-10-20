@@ -14,7 +14,7 @@ pub struct SoftQueue<'fb> {
     target: &'fb mut [u32],
     width: u32,
     height: u32,
-    stride: usize,
+    stride_px: usize,
     vertex_input: Vec<f32>,
     vertex_outputs: Vec<f32>,
     interpolants: Vec<f32>,
@@ -37,32 +37,34 @@ fn scratch(buf: &mut Vec<f32>, len: usize) -> &mut [f32] {
 
 impl<'fb> SoftQueue<'fb> {
     /// Rasterizes into `target`, which must hold at least
-    /// `stride * (height - 1) + width` u32 pixels. `stride` is measured in
-    /// u32 pixels, not bytes, so a caller holding a byte pitch passes
-    /// `pitch / 4`.
+    /// `stride_px * (height - 1) + width` u32 pixels. A caller holding a byte
+    /// pitch passes `pitch / 4`.
     ///
     /// Never clears `target`. Uncovered pixels keep whatever was already
     /// there, so the caller must clear once before the first draw.
     ///
     /// # Panics
     ///
-    /// Panics if `height` is zero, `stride` is smaller than `width`, or
+    /// Panics if `height` is zero, `stride_px` is smaller than `width`, or
     /// `target` is shorter than the required pixel count.
-    pub fn new(target: &'fb mut [u32], width: u32, height: u32, stride: usize) -> Self {
+    pub fn new(target: &'fb mut [u32], width: u32, height: u32, stride_px: usize) -> Self {
         let w = width as usize;
         let h = height as usize;
         assert!(h > 0, "height 0");
-        assert!(stride >= w, "stride {stride} smaller than width {width}");
         assert!(
-            target.len() >= stride * (h - 1) + w,
-            "target len {} too small for {width}x{height} at stride {stride}",
+            stride_px >= w,
+            "stride {stride_px}px smaller than width {width}"
+        );
+        assert!(
+            target.len() >= stride_px * (h - 1) + w,
+            "target len {} too small for {width}x{height} at stride {stride_px}px",
             target.len()
         );
         Self {
             target,
             width,
             height,
-            stride,
+            stride_px,
             vertex_input: Vec::new(),
             vertex_outputs: Vec::new(),
             interpolants: Vec::new(),
@@ -71,8 +73,8 @@ impl<'fb> SoftQueue<'fb> {
     }
 
     /// Returns the target as a flat slice of `0xAARRGGBB` pixels, row-major
-    /// from top-left. Rows are `stride` pixels apart, so a target with
-    /// `stride > width` carries padding columns between rows.
+    /// from top-left. Rows are `stride_px` pixels apart, so a target with
+    /// `stride_px > width` carries padding columns between rows.
     pub fn framebuffer(&self) -> &[u32] {
         &*self.target
     }
@@ -87,7 +89,7 @@ impl<'fb> SoftQueue<'fb> {
 
         let w = self.width as f32;
         let h = self.height as f32;
-        let target_stride = self.stride;
+        let target_stride = self.stride_px;
         let Self {
             target,
             vertex_input,
