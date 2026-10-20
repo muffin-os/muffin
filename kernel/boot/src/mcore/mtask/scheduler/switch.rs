@@ -64,46 +64,29 @@ macro_rules! set_task_switched {
     };
 }
 
-/// Perform a context switch.
-///
-/// `_old_stack` is the pointer where the current stack pointer will be written to.
-/// ```notrust
-/// *_old_stack = $rsp;
-/// ```
-/// `_new_stack` is the stack pointer that we want to switch to.
-/// ```notrust
-/// $rsp = _new_stack;
-/// ```
-///
-/// Notice that `_old_stack` is being dereferenced, while `_new_stack` is not.
+/// Saves the current context, writes the resulting stack pointer to
+/// `_old_stack`, loads `_new_cr3_value` into CR3 and resumes the context
+/// saved at `_new_stack`. Returns only when something later switches back
+/// to the saved context, with interrupts still disabled.
 ///
 /// # Safety
-///
-/// Disable interrupts before you call this. Interrupts remain disabled across
-/// this call; the caller is responsible for re-enabling.
-///
-/// Switching to another context is unsafe, as it executes
-/// some other code without any drop or safety guarantees
-/// about the caller of this method. The caller must ensure
-/// that `_old_stack` and `_new_stack` are valid pointers to
-/// a thread stack.
+/// Interrupts must be disabled. `_old_stack` must be valid for a write of
+/// one `usize`. `_new_stack` must point at a context pushed by this function
+/// or laid out like one, on a stack that is mapped in the address space
+/// `_new_cr3_value` selects, and `_new_cr3_value` must be a valid CR3 value.
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_impl(
     _old_stack: *mut usize,
     _new_stack: *const u8,
     _new_cr3_value: usize,
 ) {
-    // _old_stack is located in $rdi, _new_stack is in $rsi
-    // $rdi -> old_stack
-    // $rsi -> new_stack
-    // $rdx -> new_cr3_value
-
+    // SysV ABI: rdi = _old_stack, rsi = _new_stack, rdx = _new_cr3_value.
     naked_asm!(
         push_context!(),
-        "mov [rdi], rsp", // write the stack pointer rsp at *_old_stack
-        "mov rsp, rsi",   // write _new_stack into rsp
+        "mov [rdi], rsp",
+        "mov rsp, rsi",
         set_task_switched!(),
-        "mov cr3, rdx", // write _new_cr3_value into cr3
+        "mov cr3, rdx",
         pop_context!(),
         "ret"
     )
