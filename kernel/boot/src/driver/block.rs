@@ -7,7 +7,6 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_devfs::BlockDeviceFile;
-use kernel_device::RegisterDeviceError;
 use kernel_device::block::BlockDevice;
 use kernel_vfs::path::AbsoluteOwnedPath;
 use spin::RwLock;
@@ -22,10 +21,12 @@ static BLOCK_DEVICE_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct BlockDevices;
 
 impl BlockDevices {
-    // TODO: add documentation
-    #[expect(clippy::missing_errors_doc)]
-    #[expect(clippy::missing_panics_doc)]
-    pub fn register_block_device<D>(device: Arc<RwLock<D>>) -> Result<(), RegisterDeviceError>
+    /// Registers the device under the next free id and exposes it as `/blk{id}`
+    /// in devfs.
+    ///
+    /// # Panics
+    /// Panics if `/blk{id}` already exists in devfs.
+    pub fn register_block_device<D>(device: Arc<RwLock<D>>)
     where
         D: BlockDevice<Error = Box<dyn Error>> + Send + Sync + 'static,
     {
@@ -39,8 +40,6 @@ impl BlockDevices {
                 move || Ok(BlockDeviceFile::new(device.clone()))
             })
             .unwrap();
-
-        Ok(())
     }
 
     pub fn by_id(id: u64) -> Option<BlockDeviceHandle> {

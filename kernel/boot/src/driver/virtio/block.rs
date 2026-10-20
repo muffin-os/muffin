@@ -63,7 +63,7 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
         inner: Arc::new(Mutex::new(Inner { blk, bounce })),
     };
     let device = Arc::new(RwLock::new(device));
-    BlockDevices::register_block_device(device.clone())?;
+    BlockDevices::register_block_device(device.clone());
 
     Ok(())
 }
