@@ -102,8 +102,6 @@ impl KernelTest {
     /// Stages the writable images and spawns QEMU. Shared by [`Self::run`] and
     /// [`Self::run_until_poweroff`].
     fn boot(&self) -> Child {
-        // Runfiles are read-only build outputs. Booting them directly fails to
-        // open and would corrupt the action cache.
         let out_dir = self.env.work_dir.join(self.name);
         fs::create_dir_all(&out_dir).expect("should be able to create the test work directory");
         let disk_image = stage_writable(&self.env.disk, &out_dir.join("disk.img"));
@@ -111,10 +109,8 @@ impl KernelTest {
 
         let ovmf_code = self.env.ovmf_code.display();
         let ovmf_vars = ovmf_vars_image.display();
-        // Accelerate with KVM when the host exposes it, falling back to TCG so
-        // the test still runs on CI hosts without /dev/kvm. `-cpu max` (below)
-        // stays valid under both, unlike `-cpu host`, which requires a hardware
-        // accelerator.
+        // Falls back to TCG so CI hosts without /dev/kvm still boot. `-cpu max`
+        // below stays valid under both, unlike `-cpu host`.
         let accel: &[&str] = if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
             &["-machine", "accel=kvm:tcg"]
         } else {
@@ -125,8 +121,7 @@ impl KernelTest {
             .arg("stdio")
             .arg("-display")
             .arg("none")
-            // The runner's default. 512M shrinks the kernel heap enough to OOM
-            // during boot (backtrace context initialization).
+            // 512M OOMs the kernel heap during boot.
             .arg("-m")
             .arg("4G")
             .arg("-drive")
@@ -366,10 +361,10 @@ fn spawn_serial_reader(child: &mut Child) -> (mpsc::Receiver<String>, thread::Jo
 }
 
 /// Stages a runfiles image at `dest`, writable, and returns `dest`.
-///
-/// Runfiles arrive read-only. QEMU opens both the vars flash and the disk
-/// read-write.
 fn stage_writable(src: &Path, dest: &Path) -> PathBuf {
+    // Runfiles are read-only build outputs, and QEMU opens the vars flash and
+    // the disk read-write. Writing them in place corrupts the action cache. The
+    // previous run left a read-only copy that must go before it can be replaced.
     let _ = fs::remove_file(dest);
     fs::copy(src, dest).unwrap_or_else(|e| {
         panic!(
