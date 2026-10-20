@@ -107,7 +107,7 @@ where
                     let old_total_size = entry.total_size;
                     entry.total_size = entry_size;
 
-                    let entry_serialized = entry.serialize(dir_entries_have_type);
+                    let entry_serialized = entry.serialize();
                     block_data[offset..offset + entry_serialized.len()]
                         .copy_from_slice(&entry_serialized);
 
@@ -126,7 +126,7 @@ where
                         name_bytes: name.as_bytes().to_vec(),
                     };
 
-                    let new_entry_serialized = new_entry.serialize(dir_entries_have_type);
+                    let new_entry_serialized = new_entry.serialize();
                     block_data[new_entry_offset..new_entry_offset + new_entry_serialized.len()]
                         .copy_from_slice(&new_entry_serialized);
 
@@ -198,7 +198,7 @@ impl DirEntry {
         })
     }
 
-    pub fn serialize(self, dir_entries_have_type: bool) -> Vec<u8> {
+    pub fn serialize(self) -> Vec<u8> {
         let name_length = self.name_bytes.len() as u16;
         let mut result = Vec::with_capacity(Self::size(name_length) as usize);
 
@@ -206,11 +206,10 @@ impl DirEntry {
         entry_no_name.inode = self.inode.into();
         entry_no_name.total_size = self.total_size;
         entry_no_name.name_length_lsb = name_length as u8;
-        if dir_entries_have_type {
-            entry_no_name.type_indicator_or_name_length_msb = self.type_indicator.unwrap() as u8;
-        } else {
-            entry_no_name.type_indicator_or_name_length_msb = (name_length >> 8) as u8;
-        }
+        entry_no_name.type_indicator_or_name_length_msb = match self.type_indicator {
+            Some(typ) => typ as u8,
+            None => (name_length >> 8) as u8,
+        };
 
         result.extend_from_slice(&<[u8; 8]>::from(entry_no_name));
         result.extend_from_slice(&self.name_bytes);
@@ -299,5 +298,30 @@ impl From<Type> for DirType {
             Type::UnixSocket => Self::UnixSocket,
             Type::SymLink => Self::SymLink,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Both entries point at inode 12 with a 16-byte record named "a.txt". Only
+    // byte 7 differs: 0 is the name-length high byte, 1 is the regular-file type.
+    const UNTYPED: [u8; 16] = [
+        12, 0, 0, 0, 16, 0, 5, 0, b'a', b'.', b't', b'x', b't', 0, 0, 0,
+    ];
+    const TYPED: [u8; 16] = [
+        12, 0, 0, 0, 16, 0, 5, 1, b'a', b'.', b't', b'x', b't', 0, 0, 0,
+    ];
+
+    #[test]
+    fn serialize_round_trips_both_layouts() {
+        let untyped = DirEntry::from(false, &UNTYPED).unwrap();
+        assert_eq!(None, untyped.typ());
+        assert_eq!(&UNTYPED[..13], &untyped.serialize()[..]);
+
+        let typed = DirEntry::from(true, &TYPED).unwrap();
+        assert_eq!(Some(DirType::RegularFile), typed.typ());
+        assert_eq!(&TYPED[..13], &typed.serialize()[..]);
     }
 }
