@@ -1,6 +1,6 @@
 use kernel_abi::{
     DefaultAction, EINVAL, EPERM, ESRCH, Errno, ProcessId, STOP_SIGNALS_MASK, SaFlags, SigAction,
-    SigInfo, SigInfoField, SigMaskHow, SigSet, Signal, default_action,
+    SigInfo, SigInfoField, SigMaskHow, SigSet, Signal,
 };
 use tracing::{Level, instrument};
 
@@ -222,7 +222,7 @@ impl SignalState {
         if action.handler.is_ignore() {
             Disposition::Ignore
         } else if action.handler.is_default() {
-            match default_action(signo) {
+            match signo.default_action() {
                 DefaultAction::Ignore => Disposition::Ignore,
                 DefaultAction::Terminate => Disposition::DefaultTerminate,
                 DefaultAction::Stop => Disposition::DefaultStop,

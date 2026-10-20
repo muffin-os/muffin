@@ -170,6 +170,37 @@ impl Signal {
     pub const fn bit(self) -> SigSet {
         1 << (self as i32 - 1)
     }
+
+    #[must_use]
+    pub const fn default_action(self) -> DefaultAction {
+        match self {
+            Self::Child | Self::WindowChanged | Self::Urgent | Self::Continue => {
+                DefaultAction::Ignore
+            }
+            Self::Stop | Self::TerminalStop | Self::TerminalInput | Self::TerminalOutput => {
+                DefaultAction::Stop
+            }
+            Self::Abort
+            | Self::Alarm
+            | Self::Bus
+            | Self::Fpe
+            | Self::Hangup
+            | Self::IllegalInstruction
+            | Self::Interrupt
+            | Self::Kill
+            | Self::Pipe
+            | Self::Quit
+            | Self::Segfault
+            | Self::Terminate
+            | Self::Usr1
+            | Self::Usr2
+            | Self::BadSyscall
+            | Self::Trap
+            | Self::VirtualTimerAlarm
+            | Self::ExceededCpuLimit
+            | Self::ExceededFileSizeLimit => DefaultAction::Terminate,
+        }
+    }
 }
 
 pub const STOP_SIGNALS_MASK: SigSet = Signal::Stop.bit()
@@ -205,37 +236,6 @@ pub enum DefaultAction {
     Stop,
 }
 
-#[must_use]
-pub fn default_action(signo: Signal) -> DefaultAction {
-    match signo {
-        Signal::Child | Signal::WindowChanged | Signal::Urgent | Signal::Continue => {
-            DefaultAction::Ignore
-        }
-        Signal::Stop | Signal::TerminalStop | Signal::TerminalInput | Signal::TerminalOutput => {
-            DefaultAction::Stop
-        }
-        Signal::Abort
-        | Signal::Alarm
-        | Signal::Bus
-        | Signal::Fpe
-        | Signal::Hangup
-        | Signal::IllegalInstruction
-        | Signal::Interrupt
-        | Signal::Kill
-        | Signal::Pipe
-        | Signal::Quit
-        | Signal::Segfault
-        | Signal::Terminate
-        | Signal::Usr1
-        | Signal::Usr2
-        | Signal::BadSyscall
-        | Signal::Trap
-        | Signal::VirtualTimerAlarm
-        | Signal::ExceededCpuLimit
-        | Signal::ExceededFileSizeLimit => DefaultAction::Terminate,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +260,13 @@ mod tests {
     fn signal_bit_convention() {
         assert_eq!(Signal::Abort.bit(), 1, "lowest signal occupies bit 0");
         assert_eq!(Signal::Kill.bit(), 1 << 9, "bit is signo - 1");
+    }
+
+    #[test]
+    fn default_action_table() {
+        assert_eq!(Signal::Child.default_action(), DefaultAction::Ignore);
+        assert_eq!(Signal::TerminalStop.default_action(), DefaultAction::Stop);
+        assert_eq!(Signal::Kill.default_action(), DefaultAction::Terminate);
     }
 
     #[test]
