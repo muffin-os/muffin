@@ -39,6 +39,14 @@ impl AbsolutePath {
             .parent()
             .map(|v| unsafe { AbsolutePath::new_unchecked(v) })
     }
+
+    /// Rebuilds the path from its components, so `//a//b/` becomes `/a/b`.
+    #[must_use]
+    pub fn normalized(&self) -> AbsoluteOwnedPath {
+        let mut path = AbsoluteOwnedPath::new();
+        self.filenames().for_each(|name| path.push(name));
+        path
+    }
 }
 
 impl Deref for AbsolutePath {

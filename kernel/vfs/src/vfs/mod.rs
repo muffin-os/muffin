@@ -1,4 +1,3 @@
-use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 
@@ -52,8 +51,7 @@ impl Vfs {
         P: AsRef<AbsolutePath>,
         F: FileSystem + 'static,
     {
-        let mount_point = mount_point.as_ref();
-        let mount_point = mount_point.to_owned();
+        let mount_point = mount_point.as_ref().normalized();
         if self.file_systems.contains_key(&mount_point) {
             return Err(MountError::AlreadyMounted);
         }
@@ -72,7 +70,7 @@ impl Vfs {
     where
         P: AsRef<AbsolutePath>,
     {
-        let owned = mount_point.as_ref().to_owned();
+        let owned = mount_point.as_ref().normalized();
         self.file_systems
             .remove(&owned)
             .map(|_| ())
@@ -88,10 +86,10 @@ impl Vfs {
     where
         P: AsRef<AbsolutePath>,
     {
-        let path = path.as_ref();
-        let (mount_path, fs) = self.find_mount(path).ok_or(OpenError::NotFound)?;
+        let path = path.as_ref().normalized();
+        let (mount_path, fs) = self.find_mount(path.as_ref()).ok_or(OpenError::NotFound)?;
         let relative_path = if mount_path == ROOT {
-            path
+            path.as_ref()
         } else {
             let rest = path.strip_prefix(&***mount_path).unwrap();
             if rest.is_empty() {
@@ -103,7 +101,7 @@ impl Vfs {
         let mut guard = fs.write();
         guard
             .open(relative_path)
-            .map(|handle| VfsNode::new(path.to_owned(), handle, Arc::downgrade(&fs)))
+            .map(|handle| VfsNode::new(path, handle, Arc::downgrade(&fs)))
     }
 
     fn find_mount<'a>(&'a self, path: &'a AbsolutePath) -> Option<(&'a AbsolutePath, Fs)> {
@@ -124,7 +122,7 @@ mod tests {
 
     use crate::path::{AbsolutePath, ROOT};
     use crate::testing::TestFs;
-    use crate::{Stat, Vfs};
+    use crate::{MountError, Stat, Vfs};
 
     #[test]
     fn test_read() {
@@ -203,5 +201,39 @@ mod tests {
             .unwrap();
 
         assert!(vfs.open(AbsolutePath::try_new("/dev").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_open_ignores_repeated_separators() {
+        let mut fs = TestFs::default();
+        fs.insert_file(
+            AbsolutePath::try_new("/x").unwrap(),
+            vec![0x00; 1],
+            Stat::default(),
+        );
+
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, TestFs::default()).unwrap();
+        vfs.mount(AbsolutePath::try_new("/dev").unwrap(), fs)
+            .unwrap();
+
+        assert!(vfs.open(AbsolutePath::try_new("//dev/x").unwrap()).is_ok());
+        assert!(vfs.open(AbsolutePath::try_new("/dev//x/").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_mount_table_ignores_repeated_separators() {
+        let mut vfs = Vfs::new();
+        vfs.mount(AbsolutePath::try_new("/dev").unwrap(), TestFs::default())
+            .unwrap();
+
+        assert_eq!(
+            Err(MountError::AlreadyMounted),
+            vfs.mount(AbsolutePath::try_new("/dev/").unwrap(), TestFs::default())
+        );
+        assert_eq!(
+            Ok(()),
+            vfs.unmount(AbsolutePath::try_new("//dev/").unwrap())
+        );
     }
 }
