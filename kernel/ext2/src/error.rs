@@ -16,6 +16,7 @@ pub enum Error {
     NoSpace,
     NotSupported,
     EntryExists,
+    NameTooLong,
 }
 
 impl Display for Error {

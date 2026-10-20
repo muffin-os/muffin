@@ -1,5 +1,5 @@
 use kernel_device::block::MemoryBlockDevice;
-use kernel_ext2::{Error, Ext2Fs, RegularFile};
+use kernel_ext2::{Error, Ext2Fs, MAX_NAME_LEN, RegularFile};
 
 mod common;
 
@@ -139,6 +139,23 @@ fn test_create_file_collision(sector_size: usize) {
     let mut root = fs.read_root_inode().unwrap();
     let result = fs.create_regular_file(&mut root, file_name);
     assert_eq!(result.unwrap_err(), Error::EntryExists);
+}
+
+#[test]
+fn test_create_file_name_length_limit() {
+    let mut fs = cow_fs!("kernel/ext2/tests/filesystems/empty.img", 512);
+    let mut root = fs.read_root_inode().unwrap();
+
+    let max_name = "a".repeat(MAX_NAME_LEN);
+    fs.create_regular_file(&mut root, &max_name).unwrap();
+    let entries = fs.list_dir(&root).unwrap();
+    assert!(entries.iter().any(|e| e.name() == Some(max_name.as_str())));
+
+    let too_long = "b".repeat(MAX_NAME_LEN + 1);
+    let result = fs.create_regular_file(&mut root, &too_long);
+    assert_eq!(result.unwrap_err(), Error::NameTooLong);
+    let entries = fs.list_dir(&root).unwrap();
+    assert!(entries.iter().all(|e| e.name() != Some("")));
 }
 
 generate_tests!(

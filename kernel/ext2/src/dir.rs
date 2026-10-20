@@ -12,6 +12,9 @@ use crate::{
     bytefield_field_write, check_is_implemented,
 };
 
+/// Longest directory entry name the on-disk format allows (`EXT2_NAME_LEN`).
+pub const MAX_NAME_LEN: usize = 255;
+
 impl<T> Ext2Fs<T>
 where
     T: BlockDevice,
@@ -79,6 +82,9 @@ where
         inode_address: InodeAddress,
         typ: DirType,
     ) -> Result<(), Error> {
+        if name.len() > MAX_NAME_LEN {
+            return Err(Error::NameTooLong);
+        }
         // TODO: make this more efficient once we have indexed lookups implemented
         if self.find_entry(dir, |e| e.name() == Some(name))?.is_some() {
             return Err(Error::EntryExists);
@@ -108,7 +114,7 @@ where
                 debug_assert_eq!(offset % 4, 0, "offset is not aligned");
 
                 let mut entry = DirEntry::from(dir_entries_have_type, &block_data[offset..]);
-                let entry_size = DirEntry::size(entry.name_length);
+                let entry_size = DirEntry::size(entry.name_bytes.len() as u16);
                 if entry.total_size >= required_size + entry_size {
                     // we found a slot that is big enough
 
@@ -127,7 +133,6 @@ where
                     let new_entry = DirEntry {
                         inode: inode_address,
                         total_size: new_entry_total_size,
-                        name_length: name.len() as u16,
                         type_indicator: if dir_entries_have_type {
                             Some(typ)
                         } else {
@@ -158,7 +163,6 @@ where
 pub struct DirEntry {
     inode: InodeAddress,
     total_size: u16,
-    name_length: u16,
     type_indicator: Option<DirType>,
     name_bytes: Vec<u8>,
 }
@@ -207,23 +211,23 @@ impl DirEntry {
         Self {
             inode: InodeAddress::new(arr.inode).unwrap(),
             total_size: arr.total_size,
-            name_length,
             type_indicator,
             name_bytes,
         }
     }
 
     pub fn serialize(self, dir_entries_have_type: bool) -> Vec<u8> {
-        let mut result = Vec::with_capacity(Self::size(self.name_length) as usize);
+        let name_length = self.name_bytes.len() as u16;
+        let mut result = Vec::with_capacity(Self::size(name_length) as usize);
 
         let mut entry_no_name = DirEntryNoName::try_from([0; 8]).unwrap();
         entry_no_name.inode = self.inode.into();
         entry_no_name.total_size = self.total_size;
-        entry_no_name.name_length_lsb = self.name_length as u8;
+        entry_no_name.name_length_lsb = name_length as u8;
         if dir_entries_have_type {
             entry_no_name.type_indicator_or_name_length_msb = self.type_indicator.unwrap().bits();
         } else {
-            entry_no_name.type_indicator_or_name_length_msb = (self.name_length >> 8) as u8; // TODO: check for data loss
+            entry_no_name.type_indicator_or_name_length_msb = (name_length >> 8) as u8;
         }
 
         result.extend_from_slice(&<[u8; 8]>::from(entry_no_name));
@@ -250,15 +254,12 @@ impl Debug for DirEntry {
         debug_struct
             .field("inode", &self.inode)
             .field("total_size", &self.total_size)
-            .field("name_length", &self.name_length);
+            .field("name_length", &self.name_bytes.len());
         if let Some(type_indicator) = &self.type_indicator {
             debug_struct.field("type_indicator", &type_indicator);
         }
-        debug_struct.field(
-            "name",
-            &core::str::from_utf8(&self.name_bytes[..self.name_length as usize]),
-        );
-        debug_struct.field("name_bytes", &&self.name_bytes[..self.name_length as usize]);
+        debug_struct.field("name", &core::str::from_utf8(&self.name_bytes));
+        debug_struct.field("name_bytes", &self.name_bytes);
 
         debug_struct.finish()
     }
