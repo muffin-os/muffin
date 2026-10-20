@@ -665,13 +665,14 @@ pub(crate) fn setup_user_image(
     unsafe {
         fx_area_ptr.copy_from_nonoverlapping(INITIAL_FX_IMAGE.as_ptr(), INITIAL_FX_IMAGE.len());
     }
-    *task.fx_area().write() = Some(fx_area);
     // TS parks the seeded image until the first user FPU instruction. Its #NM
     // handler restores it, and the scheduler skips saving the live FPU state
-    // into the fresh area while TS is set.
+    // into the fresh area while TS is set, so TS must be set before the area
+    // is published or a tick in between would overwrite the seeded image.
     unsafe {
         Cr0::update(|cr0| cr0.insert(Cr0Flags::TASK_SWITCHED));
     }
+    *task.fx_area().write() = Some(fx_area);
 
     Ok((entry, VirtAddr::new(rsp as u64)))
 }
