@@ -215,9 +215,8 @@ impl<T: AllocationType> LowerHalfAllocation<T> {
 pub struct Inner {
     region: Arc<MemoryRegion>,
     /// The flags of the writable allocation state. The `make_*` transitions
-    /// derive their targets from this value, because pages of a forked
-    /// region are transiently write-protected and the live page table flags
-    /// must not leak into the logical flags.
+    /// derive their targets from this value rather than from the live page
+    /// table flags.
     base_flags: PageTableFlags,
     process: Arc<Process>,
 }
