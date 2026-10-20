@@ -7,22 +7,24 @@ use crate::FrameState;
 /// Represents a contiguous region of usable physical memory.
 #[derive(Debug, Clone)]
 pub struct MemoryRegion {
-    /// Starting physical address of the region (must be 4KiB aligned)
     base_addr: u64,
-    /// Frame states for this region (indexed by frame offset from base_addr)
     frames: Vec<FrameState>,
 }
 
 impl MemoryRegion {
+    /// # Panics
+    /// Panics if `base_addr` is not 4KiB aligned.
     pub fn new(base_addr: u64, num_frames: usize, initial_state: FrameState) -> Self {
-        Self {
-            base_addr,
-            frames: alloc::vec![initial_state; num_frames],
-        }
+        Self::with_frames(base_addr, alloc::vec![initial_state; num_frames])
     }
 
-    /// Creates a new MemoryRegion with custom frame states
+    /// # Panics
+    /// Panics if `base_addr` is not 4KiB aligned.
     pub fn with_frames(base_addr: u64, frames: Vec<FrameState>) -> Self {
+        assert!(
+            base_addr.is_multiple_of(Size4KiB::SIZE),
+            "region base {base_addr:#x} is not 4KiB aligned"
+        );
         Self { base_addr, frames }
     }
 
@@ -128,5 +130,17 @@ mod tests {
         assert_eq!(region.frames()[0], FrameState::Free);
         assert_eq!(region.frames()[2], FrameState::Allocated);
         assert_eq!(region.frames()[4], FrameState::Free);
+    }
+
+    #[test]
+    #[should_panic(expected = "4KiB aligned")]
+    fn new_rejects_unaligned_base() {
+        let _ = MemoryRegion::new(0x1800, 1, FrameState::Free);
+    }
+
+    #[test]
+    #[should_panic(expected = "4KiB aligned")]
+    fn with_frames_rejects_unaligned_base() {
+        let _ = MemoryRegion::with_frames(0x1800, alloc::vec![FrameState::Free]);
     }
 }
