@@ -6,7 +6,6 @@ use bitflags::bitflags;
 use kernel_device::block::BlockDevice;
 
 use crate::error::Error;
-use crate::superblock::RequiredFeatures;
 use crate::{
     Directory, Ext2Fs, Inode, InodeAddress, Type, bytefield, bytefield_field_read,
     bytefield_field_write, check_is_implemented,
@@ -26,10 +25,7 @@ where
 
         let mut entries = Vec::new();
         let block_size = self.superblock.block_size() as usize;
-        let dir_entries_have_type = self
-            .superblock
-            .required_features()
-            .contains(RequiredFeatures::DIRECTORY_ENTRIES_HAVE_TYPE);
+        let dir_entries_have_type = self.superblock.dir_entries_have_type();
 
         // shortcut: only the 12 direct blocks are scanned, so entries past
         // 12 * block_size bytes of a directory are missing from the result.
@@ -90,10 +86,7 @@ where
         }
 
         let block_size = self.superblock.block_size() as usize;
-        let dir_entries_have_type = self
-            .superblock
-            .required_features()
-            .contains(RequiredFeatures::DIRECTORY_ENTRIES_HAVE_TYPE);
+        let dir_entries_have_type = self.superblock.dir_entries_have_type();
 
         let inode = &mut dir.inode_mut();
 

@@ -65,11 +65,7 @@ where
             .num_blocks()
             .div_ceil(superblock.blocks_per_group());
 
-        let bgdt_offset = if superblock.block_size() == 1024 {
-            2048
-        } else {
-            superblock.block_size()
-        } as usize;
+        let bgdt_offset = superblock.bgdt_offset();
 
         let block_size = superblock.block_size() as usize;
         let bgdt_len = (number_of_block_groups as usize * BGD_SIZE).next_multiple_of(block_size);
@@ -92,11 +88,6 @@ where
             bgdt,
             indirect_cache: Mutex::new(IndirectCache::new()),
         })
-    }
-
-    fn bgdt_offset(&self) -> usize {
-        let block_size = self.superblock.block_size() as usize;
-        if block_size == 1024 { 2048 } else { block_size }
     }
 
     pub fn superblock(&self) -> &Superblock {
@@ -181,7 +172,7 @@ where
 
     fn allocate(&mut self, resource: Resource) -> Result<Option<u32>, Error> {
         let block_size = self.superblock.block_size();
-        let bgdt_offset = self.bgdt_offset();
+        let bgdt_offset = self.superblock.bgdt_offset();
         // bitmap bit 0 is inode 1 resp. block s_first_data_block
         let (per_group, first_number) = match resource {
             Resource::Block => (

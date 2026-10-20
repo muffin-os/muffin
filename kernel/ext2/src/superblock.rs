@@ -2,7 +2,9 @@ use core::ops::{Deref, DerefMut, Shl};
 
 use bitflags::bitflags;
 
-use crate::{bytefield, bytefield_field_read, bytefield_field_write, check_is_implemented};
+use crate::{
+    BlockAddress, bytefield, bytefield_field_read, bytefield_field_write, check_is_implemented,
+};
 
 pub struct SuperblockArray([u8; 1024]);
 
@@ -136,6 +138,17 @@ impl Superblock {
         self.block_size() / DISK_SECTOR_SIZE
     }
 
+    /// Number of block addresses an indirect block holds.
+    pub fn pointers_per_block(&self) -> u32 {
+        self.block_size() / size_of::<BlockAddress>() as u32
+    }
+
+    /// Byte offset of the block group descriptor table, the block after the superblock.
+    pub fn bgdt_offset(&self) -> usize {
+        let block_size = self.block_size() as usize;
+        if block_size == 1024 { 2048 } else { block_size }
+    }
+
     pub fn fragment_size(&self) -> u32 {
         u32::shl(1024, self.log2_fragment_size)
     }
@@ -226,6 +239,12 @@ impl Superblock {
 
     pub fn required_features(&self) -> RequiredFeatures {
         RequiredFeatures::from_bits_truncate(self.required_features)
+    }
+
+    /// Whether directory entries carry the file type instead of a 16-bit name length.
+    pub fn dir_entries_have_type(&self) -> bool {
+        self.required_features()
+            .contains(RequiredFeatures::DIRECTORY_ENTRIES_HAVE_TYPE)
     }
 
     pub fn write_required_features(&self) -> ReadOnlyFeatures {

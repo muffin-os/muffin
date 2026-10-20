@@ -187,3 +187,43 @@ fn test_allocate_skips_used_slots(sector_size: usize) {
     assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks - 2);
     assert_eq!(fs.superblock().num_unallocated_inodes(), free_inodes - 2);
 }
+
+// The raw descriptor bytes are the oracle because a mount that reads the table
+// at a different offset than allocate_block writes it would never see the drop.
+#[test]
+fn test_allocate_block_updates_group_descriptor_1k_blocks() {
+    allocate_block_updates_group_descriptor("kernel/ext2/tests/filesystems/empty.img", 2048);
+}
+
+#[test]
+fn test_allocate_block_updates_group_descriptor_4k_blocks() {
+    allocate_block_updates_group_descriptor("kernel/ext2/tests/filesystems/empty4k.img", 4096);
+}
+
+fn allocate_block_updates_group_descriptor(image: &str, bgdt_offset: usize) {
+    const BG_FREE_BLOCKS_COUNT: usize = 12;
+    let raw_free_blocks = |image: &[u8]| {
+        let at = bgdt_offset + BG_FREE_BLOCKS_COUNT;
+        u16::from_le_bytes([image[at], image[at + 1]])
+    };
+
+    let mut image_data = common::load_copy_of_image(image);
+    let free_before = raw_free_blocks(&image_data);
+
+    let device = MemoryBlockDevice::try_new(512, &mut image_data[..]).unwrap();
+    let mut fs = Ext2Fs::try_new(device).unwrap();
+    let first = fs.allocate_block().unwrap().unwrap();
+    drop(fs);
+    assert_eq!(raw_free_blocks(&image_data), free_before - 1);
+
+    let device = MemoryBlockDevice::try_new(512, &mut image_data[..]).unwrap();
+    let mut fs = Ext2Fs::try_new(device).unwrap();
+    assert_eq!(
+        fs.superblock().num_unallocated_blocks(),
+        u32::from(free_before) - 1
+    );
+    let second = fs.allocate_block().unwrap().unwrap();
+    assert_eq!(second.get(), first.get() + 1);
+    drop(fs);
+    assert_eq!(raw_free_blocks(&image_data), free_before - 2);
+}
