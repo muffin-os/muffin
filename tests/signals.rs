@@ -38,6 +38,9 @@ fn signal_delivery_end_to_end() {
     // The report line is the load-bearing assertion. A missing report and a
     // wrong-count report both break the ordered scan the same way, so diagnose
     // them here where the actual line is visible.
+    // The stop and terminate counts are negative checks that would also read
+    // zero if B never ran, so B's own announcement is required first.
+    report.assert_line_contains("B: running");
     report.assert_line_contains("A: report ");
     report.assert_line_contains("A: handler ran");
     if !report

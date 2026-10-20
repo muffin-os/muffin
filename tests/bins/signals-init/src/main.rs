@@ -201,6 +201,7 @@ fn role_b() -> ! {
     // `main` armed the ping handler before the role was known. pid 1 is created
     // before pid 2, so the driver always exists to receive this announcement.
     let _ = kill(Role::Driver.pid(), ACK);
+    println!("B: running");
 
     // Spin in user mode so ticks can deliver the ping handler.
     loop {
