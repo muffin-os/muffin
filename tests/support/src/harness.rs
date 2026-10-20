@@ -513,7 +513,9 @@ impl RunReport {
         }
     }
 
-    fn dump(&self) {
+    /// Prints the whole transcript to stderr, for a test that fails on its own
+    /// assertion.
+    pub fn dump(&self) {
         dump_transcript(&self.transcript);
     }
 }

@@ -49,14 +49,7 @@ fn signal_delivery_end_to_end() {
             .iter()
             .find(|line| line.contains("A: report "))
     {
-        eprintln!(
-            "===== QEMU serial transcript ({} lines) =====",
-            report.transcript.len()
-        );
-        for line in &report.transcript {
-            eprintln!("{line}");
-        }
-        eprintln!("===== end transcript =====");
+        report.dump();
         panic!(
             "report line did not match {:?}, found {actual:?}",
             MARKERS[3]
