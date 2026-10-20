@@ -98,6 +98,22 @@ ext2_image(
     files = {"//tests/bins:unwind": "bin/unwind"},
 )
 
+# A well-formed ELF64 EXEC header with no program headers and e_entry = 1 << 48,
+# which is not a canonical x86-64 address. Only the header is needed: every
+# other load check passes, so execve reaches the entry address itself.
+genrule(
+    name = "noncanonical_entry_elf",
+    outs = ["noncanonical-entry.elf"],
+    cmd = "printf '" +
+          "\\177ELF\\002\\001\\001\\000\\000\\000\\000\\000\\000\\000\\000\\000" +
+          "\\002\\000\\076\\000\\001\\000\\000\\000" +
+          "\\000\\000\\000\\000\\000\\000\\001\\000" +
+          "\\100\\000\\000\\000\\000\\000\\000\\000" +
+          "\\000\\000\\000\\000\\000\\000\\000\\000" +
+          "\\000\\000\\000\\000\\100\\000\\070\\000\\000\\000\\100\\000\\000\\000\\000\\000" +
+          "' > $@",
+)
+
 ext2_image(
     name = "execve_disk",
     contents = {
@@ -106,6 +122,7 @@ ext2_image(
         "spawn": "/bin/execve\n",
     },
     files = {
+        ":noncanonical_entry_elf": "data/noncanonical-entry.elf",
         "//tests/bins:exec_target": "bin/exec-target",
         "//tests/bins:execve": "bin/execve",
     },
@@ -120,6 +137,7 @@ ext2_image(
         "spawn": "/bin/execve\n",
     },
     files = {
+        ":noncanonical_entry_elf": "data/noncanonical-entry.elf",
         "//tests/bins:exec_target": "bin/exec-target",
         "//tests/bins:execve": "bin/execve",
     },

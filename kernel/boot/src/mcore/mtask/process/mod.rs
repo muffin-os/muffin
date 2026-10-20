@@ -687,5 +687,5 @@ pub(crate) fn setup_user_image(
         Cr0::update(|cr0| cr0.insert(Cr0Flags::TASK_SWITCHED));
     }
 
-    Ok((VirtAddr::new(entry as u64), VirtAddr::new(rsp as u64)))
+    Ok((entry, VirtAddr::new(rsp as u64)))
 }

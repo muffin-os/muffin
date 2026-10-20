@@ -25,6 +25,10 @@ fn main() -> i32 {
         println!("execve-test: FAIL enoexec");
         return 1;
     }
+    if execve("/data/noncanonical-entry.elf", &["x"], &[]) != ENOEXEC {
+        println!("execve-test: FAIL noncanonical entry");
+        return 1;
+    }
 
     // fds 0 to 2 are occupied, so this lands on fd 3. The replacement image
     // reads it back without opening anything.

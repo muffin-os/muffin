@@ -63,7 +63,7 @@ pub enum LoadExecutableError {
 /// An executable that passed every check that can fail with a user-visible
 /// error.
 pub struct ValidatedExecutable {
-    entry: usize,
+    entry: VirtAddr,
     segments: Vec<ValidatedSegment>,
     tls: Option<ValidatedTls>,
 }
@@ -118,6 +118,9 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
     if *elf.typ() != ElfType::Exec {
         return Err(LoadExecutableError::UnsupportedType(*elf.typ()));
     }
+
+    let entry = VirtAddr::try_new(elf.entry().into_u64())
+        .map_err(|_| LoadExecutableError::InvalidVirtualAddress(elf.entry()))?;
 
     let page_size = Size4KiB::SIZE.into_usize();
     let mut segments = vec![];
@@ -204,7 +207,7 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
     };
 
     Ok(ValidatedExecutable {
-        entry: elf.entry(),
+        entry,
         segments,
         tls,
     })
@@ -219,7 +222,7 @@ impl ValidatedExecutable {
         process: &Arc<Process>,
         task: &Task,
         node: &VfsNode,
-    ) -> Result<usize, LoadExecutableError> {
+    ) -> Result<VirtAddr, LoadExecutableError> {
         let mut memapi = LowerHalfMemoryApi::new(process.clone());
 
         for segment in &self.segments {
