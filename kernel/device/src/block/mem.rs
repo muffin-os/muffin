@@ -33,7 +33,7 @@ where
     }
 
     fn sector_count(&self) -> usize {
-        self.data.as_ref().len()
+        self.data.as_ref().len() / self.sector_size
     }
 
     fn read_sector(&self, sector_index: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
@@ -61,6 +61,12 @@ mod tests {
 
     use crate::block::BlockDevice;
     use crate::block::mem::MemoryBlockDevice;
+
+    #[test]
+    fn sector_count_counts_sectors_not_bytes() {
+        let device = MemoryBlockDevice::try_new(2, vec![0_u8; 16]).unwrap();
+        assert_eq!(8, device.sector_count());
+    }
 
     #[test]
     fn test_read_at_short() {
