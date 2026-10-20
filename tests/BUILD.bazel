@@ -24,7 +24,7 @@ ext2_image(
 
 ext2_image(
     name = "signals_edge_disk",
-    contents = {"spawn": "/bin/init\n/bin/init\n/bin/init\n/bin/init\n"},
+    contents = {"spawn": "/bin/init\n/bin/init\n/bin/init\n/bin/init\n/bin/init\n/bin/init\n"},
     files = {"//tests/bins:signals_edge": "bin/init"},
 )
 

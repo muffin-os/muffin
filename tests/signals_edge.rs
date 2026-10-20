@@ -15,9 +15,11 @@
 //! running that handler. Role C forges a `sigreturn` with no readable frame
 //! at its stack pointer, which must also die on SIGSEGV. Role D raises a
 //! handled signal with its stack pointer in unmapped memory, so the kernel
-//! has nowhere to write the signal frame and must kill it on SIGSEGV.
+//! has nowhere to write the signal frame and must kill it on SIGSEGV. Role E
+//! executes `ud2`, which must kill it on SIGILL, and role F executes the
+//! privileged `hlt`, which must kill it on SIGSEGV.
 //!
-//! All four processes die by signal, so the run completes once each reports
+//! All six processes die by signal, so the run completes once each reports
 //! its outcome. The production kernel and init stay free of test-only
 //! branches.
 
@@ -50,18 +52,24 @@ fn signal_edge_cases_end_to_end() {
 
     report.assert_markers_in_order(&MARKERS);
 
-    // Roles B, C and D run concurrently with A, so their markers carry no
+    // Roles B to F run concurrently with A, so their markers carry no
     // ordering relationship to A's phases.
     report.assert_line_contains("B: blocked fault next");
     report.assert_line_contains("C: forged sigreturn next");
     report.assert_line_contains("D: wild stack delivery next");
+    report.assert_line_contains("E: ud2 next");
+    report.assert_line_contains("F: hlt next");
     report.assert_line_contains("terminating process on signal SIGSEGV (pid 2)");
     report.assert_line_contains("terminating process on signal SIGSEGV (pid 3)");
     report.assert_line_contains("terminating process on signal SIGSEGV (pid 4)");
+    report.assert_line_contains("terminating process on signal SIGILL (pid 5)");
+    report.assert_line_contains("terminating process on signal SIGSEGV (pid 6)");
     report.assert_line_contains("outcome pid=1 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=2 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=3 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=4 signal=SIGSEGV");
+    report.assert_line_contains("outcome pid=5 signal=SIGILL");
+    report.assert_line_contains("outcome pid=6 signal=SIGSEGV");
 
     report.assert_no_line_contains("UNREACHABLE");
 }

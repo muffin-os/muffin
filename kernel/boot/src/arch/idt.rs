@@ -65,14 +65,27 @@ pub fn create_idt() -> InterruptDescriptorTable {
     idt.device_not_available
         .set_handler_fn(device_not_available_handler);
 
-    idt.general_protection_fault
-        .set_handler_fn(general_protection_fault_handler);
-    idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
     idt.invalid_tss.set_handler_fn(invalid_tss_handler);
-    idt.segment_not_present
-        .set_handler_fn(segment_not_present_handler);
-    idt.stack_segment_fault
-        .set_handler_fn(stack_segment_fault_handler);
+    unsafe {
+        idt.general_protection_fault.set_handler_fn(transmute::<
+            *mut fn(),
+            extern "x86-interrupt" fn(InterruptStackFrame, u64),
+        >(
+            general_protection_fault_handler as *mut fn(),
+        ));
+        idt.invalid_opcode.set_handler_fn(transmute::<
+            *mut fn(),
+            extern "x86-interrupt" fn(InterruptStackFrame),
+        >(invalid_opcode_handler as *mut fn()));
+        idt.segment_not_present.set_handler_fn(transmute::<
+            *mut fn(),
+            extern "x86-interrupt" fn(InterruptStackFrame, u64),
+        >(segment_not_present_handler as *mut fn()));
+        idt.stack_segment_fault.set_handler_fn(transmute::<
+            *mut fn(),
+            extern "x86-interrupt" fn(InterruptStackFrame, u64),
+        >(stack_segment_fault_handler as *mut fn()));
+    }
 
     unsafe {
         idt[InterruptIndex::Timer.as_u8()].set_handler_fn(transmute::<
@@ -101,6 +114,14 @@ pub fn create_idt() -> InterruptDescriptorTable {
 
 macro_rules! wrap {
     ($fn:ident => $w:ident) => {
+        wrap!(@asm $fn => $w, "add rdi, 9 * 8", "", "");
+    };
+    // The CPU pushes an error code below the frame for #GP, #NP and #SS. The
+    // wrapper passes it as the third argument and drops it before iretq.
+    ($fn:ident => $w:ident, error_code) => {
+        wrap!(@asm $fn => $w, "add rdi, 10 * 8", "mov rdx, [rsp + 9 * 8]", "add rsp, 8");
+    };
+    (@asm $fn:ident => $w:ident, $frame:literal, $load_error:literal, $drop_error:literal) => {
         #[allow(clippy::missing_safety_doc)] // expect is incompatible with #[unsafe(naked)]
         #[unsafe(naked)]
         pub unsafe extern "sysv64" fn $w() {
@@ -116,7 +137,8 @@ macro_rules! wrap {
                 "push r11",
                 "mov rsi, rsp", // Arg #2: register list
                 "mov rdi, rsp", // Arg #1: interupt frame
-                "add rdi, 9 * 8",
+                $frame,
+                $load_error,
                 "call {}",
                 "pop r11",
                 "pop r10",
@@ -127,6 +149,7 @@ macro_rules! wrap {
                 "pop rdx",
                 "pop rcx",
                 "pop rax",
+                $drop_error,
                 "iretq",
                 sym $fn
             );
@@ -136,6 +159,10 @@ macro_rules! wrap {
 
 wrap!(syscall_handler_impl => syscall_handler);
 wrap!(timer_interrupt_handler_impl => timer_interrupt_handler);
+wrap!(general_protection_fault_handler_impl => general_protection_fault_handler, error_code);
+wrap!(invalid_opcode_handler_impl => invalid_opcode_handler);
+wrap!(segment_not_present_handler_impl => segment_not_present_handler, error_code);
+wrap!(stack_segment_fault_handler_impl => stack_segment_fault_handler, error_code);
 
 #[repr(align(8), C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -221,23 +248,27 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
     panic!("EXCEPTION: DOUBLE FAULT:\n{stack_frame:#?}");
 }
 
-extern "x86-interrupt" fn general_protection_fault_handler(
-    stack_frame: InterruptStackFrame,
+extern "sysv64" fn general_protection_fault_handler_impl(
+    stack_frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
     error_code: u64,
 ) {
-    panic!(
-        "EXCEPTION: GENERAL PROTECTION FAULT:\nerror code: {error_code:#X}\n{}[{}], external: {}\n{stack_frame:#?}",
-        match (error_code >> 1) & 0b11 {
-            0 => "GDT",
-            2 => "LDT",
-            _ => "IDT",
-        },
-        (error_code >> 3) & ((1 << 14) - 1),
-        (error_code & 1) > 0
-    );
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+        signal::deliver_fault(stack_frame, regs, Signal::Segfault);
+        return;
+    }
+    let error_code = SelectorErrorCode::from(error_code);
+    panic!("EXCEPTION: GENERAL PROTECTION FAULT:\nerror code: {error_code:#?}\n{stack_frame:#?}");
 }
 
-extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
+extern "sysv64" fn invalid_opcode_handler_impl(
+    stack_frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
+) {
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+        signal::deliver_fault(stack_frame, regs, Signal::IllegalInstruction);
+        return;
+    }
     panic!("EXCEPTION: INVALID OPCODE:\n{stack_frame:#?}");
 }
 
@@ -467,18 +498,29 @@ extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
     }
 }
 
-extern "x86-interrupt" fn segment_not_present_handler(
-    stack_frame: InterruptStackFrame,
+extern "sysv64" fn segment_not_present_handler_impl(
+    stack_frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
     error_code: u64,
 ) {
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+        signal::deliver_fault(stack_frame, regs, Signal::Segfault);
+        return;
+    }
     let error_code = SelectorErrorCode::from(error_code);
     panic!("EXCEPTION: SEGMENT NOT PRESENT:\nerror code: {error_code:#?}\n{stack_frame:#?}");
 }
 
-extern "x86-interrupt" fn stack_segment_fault_handler(
-    stack_frame: InterruptStackFrame,
+extern "sysv64" fn stack_segment_fault_handler_impl(
+    stack_frame: &mut InterruptStackFrame,
+    regs: &mut SyscallRegisters,
     error_code: u64,
 ) {
+    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3 {
+        signal::deliver_fault(stack_frame, regs, Signal::Segfault);
+        return;
+    }
+    let error_code = SelectorErrorCode::from(error_code);
     panic!("EXCEPTION: STACK SEGMENT FAULT:\nerror code: {error_code:#?}\n{stack_frame:#?}");
 }
 

@@ -241,6 +241,20 @@ fn role_d() {
     println!("D: UNREACHABLE");
 }
 
+fn role_e() {
+    println!("E: ud2 next");
+    unsafe { core::arch::asm!("ud2") };
+
+    println!("E: UNREACHABLE");
+}
+
+fn role_f() {
+    println!("F: hlt next");
+    unsafe { core::arch::asm!("hlt") };
+
+    println!("F: UNREACHABLE");
+}
+
 minilib::entry!(main);
 
 fn main() -> i32 {
@@ -249,6 +263,8 @@ fn main() -> i32 {
         2 => role_b(),
         3 => role_c(),
         4 => role_d(),
+        5 => role_e(),
+        6 => role_f(),
         _ => println!("edge: unexpected pid"),
     }
 
