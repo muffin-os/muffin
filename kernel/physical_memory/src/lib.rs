@@ -25,28 +25,21 @@ impl FrameState {
     }
 }
 
-/// A position in the sparse memory manager containing both the region index
-/// and the frame index within that region. This ensures that region and index
-/// are always consistent.
 #[derive(Debug, Copy, Clone)]
 struct RegionFrameIndex {
     region_idx: usize,
     frame_idx: usize,
 }
 
-/// A physical memory manager that keeps track of the state of each frame in the
-/// system using a sparse representation that only tracks usable memory regions.
+/// Tracks the state of every frame in a set of usable memory regions.
 pub struct PhysicalMemoryManager {
     regions: Vec<MemoryRegion>,
     first_free: Option<RegionFrameIndex>,
 }
 
 impl PhysicalMemoryManager {
-    /// Creates a new manager from usable memory regions.
-    ///
-    /// # Arguments
-    /// * `regions` - Pre-allocated vector of memory regions. Each region should already have
-    ///   frames marked as Free or Allocated based on stage1 allocations.
+    /// Takes the regions as they are, including frames already marked
+    /// `Allocated`.
     #[must_use]
     pub fn new(regions: Vec<MemoryRegion>) -> Self {
         let first_free = Self::find_first_free_internal(&regions);
@@ -127,7 +120,6 @@ impl PhysicalMemoryManager {
 
         let ff = self.first_free()?;
 
-        // TODO: Support searching across region boundaries for better memory utilization
         // Search for contiguous free frames within regions
         for region_idx in ff.region_idx..self.regions.len() {
             let search_start = if region_idx == ff.region_idx {
