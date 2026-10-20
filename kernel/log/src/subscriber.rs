@@ -22,8 +22,6 @@ use crate::Filter;
 const MAX_SPANS: usize = 64;
 /// Rendered fields per span, truncating beyond.
 const FIELDS_CAP: usize = 256;
-/// Rendered close label per span, truncating beyond.
-const LABEL_CAP: usize = 256;
 const SPAN_STACK_DEPTH: usize = 16;
 
 static FILTER: OnceCell<Filter> = OnceCell::uninit();
@@ -190,8 +188,50 @@ struct SpanData {
 }
 
 impl SpanData {
+    fn new(
+        id: u64,
+        meta: &'static Metadata<'static>,
+        fields: FixedBuf<FIELDS_CAP>,
+        now: u64,
+    ) -> Self {
+        Self {
+            id,
+            meta,
+            fields,
+            refs: 1,
+            busy: 0,
+            idle: 0,
+            last: now,
+        }
+    }
+
+    fn retain(&mut self) {
+        self.refs += 1;
+    }
+
+    /// Drops one reference and returns whether it was the last, in which
+    /// case the final idle gap is accounted and the span is ready to report.
+    fn release(&mut self, now: u64) -> bool {
+        self.refs = self.refs.saturating_sub(1);
+        if self.refs > 0 {
+            return false;
+        }
+        self.idle += now.saturating_sub(self.last);
+        true
+    }
+
+    fn enter(&mut self, now: u64) {
+        self.idle += now.saturating_sub(self.last);
+        self.last = now;
+    }
+
+    fn exit(&mut self, now: u64) {
+        self.busy += now.saturating_sub(self.last);
+        self.last = now;
+    }
+
     /// Renders `name(fields)`, the fields dim-parenthesized and only if present.
-    fn write_label(&self, out: &mut impl Write) {
+    fn write_label(&self, out: &mut (impl Write + ?Sized)) {
         let _ = write!(out, "{}", self.meta.name());
         if !self.fields.is_empty() {
             let _ = write!(
@@ -211,23 +251,39 @@ impl SpanPool {
         }
     }
 
-    fn insert(&mut self, data: SpanData) {
-        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(data);
+    /// Allocates the next id and tracks the span under it if a slot is free.
+    fn new_span(
+        &mut self,
+        meta: &'static Metadata<'static>,
+        fields: FixedBuf<FIELDS_CAP>,
+        now: u64,
+    ) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        if self.next_id == 0 {
+            self.next_id = 1;
         }
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(SpanData::new(id, meta, fields, now));
+        }
+        id
     }
 
     fn get_mut(&mut self, id: u64) -> Option<&mut SpanData> {
         self.slots.iter_mut().flatten().find(|data| data.id == id)
     }
 
-    fn remove(&mut self, id: u64) {
-        if let Some(slot) = self
+    /// Drops one reference to `id`, freeing its slot and handing out the
+    /// data for reporting once the last reference is gone.
+    fn release(&mut self, id: u64, now: u64) -> Option<SpanData> {
+        let slot = self
             .slots
             .iter_mut()
-            .find(|slot| slot.as_ref().is_some_and(|data| data.id == id))
-        {
-            *slot = None;
+            .find(|slot| slot.as_ref().is_some_and(|data| data.id == id))?;
+        if slot.as_mut()?.release(now) {
+            slot.take()
+        } else {
+            None
         }
     }
 }
@@ -272,23 +328,7 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
         let meta = span.metadata();
 
         let now = E::now_ns();
-        let id = with_spans::<E, _>(|pool| {
-            let id = pool.next_id;
-            pool.next_id = pool.next_id.wrapping_add(1);
-            if pool.next_id == 0 {
-                pool.next_id = 1;
-            }
-            pool.insert(SpanData {
-                id,
-                meta,
-                fields,
-                refs: 1,
-                busy: 0,
-                idle: 0,
-                last: now,
-            });
-            id
-        });
+        let id = with_spans::<E, _>(|pool| pool.new_span(meta, fields, now));
         span::Id::from_u64(id)
     }
 
@@ -317,7 +357,7 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
     fn clone_span(&self, span: &span::Id) -> span::Id {
         with_spans::<E, _>(|pool| {
             if let Some(data) = pool.get_mut(span.into_u64()) {
-                data.refs += 1;
+                data.retain();
             }
         });
         span.clone()
@@ -328,8 +368,7 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
         let now = E::now_ns();
         with_spans::<E, _>(|pool| {
             if let Some(data) = pool.get_mut(id) {
-                data.idle += now.saturating_sub(data.last);
-                data.last = now;
+                data.enter(now);
             }
         });
         let _ = with_stack::<E, _>(|stack| stack.push(id));
@@ -340,8 +379,7 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
         let now = E::now_ns();
         with_spans::<E, _>(|pool| {
             if let Some(data) = pool.get_mut(id) {
-                data.busy += now.saturating_sub(data.last);
-                data.last = now;
+                data.exit(now);
             }
         });
         let _ = with_stack::<E, _>(|stack| stack.remove(id));
@@ -351,35 +389,18 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
         let id = span.into_u64();
         let now = E::now_ns();
 
-        // The label is rendered under the lock into a stack buffer. The sink
-        // write happens unlocked.
-        let mut label = FixedBuf::<LABEL_CAP>::new();
-        let closed = with_spans::<E, _>(|pool| {
-            let data = pool.get_mut(id)?;
-            data.refs = data.refs.saturating_sub(1);
-            if data.refs > 0 {
-                return None;
-            }
-            data.idle += now.saturating_sub(data.last);
-            let (meta, busy, idle) = (data.meta, data.busy, data.idle);
-
-            data.write_label(&mut label);
-            pool.remove(id);
-            Some((meta, busy, idle))
+        // The slot is freed under the lock. The sink write happens unlocked.
+        let Some(data) = with_spans::<E, _>(|pool| pool.release(id, now)) else {
+            return false;
+        };
+        write_record::<E>(data.meta.level(), data.meta.target(), |out| {
+            data.write_label(out);
+            let _ = write!(out, " \x1b[2mdone\x1b[0m \x1b[2mbusy=\x1b[0m");
+            write_duration(out, data.busy);
+            let _ = write!(out, " \x1b[2midle=\x1b[0m");
+            write_duration(out, data.idle);
         });
-
-        if let Some((meta, busy, idle)) = closed {
-            write_record::<E>(meta.level(), meta.target(), |out| {
-                let _ = write!(out, "{} \x1b[2mdone\x1b[0m", label.as_str());
-                let _ = write!(out, " \x1b[2mbusy=\x1b[0m");
-                write_duration(out, busy);
-                let _ = write!(out, " \x1b[2midle=\x1b[0m");
-                write_duration(out, idle);
-            });
-            true
-        } else {
-            false
-        }
+        true
     }
 }
 
@@ -483,7 +504,9 @@ mod tests {
 
     use spin::Mutex;
 
-    use super::{Environment, FILTER, FixedBuf, SpanStack, SpanSubscriber, write_duration};
+    use super::{
+        Environment, FILTER, FixedBuf, MAX_SPANS, SpanStack, SpanSubscriber, write_duration,
+    };
     use crate::Filter;
 
     #[test]
@@ -549,6 +572,10 @@ mod tests {
         }
     }
 
+    fn drain_sink() -> String {
+        core::mem::take(&mut *SINK.lock())
+    }
+
     #[test]
     fn span_lifecycle() {
         let _ = FILTER.try_init_once(|| Filter::parse("trace"));
@@ -577,29 +604,22 @@ mod tests {
         );
         drop(outer);
 
-        let out = SINK.lock();
+        let out = drain_sink();
         let hello = out.find("hello").expect("event message rendered");
         let done = out.find("done").expect("close records rendered");
-        assert!(
-            done > hello,
-            "no span record before close, output:\n{}",
-            *out
-        );
+        assert!(done > hello, "no span record before close, output:\n{out}");
         assert_eq!(out.matches("done").count(), 2, "one close record per span");
         assert!(
             out.contains("answer=") && out.contains("42"),
-            "span fields rendered, output:\n{}",
-            *out
+            "span fields rendered, output:\n{out}"
         );
         assert!(
             out.contains("late=") && out.contains('7'),
-            "late record on the current span reaches the close label, output:\n{}",
-            *out
+            "late record on the current span reaches the close label, output:\n{out}"
         );
         assert!(
             out.contains("busy=") && out.contains("idle="),
-            "close records carry timing, output:\n{}",
-            *out
+            "close records carry timing, output:\n{out}"
         );
         // Events are plain records. Span names never prefix them.
         let hello_line = out
@@ -608,8 +628,48 @@ mod tests {
             .expect("event line present");
         assert!(
             !hello_line.contains("outer") && !hello_line.contains("inner"),
-            "event lines carry no span scope, output:\n{}",
-            *out
+            "event lines carry no span scope, output:\n{out}"
+        );
+
+        // Five clock readings: create, enter, exit, enter, exit. Only the two
+        // entered intervals are busy, the three gaps are idle.
+        let timed = tracing::info_span!("timed");
+        {
+            let _guard = timed.enter();
+        }
+        {
+            let _guard = timed.enter();
+        }
+        drop(timed);
+        let out = drain_sink();
+        assert!(
+            out.contains("busy=\x1b[0m2.00µs") && out.contains("idle=\x1b[0m3.00µs"),
+            "busy counts entered time, idle the gaps, output:\n{out}"
+        );
+
+        let shared = tracing::info_span!("shared");
+        let clones = [shared.clone(), shared.clone()];
+        drop(clones);
+        assert!(
+            !drain_sink().contains("done"),
+            "a span with live clones is not closed"
+        );
+        drop(shared);
+        assert_eq!(
+            drain_sink().matches("done").count(),
+            1,
+            "the last reference closes the span exactly once"
+        );
+
+        // More spans than slots, closed one after another: each must find a
+        // free slot or it would render no close record.
+        for _ in 0..=MAX_SPANS {
+            drop(tracing::info_span!("reuse"));
+        }
+        assert_eq!(
+            drain_sink().matches("done").count(),
+            MAX_SPANS + 1,
+            "closed spans free their pool slot"
         );
     }
 }
