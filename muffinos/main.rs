@@ -42,9 +42,6 @@ fn main() {
         return;
     }
 
-    // QEMU opens the vars flash and the disk read-write. Both arrive through the
-    // runfiles tree as build outputs, so mutating them in place corrupts the
-    // action cache.
     let scratch = std::env::temp_dir().join("muffinos-run");
     std::fs::create_dir_all(&scratch).expect("unable to create the QEMU scratch directory");
     let ovmf_vars = scratch.join("ovmf-vars.fd");
@@ -148,8 +145,7 @@ continue"
     cmd.arg("-device");
     cmd.arg("virtio-blk-pci,drive=virtio-disk0");
 
-    // Prefer KVM, falling back to TCG so the runner still boots on hosts
-    // without /dev/kvm instead of failing to launch QEMU.
+    // Falls back to TCG so hosts without /dev/kvm still boot.
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     {
         cmd.arg("-machine");
@@ -179,10 +175,10 @@ continue"
 }
 
 /// Stages a runfiles artifact at `dest`, writable.
-///
-/// Runfiles arrive read-only. QEMU needs write access, and the copy also has to
-/// overwrite a read-only leftover from a previous run.
 fn stage_writable(src: &str, dest: &std::path::Path) {
+    // Runfiles are read-only build outputs, and QEMU opens the vars flash and
+    // the disk read-write. Writing them in place corrupts the action cache. The
+    // previous run left a read-only copy that must go before it can be replaced.
     let _ = std::fs::remove_file(dest);
     std::fs::copy(src, dest)
         .unwrap_or_else(|e| panic!("unable to stage {src} at {}: {e}", dest.display()));
@@ -200,14 +196,12 @@ const KERNEL_RECORD_MARKER: &[u8] = b"\x1b[2m[";
 const GATE_LIMIT: usize = 64 * 1024;
 
 /// Copies the QEMU serial stream to `to`, dropping everything before the
-/// first kernel log record.
-///
-/// OVMF mirrors the UEFI console to the serial port, so firmware and Limine
-/// messages precede the kernel's output and cannot be silenced through
-/// limine.conf. If the kernel never produces a record, the suppressed bytes
-/// are flushed on QEMU exit (or once [`GATE_LIMIT`] is exceeded) so boot
-/// failures stay diagnosable.
+/// first kernel log record. If none arrives, the suppressed bytes are flushed
+/// on QEMU exit or once [`GATE_LIMIT`] is exceeded, so boot failures stay
+/// diagnosable.
 fn forward_kernel_output(mut from: impl std::io::Read, mut to: impl std::io::Write) {
+    // OVMF mirrors the UEFI console to the serial port, so firmware and Limine
+    // messages precede the kernel's output and limine.conf cannot silence them.
     let mut chunk = [0_u8; 4096];
     let mut pending: Vec<u8> = vec![];
     let mut forwarding = false;
