@@ -102,40 +102,48 @@ mod tests {
     use crate::access::{CwdAccess, FileAccess};
     use crate::unistd::{sys_getcwd, sys_lseek, sys_read, sys_write};
 
-    #[test]
-    fn test_getcwd() {
-        struct Cwd<'a>(&'a RwLock<AbsoluteOwnedPath>);
-        impl CwdAccess for Cwd<'_> {
-            fn current_working_directory(&self) -> &RwLock<AbsoluteOwnedPath> {
-                self.0
-            }
-        }
+    struct Cwd(RwLock<AbsoluteOwnedPath>);
 
-        for args in [
-            (("/test/path", 0), Err(EINVAL)),
-            (("/test/path", 10), Err(ERANGE)),
-            (("/test/path", 11), Ok(())),
-        ] {
-            let ((path, size), expected) = args;
-            let cwd = AbsoluteOwnedPath::try_from(path).unwrap().into();
-            let access = Cwd(&cwd);
-            let mut buf = vec![0u8; size];
-            let ptr = buf.as_mut_ptr();
-            let res = sys_getcwd(&access, ptr.try_into().unwrap(), buf.len());
-            match expected {
-                Ok(()) => match res {
-                    Ok(addr) => {
-                        assert_eq!(addr, ptr as usize);
-                        assert_eq!(path.as_bytes(), &buf[..path.len()]);
-                        assert_eq!(0, buf[path.len()]);
-                    }
-                    Err(e) => panic!("failed with {e} but expected success"),
-                },
-                Err(e) => {
-                    assert_eq!(res, Err(e));
-                }
-            }
+    impl Cwd {
+        fn new(path: &str) -> Self {
+            Self(AbsoluteOwnedPath::try_from(path).unwrap().into())
         }
+    }
+
+    impl CwdAccess for Cwd {
+        fn current_working_directory(&self) -> &RwLock<AbsoluteOwnedPath> {
+            &self.0
+        }
+    }
+
+    #[test]
+    fn getcwd_rejects_zero_size() {
+        let cwd = Cwd::new("/test/path");
+        let mut buf = [0u8; 1];
+        let ptr = buf.as_mut_ptr().try_into().unwrap();
+
+        assert_eq!(Err(EINVAL), sys_getcwd(&cwd, ptr, 0));
+    }
+
+    #[test]
+    fn getcwd_needs_room_for_the_nul() {
+        let cwd = Cwd::new("/test/path");
+        let mut buf = [0u8; 10];
+        let ptr = buf.as_mut_ptr().try_into().unwrap();
+
+        assert_eq!(Err(ERANGE), sys_getcwd(&cwd, ptr, buf.len()));
+    }
+
+    #[test]
+    fn getcwd_writes_nul_terminated_path() {
+        let cwd = Cwd::new("/test/path");
+        let mut buf = [0xFFu8; 11];
+        let ptr = buf.as_mut_ptr();
+
+        let returned = sys_getcwd(&cwd, ptr.try_into().unwrap(), buf.len()).unwrap();
+
+        assert_eq!(ptr as usize, returned);
+        assert_eq!(b"/test/path\0", &buf);
     }
 
     fn lseek_fixture() -> (Mutex<MemoryFileAccess>, MemoryFd) {
