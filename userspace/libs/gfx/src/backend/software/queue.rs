@@ -7,7 +7,9 @@ use crate::error::Result;
 /// Rasterizes into a caller-owned framebuffer slice borrowed for `'fb`. The
 /// queue never owns or allocates the backing pixels.
 ///
-/// A steady state frame performs no allocation.
+/// Per-vertex scratch is reused across frames, but every `submit` allocates for
+/// the commands it records, including a copy of each bound vertex buffer per
+/// draw.
 pub struct SoftQueue<'fb> {
     target: &'fb mut [u32],
     width: u32,
