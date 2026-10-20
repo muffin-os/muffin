@@ -15,5 +15,5 @@ fn mmap_anon() {
 
     report.assert_line_contains("mmap: readonly write next");
     report.assert_no_line_contains("mmap: readonly write survived");
-    report.assert_line_contains("terminating process on signal SIGSEGV (pid 2)");
+    report.assert_line_contains("outcome pid=2 signal=SIGSEGV");
 }

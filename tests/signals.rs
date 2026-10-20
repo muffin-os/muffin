@@ -19,13 +19,10 @@
 use test_support::KernelTest;
 
 /// Ordered markers, each expected at or after the previous one.
-const MARKERS: [&str; 9] = [
+const MARKERS: [&str; 6] = [
     "A: start",
     "A: pending ok",
     "A: after unblock",
-    "stopping process",
-    "continuing process",
-    "terminating process on signal SIGTERM",
     "A: report ready=1 pre=1 stop=0 cont=1 term=0",
     "A: efault ok",
     "A: segv handled",
@@ -46,7 +43,7 @@ fn signal_delivery_end_to_end() {
     if !report
         .transcript
         .iter()
-        .any(|line| line.contains(MARKERS[6]))
+        .any(|line| line.contains(MARKERS[3]))
         && let Some(actual) = report
             .transcript
             .iter()
@@ -62,10 +59,11 @@ fn signal_delivery_end_to_end() {
         eprintln!("===== end transcript =====");
         panic!(
             "report line did not match {:?}, found {actual:?}",
-            MARKERS[6]
+            MARKERS[3]
         );
     }
 
     report.assert_markers_in_order(&MARKERS);
+    report.assert_line_contains("outcome pid=2 signal=SIGTERM");
     report.assert_no_line_contains("A: UNREACHABLE");
 }

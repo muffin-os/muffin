@@ -28,7 +28,7 @@ const MARKERS: [&str; 17] = [
     "A: redeliver ok",
     "A: nodefer nested ok",
     "A: forged sigreturn next",
-    "terminating process on signal SIGSEGV (pid 1)",
+    "outcome pid=1 signal=SIGSEGV",
 ];
 
 #[test]
@@ -44,12 +44,6 @@ fn signal_edge_cases_end_to_end() {
     report.assert_line_contains("D: wild stack delivery next");
     report.assert_line_contains("E: ud2 next");
     report.assert_line_contains("F: hlt next");
-    report.assert_line_contains("terminating process on signal SIGSEGV (pid 2)");
-    report.assert_line_contains("terminating process on signal SIGSEGV (pid 3)");
-    report.assert_line_contains("terminating process on signal SIGSEGV (pid 4)");
-    report.assert_line_contains("terminating process on signal SIGILL (pid 5)");
-    report.assert_line_contains("terminating process on signal SIGSEGV (pid 6)");
-    report.assert_line_contains("outcome pid=1 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=2 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=3 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=4 signal=SIGSEGV");
