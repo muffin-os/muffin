@@ -42,7 +42,6 @@ pub fn init() {
         frame.start_address().as_u64() | flags.bits()
     };
 
-    // set the extra field in the CPU structs to the CR3 value
     resp.cpus().iter().for_each(|cpu| {
         cpu.extra.store(cr3_val, Release);
     });
@@ -51,12 +50,10 @@ pub fn init() {
 
     TaskCleanup::init();
 
-    // then call the `cpu_init` function on each CPU (no-op on bootstrap CPU)
     resp.cpus().iter().skip(1).for_each(|cpu| {
         cpu.goto_address.write(cpu_init);
     });
 
-    // then call the `cpu_init` function on the bootstrap CPU
     unsafe { cpu_init_and_return(resp.cpus()[0]) };
 
     // the timer is running and could trigger an interrupt,
@@ -70,13 +67,11 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
     let cpu_arg = cpu.extra.load(Acquire);
     trace!("booting cpu {} with argument {}", cpu.id, cpu_arg);
 
-    // set the memory mapping that we got as a parameter
     unsafe {
         let flags = Cr3Flags::from_bits_truncate(cpu_arg);
         Cr3::write(PhysFrame::containing_address(PhysAddr::new(cpu_arg)), flags);
     }
 
-    // set up the GDT
     let (gdt, sel, tss) = create_gdt_and_tss();
     let gdt = Box::leak(Box::new(gdt));
     gdt.load();
@@ -87,14 +82,12 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
         load_tss(sel.tss);
     }
 
-    // set up the IDT
     let idt = create_idt();
     let idt = Box::leak(Box::new(idt));
     idt.load();
 
     let lapic = lapic::init();
 
-    // create the execution context for the CPU and store it
     {
         let ctx = ExecutionContext::new(cpu, gdt, sel, idt, tss, lapic);
         let addr = VirtAddr::from_ptr(Box::leak(Box::new(ctx)));
