@@ -28,13 +28,15 @@ fn test_create_and_write_file(sector_size: usize) {
     assert_eq!(file.len(), 0);
 
     let data = b"Hello, world!";
-    // write `data` until all direct pointers are used
-    for i in 0..((1024 * 12) / data.len()) {
+    let direct_capacity = 12 * fs.superblock().block_size() as usize;
+    let repetitions = direct_capacity / data.len();
+    for i in 0..repetitions {
         assert_eq!(
             fs.write_to_file(&mut file, i * data.len(), data).unwrap(),
             data.len()
         );
     }
+    assert_eq!(file.len(), repetitions * data.len());
 
     let direct_blocks = file.inode().direct_ptrs().count() as u32;
     let expected_sectors = direct_blocks * fs.superblock().sectors_per_block();
@@ -46,6 +48,12 @@ fn test_create_and_write_file(sector_size: usize) {
         .try_into()
         .unwrap();
     assert_eq!(on_disk.inode().num_disk_sectors(), expected_sectors);
+    let mut read_back = vec![0_u8; on_disk.len()];
+    assert_eq!(
+        fs.read_from_file(&on_disk, 0, &mut read_back).unwrap(),
+        read_back.len()
+    );
+    assert_eq!(data.repeat(repetitions), read_back);
 }
 
 generate_tests!(
