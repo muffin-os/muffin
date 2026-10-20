@@ -57,6 +57,15 @@ pub(crate) mod tree;
 
 static ROOT_PROCESS: OnceCell<Arc<Process>> = OnceCell::uninit();
 
+// Exclusive end of the canonical lower half, where the user address
+// space ends.
+const LOWER_HALF_END: u64 = 0x8000_0000_0000;
+
+// Dynamic (Location::Anywhere) reservations start at 4 GiB so they can
+// never grow into the fixed ET_EXEC link region around 0x20_0000, where
+// the ELF loader must reserve exact addresses.
+const DYNAMIC_LOWER_HALF_START: u64 = 0x1_0000_0000;
+
 pub fn new_process_id() -> ProcessId {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     ProcessId::from(COUNTER.fetch_add(1, Ordering::Relaxed))
@@ -192,8 +201,8 @@ impl Process {
                 current_working_directory: RwLock::new(ROOT.to_owned()),
                 address_space: None,
                 lower_half_memory: Arc::new(RwLock::new(VirtualMemoryManager::new(
-                    VirtAddr::new(0x00),
-                    0x0000_7FFF_FFFF_FFFF,
+                    VirtAddr::zero(),
+                    LOWER_HALF_END,
                 ))),
                 telemetry: Telemetry::default(),
                 memory_regions: MemoryRegions::new(),
@@ -229,13 +238,9 @@ impl Process {
             executable_segments: RwLock::new(vec![]),
             current_working_directory: RwLock::new(parent.current_working_directory.read().clone()),
             address_space: Some(address_space),
-            // Dynamic (Location::Anywhere) reservations start at 4 GiB so they
-            // can never grow into the fixed ET_EXEC link region around 0x20_0000,
-            // where the ELF loader must reserve exact addresses. The range ends
-            // at the top of the canonical lower half.
             lower_half_memory: Arc::new(RwLock::new(VirtualMemoryManager::new(
-                VirtAddr::new(0x1_0000_0000),
-                0x7F00_0000_0000,
+                VirtAddr::new(DYNAMIC_LOWER_HALF_START),
+                LOWER_HALF_END - DYNAMIC_LOWER_HALF_START,
             ))),
             telemetry: Telemetry::default(),
             memory_regions: MemoryRegions::new(),
