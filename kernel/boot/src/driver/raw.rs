@@ -16,7 +16,7 @@ impl RawDevices {
     /// Returns `AlreadyRegistered` if a device with the same id is registered.
     pub fn register_raw_device<D>(device: Arc<RwLock<D>>) -> Result<(), RegisterDeviceError>
     where
-        D: RawDevice<KernelDeviceId> + 'static,
+        D: RawDevice<KernelDeviceId> + Send + Sync + 'static,
     {
         RAW_DEVICES.write().register_device(device)?;
         // TODO(tpdenk): expose raw devices in devfs the way register_block_device does

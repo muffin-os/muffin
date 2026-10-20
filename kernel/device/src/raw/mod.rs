@@ -14,12 +14,8 @@ pub struct RawDeviceRegistry<Id>
 where
     Id: DeviceId + Ord + 'static,
 {
-    devices: BTreeMap<Id, Arc<RwLock<dyn RawDevice<Id>>>>,
+    devices: BTreeMap<Id, Arc<RwLock<dyn RawDevice<Id> + Send + Sync>>>,
 }
-
-unsafe impl<Id> Send for RawDeviceRegistry<Id> where Id: DeviceId + Ord + 'static {}
-
-unsafe impl<Id> Sync for RawDeviceRegistry<Id> where Id: DeviceId + Ord + 'static {}
 
 impl<Id> Default for RawDeviceRegistry<Id>
 where
@@ -51,8 +47,7 @@ where
     /// the same id is registered. The rejected `device` is dropped.
     pub fn register_device<D>(&mut self, device: Arc<RwLock<D>>) -> Result<(), RegisterDeviceError>
     where
-        D: RawDevice<Id>,
-        D: 'static,
+        D: RawDevice<Id> + Send + Sync + 'static,
     {
         let id = device.read().id();
         if self.devices.contains_key(&id) {
@@ -64,7 +59,9 @@ where
         Ok(())
     }
 
-    pub fn all_devices(&self) -> impl Iterator<Item = &Arc<RwLock<dyn RawDevice<Id>>>> {
+    pub fn all_devices(
+        &self,
+    ) -> impl Iterator<Item = &Arc<RwLock<dyn RawDevice<Id> + Send + Sync>>> {
         self.devices.values()
     }
 }
