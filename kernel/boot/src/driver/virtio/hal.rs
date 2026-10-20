@@ -40,7 +40,7 @@ unsafe impl Hal for HalImpl {
         AddressSpace::kernel()
             .map_range::<Size4KiB>(
                 &*segment,
-                frames.leak(), // this has to be deallocated in dma_dealloc
+                frames.leak(),
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
             )
             .unwrap();
@@ -53,13 +53,8 @@ unsafe impl Hal for HalImpl {
     }
 
     unsafe fn dma_dealloc(paddr: u64, vaddr: NonNull<u8>, pages: usize) -> i32 {
-        // strictly speaking this is not necessary, but since we allocate it through
-        // an [`OwnedPhysicalMemory`] object, we should also deallocate it. That way,
-        // for allocation and deallocation, everything goes through
-        // [`OwnedPhysicalMemory`] which maybe makes debugging easier.
-        //
-        // Alternatively, we could only create the [`PhysFrameRangeInclusive`] and
-        // then deallocate that directly.
+        // Rebuild the owner dma_alloc leaked so the frames return to the
+        // allocator, but only after nothing maps them any more.
         let frames = {
             let start = PhysFrame::containing_address(PhysAddr::new(paddr));
             let end = PhysFrame::containing_address(PhysAddr::new(
@@ -78,7 +73,6 @@ unsafe impl Hal for HalImpl {
             assert!(VirtualMemoryHigherHalf.release(segment));
         }
 
-        // we can not drop this any earlier, especially not until the respective virtual memory is unmapped
         drop(frames);
 
         0
