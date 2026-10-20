@@ -3,6 +3,7 @@ use core::cell::UnsafeCell;
 use kernel_abi::ProcessId;
 use spin::Mutex;
 use x86_64::VirtAddr;
+use x86_64::instructions::interrupts;
 use x86_64::registers::model_specific::KernelGsBase;
 use x86_64::structures::gdt::GlobalDescriptorTable;
 use x86_64::structures::idt::InterruptDescriptorTable;
@@ -54,12 +55,15 @@ impl ExecutionContext {
     ///
     /// Must be updated on every context switch so each userspace task enters
     /// the kernel on its own per-task kernel stack rather than a shared one.
+    ///
+    /// # Panics
+    /// In debug builds, panics if interrupts are enabled.
     pub fn set_kernel_stack(&self, top: VirtAddr) {
+        debug_assert!(!interrupts::are_enabled());
         // Safety: `tss` was obtained from a freshly leaked Box in
-        // `create_gdt_and_tss` and is therefore valid for 'static. The TSS is
-        // only ever written by this CPU's reschedule path (which holds the
-        // scheduler mutably and runs with interrupts disabled), so there are
-        // no concurrent accesses.
+        // `create_gdt_and_tss` and is therefore valid for 'static. The TSS
+        // belongs to this CPU alone and interrupts are off, so nothing can
+        // race the write.
         unsafe {
             (*self.tss).privilege_stack_table[0] = top;
         }
