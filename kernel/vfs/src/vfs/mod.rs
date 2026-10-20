@@ -22,7 +22,7 @@ pub mod testing;
 type Fs = Arc<RwLock<dyn FileSystem>>;
 
 pub struct Vfs {
-    file_systems: BTreeMap<AbsoluteOwnedPath, Fs>, // TODO: maybe a trie would be better here?
+    file_systems: BTreeMap<AbsoluteOwnedPath, Fs>,
 }
 
 impl Default for Vfs {
@@ -39,12 +39,14 @@ impl Vfs {
         }
     }
 
-    /// Mounts a file system at the given mount point.
-    /// The mount point must point to an empty directory.
+    /// Mounts a file system at the given mount point. Paths at or below the
+    /// mount point resolve into `fs` from then on. The mount point is not
+    /// looked up in the file system that contains it, so it does not have to
+    /// exist there.
     ///
     /// # Errors
-    /// This function returns an error if the mount point is already mounted,
-    /// not an empty directory or if another error occurs during mounting.
+    /// Returns [`MountError::AlreadyMounted`] if a file system is already
+    /// mounted at exactly this mount point.
     pub fn mount<P, F>(&mut self, mount_point: P, fs: F) -> Result<(), MountError>
     where
         P: AsRef<AbsolutePath>,
@@ -55,8 +57,6 @@ impl Vfs {
         if self.file_systems.contains_key(&mount_point) {
             return Err(MountError::AlreadyMounted);
         }
-
-        // TODO: check whether the mount_point is a directory
 
         self.file_systems
             .insert(mount_point, Arc::new(RwLock::new(fs)));
@@ -88,8 +88,6 @@ impl Vfs {
     where
         P: AsRef<AbsolutePath>,
     {
-        // FIXME: reuse already open VfsNodes
-
         let path = path.as_ref();
         let (mount_path, fs) = self.find_mount(path).ok_or(OpenError::NotFound)?;
         let relative_path = if mount_path == ROOT {
