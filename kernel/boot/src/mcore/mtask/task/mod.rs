@@ -28,8 +28,6 @@ mod queue;
 pub use queue::*;
 mod stack;
 pub use stack::*;
-mod state;
-pub use state::*;
 
 #[derive(Debug)]
 pub struct Task {
@@ -54,7 +52,6 @@ pub struct Task {
     /// If this task is currently running, then this value is not the current stack pointer.
     /// This must be set during the context switch.
     last_stack_ptr: Pin<Box<usize>>,
-    state: State,
     /// The kernel stack of the task. Every task starts with a stack in the higher half.
     /// Userspace tasks will then allocate a stack in the lower half, which will be stored in
     /// `ustack`.
@@ -142,7 +139,6 @@ impl Task {
         let process = process.clone();
         process.register_task();
         let should_terminate = AtomicBool::new(false);
-        let state = State::Ready;
         let last_stack_ptr = Box::pin(stack.initial_rsp().as_u64().into_usize());
         let links = Links::default();
         Self {
@@ -153,7 +149,6 @@ impl Task {
             park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
             last_stack_ptr,
-            state,
             kstack: Some(stack),
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
@@ -170,7 +165,6 @@ impl Task {
         process.register_task();
         let should_terminate = AtomicBool::new(false);
         let last_stack_ptr = Box::pin(0);
-        let state = State::Finished;
         let links = Links::new_stub();
         Self {
             tid,
@@ -180,7 +174,6 @@ impl Task {
             park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
             last_stack_ptr,
-            state,
             kstack: None,
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
@@ -253,7 +246,6 @@ impl Task {
         process.register_task();
         let should_terminate = AtomicBool::new(false);
         let last_stack_ptr = Box::pin(0);
-        let state = State::Running;
         Self {
             tid,
             name,
@@ -262,7 +254,6 @@ impl Task {
             park_ticket: ParkTicketCell::new(),
             pending_fault_addr: AtomicU64::new(0),
             last_stack_ptr,
-            state,
             kstack: None,
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
@@ -317,10 +308,6 @@ impl Task {
 
     pub(in crate::mcore::mtask) fn take_park_ticket(&self) -> Option<TaskParkTicket> {
         self.park_ticket.take()
-    }
-
-    pub fn state(&self) -> State {
-        self.state
     }
 
     pub fn kstack(&self) -> &Option<HigherHalfStack> {
