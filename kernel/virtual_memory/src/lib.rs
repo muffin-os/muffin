@@ -51,7 +51,7 @@ impl VirtualMemoryManager {
             }
             match self.find_overlapping_at(start, len) {
                 Some(existing) => {
-                    start = existing.start.as_u64() as u128 + existing.len as u128;
+                    start = existing.last().as_u64() as u128 + 1;
                 }
                 None => break,
             }
@@ -95,10 +95,9 @@ impl VirtualMemoryManager {
         }
         let last = start + (len as u128 - 1);
         self.segments.iter().find(|existing| {
-            let existing_start = existing.start.as_u64() as u128;
             existing.len != 0
-                && start <= existing_start + (existing.len as u128 - 1)
-                && existing_start <= last
+                && start <= existing.last().as_u64() as u128
+                && existing.start.as_u64() as u128 <= last
         })
     }
 }
