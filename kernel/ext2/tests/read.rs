@@ -117,17 +117,15 @@ fn do_test_read_file(sector_size: usize) {
     assert_eq!(Type::RegularFile, hello_txt.typ());
 
     {
-        // read the whole file
         let mut hello_txt_data = [0xFC_u8; 20];
         let read_bytes = fs
             .read_from_file(&hello_txt, 0, &mut hello_txt_data)
             .expect("read_from_file failed");
-        assert_eq!(14, read_bytes); // check that the right amount of bytes have been read
-        assert_eq!(b"Hello, World!\n", &hello_txt_data[0..14]); // check that the read bytes are correct
-        assert_eq!([0xFC_u8; 5], hello_txt_data[15..20]); // check that the remaining part of the buffer remains untouched
+        assert_eq!(14, read_bytes);
+        assert_eq!(b"Hello, World!\n", &hello_txt_data[0..14]);
+        assert_eq!([0xFC_u8; 5], hello_txt_data[15..20]);
     }
     {
-        // read a part of the file
         let mut hello_txt_data = [0_u8; 5];
         let read_bytes = fs
             .read_from_file(&hello_txt, 7, &mut hello_txt_data)
@@ -136,7 +134,6 @@ fn do_test_read_file(sector_size: usize) {
         assert_eq!(b"World", &hello_txt_data[..]);
     }
     {
-        // read at and past the end of the file
         let mut hello_txt_data = [0_u8; 5];
         assert_eq!(
             Ok(0),
