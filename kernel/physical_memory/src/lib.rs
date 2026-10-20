@@ -411,106 +411,18 @@ mod tests {
     }
 
     #[test]
-    fn test_first_free_maintained_on_allocate() {
-        let region = MemoryRegion::new(0, 10, FrameState::Free);
+    fn allocate_returns_lowest_free_frame_after_frees() {
+        let region = MemoryRegion::new(0, 4, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
+        let frames: Vec<PhysFrame<Size4KiB>> =
+            (0..4).map(|_| pmm.allocate_frame().unwrap()).collect();
 
-        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+        pmm.deallocate_frame(frames[3]).unwrap();
+        pmm.deallocate_frame(frames[1]).unwrap();
 
-        let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
-
-        let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 2);
-    }
-
-    #[test]
-    fn test_first_free_maintained_on_deallocate() {
-        let region = MemoryRegion::new(0, 10, FrameState::Free);
-        let mut pmm = PhysicalMemoryManager::new(vec![region]);
-
-        let frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-        let frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-        let frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 3);
-
-        pmm.deallocate_frame(frame2).unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
-
-        pmm.deallocate_frame(frame1).unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
-
-        pmm.deallocate_frame(frame3).unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
-    }
-
-    #[test]
-    fn test_first_free_all_frames_allocated() {
-        let region = MemoryRegion::new(0, 3, FrameState::Free);
-        let mut pmm = PhysicalMemoryManager::new(vec![region]);
-
-        let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-        let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-        let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        assert!(pmm.first_free.is_none());
-
-        let result: Option<PhysFrame<Size4KiB>> = PhysicalFrameAllocator::allocate_frame(&mut pmm);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_first_free_across_regions() {
-        let region1 = MemoryRegion::new(0x0000_0000, 2, FrameState::Free);
-        let region2 = MemoryRegion::new(0x1000_0000, 2, FrameState::Free);
-        let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
-
-        let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-        let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 1);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
-
-        let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 1);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
-    }
-
-    #[test]
-    fn test_first_free_deallocate_to_earlier_region() {
-        let region1 = MemoryRegion::new(0x0000_0000, 2, FrameState::Free);
-        let region2 = MemoryRegion::new(0x1000_0000, 2, FrameState::Free);
-        let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
-
-        let frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-        let frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 1);
-
-        pmm.deallocate_frame(frame1).unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
-
-        pmm.deallocate_frame(frame2).unwrap();
-
-        assert_eq!(pmm.first_free.unwrap().region_idx, 0);
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
+        assert_eq!(Some(frames[1]), pmm.allocate_frame());
+        assert_eq!(Some(frames[3]), pmm.allocate_frame());
+        assert_eq!(Option::<PhysFrame<Size4KiB>>::None, pmm.allocate_frame());
     }
 
     #[test]
@@ -520,8 +432,6 @@ mod tests {
 
         let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0, small_frame.start_address().as_u64());
-
-        assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
 
         let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
 
