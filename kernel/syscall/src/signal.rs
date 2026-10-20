@@ -912,6 +912,7 @@ mod tests {
         sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt).unwrap();
 
         let delivered = cx.get_delivered();
+        assert_eq!(delivered.len(), 2, "both processes received the broadcast");
         for signal in delivered {
             match signal.siginfo.info {
                 SigInfoField::Kill { pid, uid } => {
