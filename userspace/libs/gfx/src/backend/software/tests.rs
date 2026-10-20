@@ -95,6 +95,13 @@ fn new_does_not_write_target() {
 }
 
 #[test]
+#[should_panic(expected = "height 0")]
+fn new_rejects_zero_height() {
+    let mut target = [0u32; 16];
+    let _ = SoftQueue::new(&mut target, 4, 0, 4);
+}
+
+#[test]
 fn no_draw_leaves_framebuffer_blank() {
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
     let pso = simple_pipeline(&mut backend, 8);

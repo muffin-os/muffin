@@ -43,9 +43,15 @@ impl<'fb> SoftQueue<'fb> {
     ///
     /// Never clears `target`. Uncovered pixels keep whatever was already
     /// there, so the caller must clear once before the first draw.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `height` is zero, `stride` is smaller than `width`, or
+    /// `target` is shorter than the required pixel count.
     pub fn new(target: &'fb mut [u32], width: u32, height: u32, stride: usize) -> Self {
         let w = width as usize;
         let h = height as usize;
+        assert!(h > 0, "height 0");
         assert!(stride >= w, "stride {stride} smaller than width {width}");
         assert!(
             target.len() >= stride * (h - 1) + w,
