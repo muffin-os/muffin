@@ -388,6 +388,7 @@ struct PendingProcess {
 }
 
 /// How a spawned process ended.
+#[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     Exited(u64),
     Signaled(String),
@@ -408,27 +409,17 @@ pub struct RunReport {
 }
 
 impl RunReport {
-    /// Exit code of the `index`-th spawned process, or `None` if it was
-    /// signaled rather than exiting or no process has that index.
-    #[must_use]
-    pub fn exit_code(&self, index: usize) -> Option<u64> {
-        match self.processes.get(index).map(|p| &p.outcome) {
-            Some(Outcome::Exited(code)) => Some(*code),
-            _ => None,
-        }
-    }
-
     /// Asserts the `index`-th spawned process exited with `expected`.
     ///
     /// # Panics
     /// Dumps the transcript and panics if the process is missing, was signaled,
     /// or exited with a different code.
     pub fn assert_exit_code(&self, index: usize, expected: u64) {
-        match self.exit_code(index) {
-            Some(code) if code == expected => {}
+        match self.processes.get(index).map(|p| &p.outcome) {
+            Some(Outcome::Exited(code)) if *code == expected => {}
             other => {
                 self.dump();
-                panic!("process index {index} exit code was {other:?}, expected Some({expected})");
+                panic!("process index {index} outcome was {other:?}, expected Exited({expected})");
             }
         }
     }
@@ -534,4 +525,32 @@ fn parse_signal(line: &str) -> Option<(String, u64)> {
 /// skip any log prefix (timestamp, level, target) before a known payload.
 fn anchor_after<'a>(line: &'a str, anchor: &str) -> Option<&'a str> {
     line.find(anchor).map(|idx| &line[idx + anchor.len()..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signaled_report() -> RunReport {
+        RunReport {
+            transcript: vec![],
+            processes: vec![SpawnedProcess {
+                path: "/bin/init".to_owned(),
+                pid: 1,
+                outcome: Outcome::Signaled("SIGSEGV".to_owned()),
+            }],
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Signaled(\"SIGSEGV\")")]
+    fn assert_exit_code_names_the_signal() {
+        signaled_report().assert_exit_code(0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "None")]
+    fn assert_exit_code_names_a_missing_process() {
+        signaled_report().assert_exit_code(1, 0);
+    }
 }

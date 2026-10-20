@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,4 +7,10 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "test_support",
     edition = "2024",
+)
+
+rust_test(
+    name = "test",
+    crate = ":support",
+    size = "small",
 )
