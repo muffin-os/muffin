@@ -3,8 +3,8 @@ use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use access::KernelAccess;
 use kernel_abi::{
-    EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ERANGE, ESRCH, Errno, IoctlRequest, ProcessId,
-    SigAction, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence, syscall_name,
+    EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno, IoctlRequest,
+    ProcessId, SigAction, SigMaskHow, SigSet, Signal, Stat, Timespec, Whence, syscall_name,
 };
 use kernel_syscall::access::{FileAccess, ProcessesAccess};
 use kernel_syscall::fcntl::sys_open;
@@ -14,7 +14,6 @@ use kernel_syscall::unistd::{sys_fsync, sys_getcwd, sys_ioctl, sys_lseek, sys_re
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use tracing::{debug, error};
 use x86_64::VirtAddr;
-use x86_64::instructions::hlt;
 use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::arch::idt::SyscallRegisters;
@@ -62,12 +61,7 @@ pub(crate) fn dispatch_syscall(
             exec::dispatch_sys_execve(arg1, arg2, arg3, arg4, arg5, arg6, frame, regs)
         }
         kernel_abi::SYS_SHUTDOWN => dispatch_sys_shutdown(),
-        _ => {
-            error!("unimplemented syscall: {} ({n})", syscall_name(n));
-            loop {
-                hlt();
-            }
-        }
+        _ => Err(ENOSYS),
     };
 
     match result {

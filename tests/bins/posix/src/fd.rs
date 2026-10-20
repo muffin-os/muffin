@@ -1,6 +1,7 @@
 use minilib::{
-    EBADF, EFAULT, EINVAL, ENOENT, ENOTTY, FbScreenInfo, IoctlRequest, SYS_IOCTL, SYS_LSEEK,
-    SYS_READ, SYS_WRITE, Stat, Whence, fstat, fsync, ioctl, lseek, open, read, ret, write,
+    EBADF, EFAULT, EINVAL, ENOENT, ENOSYS, ENOTTY, FbScreenInfo, IoctlRequest, SYS_CLOSE,
+    SYS_IOCTL, SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, fstat, fsync, ioctl, lseek, open,
+    read, ret, write,
 };
 
 use crate::check;
@@ -150,4 +151,10 @@ pub fn run() {
     check::require("fd/fstat_dotdot_size", stat.size == 15);
 
     check::expect_err("fd/open_through_file", open("/data/hello.txt/x"), ENOENT);
+
+    check::expect_err(
+        "fd/close_unimplemented",
+        ret(minilib::syscall1(SYS_CLOSE, fd as usize)),
+        ENOSYS,
+    );
 }
