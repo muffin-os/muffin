@@ -148,8 +148,8 @@ impl SignalState {
     }
 
     /// Generation-time delivery. Records the signal as pending and, for a
-    /// stopped process receiving `Cont` or `Kill`, clears the stopped flag so
-    /// the task can resume (and, for `Kill`, die at its next safe point).
+    /// stopped process receiving `Continue` or `Kill`, clears the stopped flag
+    /// so the task can resume (and, for `Kill`, die at its next safe point).
     pub fn deliver(&mut self, signo: Signal) -> DeliverEffect {
         self.set_pending(signo);
         if matches!(signo, Signal::Continue | Signal::Kill) && self.stopped {
@@ -163,8 +163,8 @@ impl SignalState {
     }
 
     /// Set the pending bit, enforcing the POSIX stop/continue mutual discard.
-    /// A stop-family signal drops any pending `Cont`, and `Cont` drops any
-    /// pending stop-family signal.
+    /// A stop-family signal drops any pending `Continue`, and `Continue` drops
+    /// any pending stop-family signal.
     pub fn set_pending(&mut self, signo: Signal) {
         self.pending |= signo.bit();
         if STOP_SIGNALS_MASK & signo.bit() != 0 {
