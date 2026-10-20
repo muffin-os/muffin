@@ -151,7 +151,7 @@ pub struct Process {
     pid: ProcessId,
     name: String,
 
-    ppid: RwLock<ProcessId>,
+    ppid: ProcessId,
 
     executable_path: RwLock<Option<AbsoluteOwnedPath>>,
     executable_segments: RwLock<Vec<LowerHalfAllocation<Writable>>>,
@@ -195,7 +195,7 @@ impl Process {
             let root = Arc::new(Self {
                 pid,
                 name: "root".to_string(),
-                ppid: RwLock::new(pid),
+                ppid: pid,
                 executable_path: RwLock::new(None),
                 executable_segments: RwLock::new(vec![]),
                 current_working_directory: RwLock::new(ROOT.to_owned()),
@@ -233,7 +233,7 @@ impl Process {
         let process = Self {
             pid,
             name,
-            ppid: RwLock::new(parent_pid),
+            ppid: parent_pid,
             executable_path: RwLock::new(executable_path.map(|x| x.as_ref().to_owned())),
             executable_segments: RwLock::new(vec![]),
             current_working_directory: RwLock::new(parent.current_working_directory.read().clone()),
@@ -302,7 +302,7 @@ impl Process {
     }
 
     pub fn ppid(&self) -> ProcessId {
-        *self.ppid.read()
+        self.ppid
     }
 
     pub fn name(&self) -> &str {
@@ -503,26 +503,10 @@ impl Debug for Process {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Process")
             .field("pid", &self.pid)
-            .field("ppid", &*self.ppid.read())
+            .field("ppid", &self.ppid)
             .field("name", &self.name)
             .field("address_space", self.address_space())
             .finish_non_exhaustive()
-    }
-}
-
-impl Drop for Process {
-    fn drop(&mut self) {
-        let my_ppid = *self.ppid.read();
-        let mut guard = process_tree().write();
-        guard
-            .processes
-            .remove(&self.pid)
-            .expect("process should be in process tree");
-        if let Some(children) = guard.children.remove(&self.pid) {
-            for child in children {
-                *child.ppid.write() = my_ppid;
-            }
-        }
     }
 }
 
