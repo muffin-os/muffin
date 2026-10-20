@@ -23,13 +23,11 @@ pub const SIGFRAME_MAGIC: u64 = 0x8D2F_FAB8_19E3_EECC;
 
 /// The full context saved on the user stack when a handler is entered. It is
 /// read back verbatim by `sys_sigreturn` to restore the interrupted context.
-///
-/// The layout is fixed. `fx` lives at offset 0 so the whole frame keeps 16 byte
-/// alignment for `fxsave64`/`fxrstor64`. Callee saved GPRs need no slots because
-/// they survive the kernel C call chain, the handler, and the sigreturn chain.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy)]
 struct SigFrame {
+    // First so the whole frame keeps the 16 byte alignment fxsave64 needs.
+    // Callee saved GPRs need no slots because they survive the handler call chain.
     fx: [u8; 512],
     regs: SyscallRegisters,
     rip: u64,
@@ -49,13 +47,10 @@ struct FxBuf([u8; 512]);
 
 /// Capture the current FPU state into `fx`, returning `true` when `fx` holds real
 /// state and `false` when the task has never touched the FPU.
-///
-/// Lazy FPU switching (CR0.TS) decides where the live state is. TS clear means
-/// the registers belong to the current task, so they are saved directly. TS set
-/// means the state was already spilled into the task fx area on the last switch,
-/// so the frame copies that instead. The delivery path never clears TS. That
-/// keeps the lazy restore consistent with what the frame recorded.
 fn capture_fpu(fx: &mut [u8; 512]) -> bool {
+    // With CR0.TS clear the registers belong to this task. Otherwise the last
+    // switch already spilled them into the task fx area. TS is left as is so
+    // the lazy restore stays consistent with what the frame recorded.
     if !Cr0::read().contains(Cr0Flags::TASK_SWITCHED) {
         let mut buf = FxBuf([0u8; 512]);
         // Safety: buf is 16 byte aligned and 512 bytes, the size fxsave64 writes.
@@ -87,15 +82,6 @@ fn capture_fpu(fx: &mut [u8; 512]) -> bool {
 /// Build a signal frame on the user stack and return the frame base address.
 /// Terminates the process on `Segfault` when the frame range is not mapped
 /// user writable memory.
-///
-/// The frame is placed 128 bytes below the interrupted stack pointer, then
-/// aligned down to 16 bytes. Muffin's own toolchain disables the red zone,
-/// the skip keeps delivery safe for any ABI-conforming binary that does use
-/// `[rsp - 128, rsp)`.
-///
-/// The restorer address is written at `base - 8` so the handler returns into
-/// it, and the handler entry stack pointer becomes `base - 8` which gives
-/// the `rsp % 16 == 8` shape the SysV ABI expects right after a `call`.
 fn write_sigframe(
     frame: &InterruptStackFrame,
     regs: &SyscallRegisters,
@@ -105,6 +91,9 @@ fn write_sigframe(
 ) -> u64 {
     let user_rsp = frame.stack_pointer.as_u64();
     let size = size_of::<SigFrame>() as u64;
+    // Skip the 128 byte red zone for ABI-conforming binaries (Muffin's own
+    // toolchain disables it). The restorer goes at base - 8 so the handler
+    // returns into it and enters with rsp % 16 == 8, as right after a call.
     let base = user_rsp.wrapping_sub(128).wrapping_sub(size) & !0xF;
     let start = base.wrapping_sub(8);
 
@@ -225,9 +214,9 @@ pub fn reap_current_if_requested(task: &Task) -> bool {
     true
 }
 
-/// Restore the context a handler was entered from. Reads the frame the handler
-/// stack pointer points at, verifies the magic, and rebuilds the interrupted
-/// registers, instruction pointer, stack pointer, flags, and FPU state.
+/// Restore the context a handler was entered from, reading the frame the
+/// handler stack pointer points at. Terminates the process on `Segfault` when
+/// the frame is not readable user memory or its magic does not match.
 pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
     let addr = frame.stack_pointer.as_u64() as usize;
     let ptr = match unsafe { UserspaceMutPtr::<SigFrame>::try_from_usize(addr) } {
