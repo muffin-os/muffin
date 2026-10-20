@@ -1,6 +1,65 @@
 use crate::{EINVAL, Errno, ProcessId};
 
-pub type SigSet = u64;
+/// Set of signals with the same layout as the `sigset_t` word userspace passes
+/// to `sigprocmask` and `sigpending`.
+#[repr(transparent)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub struct SigSet(u64);
+
+impl SigSet {
+    pub const EMPTY: Self = Self(0);
+    pub const ALL: Self = Self(u64::MAX);
+
+    #[must_use]
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    #[must_use]
+    pub const fn contains(self, signo: Signal) -> bool {
+        self.0 & signo.bit().0 != 0
+    }
+
+    pub fn insert(&mut self, signo: Signal) {
+        self.0 |= signo.bit().0;
+    }
+
+    pub fn remove(&mut self, signo: Signal) {
+        self.0 &= !signo.bit().0;
+    }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    #[must_use]
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    #[must_use]
+    pub const fn difference(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    /// Member signals in ascending signal number order.
+    pub fn iter(self) -> impl Iterator<Item = Signal> {
+        (1..=Signal::COUNT as i32)
+            .filter_map(|n| Signal::try_from(n).ok())
+            .filter(move |signo| self.contains(*signo))
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -166,9 +225,15 @@ impl Signal {
         self as i32
     }
 
+    /// Zero-based position of the signal in per-signal tables and in `SigSet`.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self as usize - 1
+    }
+
     #[must_use]
     pub const fn bit(self) -> SigSet {
-        1 << (self as i32 - 1)
+        SigSet(1 << self.index())
     }
 
     #[must_use]
@@ -203,10 +268,11 @@ impl Signal {
     }
 }
 
-pub const STOP_SIGNALS_MASK: SigSet = Signal::Stop.bit()
-    | Signal::TerminalStop.bit()
-    | Signal::TerminalInput.bit()
-    | Signal::TerminalOutput.bit();
+pub const STOP_SIGNALS_MASK: SigSet = Signal::Stop
+    .bit()
+    .union(Signal::TerminalStop.bit())
+    .union(Signal::TerminalInput.bit())
+    .union(Signal::TerminalOutput.bit());
 
 #[repr(usize)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -258,8 +324,15 @@ mod tests {
 
     #[test]
     fn signal_bit_convention() {
-        assert_eq!(Signal::Abort.bit(), 1, "lowest signal occupies bit 0");
-        assert_eq!(Signal::Kill.bit(), 1 << 9, "bit is signo - 1");
+        for n in 1..=Signal::COUNT as i32 {
+            let signo = Signal::try_from(n).unwrap();
+            assert_eq!(
+                signo.bit().bits(),
+                1 << (n - 1),
+                "{} must occupy bit signo - 1",
+                signo.name()
+            );
+        }
     }
 
     #[test]

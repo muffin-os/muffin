@@ -321,7 +321,7 @@ pub fn deliver_fault(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
     let mut guard = process.signals_write();
 
     match guard.disposition(signo) {
-        Disposition::Handler(action) if signo.bit() & guard.blocked() == 0 => {
+        Disposition::Handler(action) if !guard.blocked().contains(signo) => {
             let old_blocked = guard.apply_handler_entry(signo, &action);
             drop(guard);
             let base = write_sigframe(frame, regs, signo, old_blocked, &action);

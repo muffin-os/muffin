@@ -28,7 +28,7 @@ fn query(name: &str, signo: Signal) -> SigAction {
 }
 
 fn mask(name: &str) -> SigSet {
-    let mut set: SigSet = 0;
+    let mut set = SigSet::EMPTY;
     check::expect_ok(
         name,
         sigprocmask(SigMaskHow::Block, None, Some(&mut set)),
@@ -74,7 +74,7 @@ pub fn run() {
 
     let installed = SigAction {
         handler: SigHandler::new(usr1_handler as *const () as usize),
-        mask: 0,
+        mask: SigSet::EMPTY,
         flags: SaFlags::default(),
         restorer: sigreturn_restorer as *const () as usize,
     };
@@ -149,7 +149,7 @@ pub fn run() {
     );
     check::require(
         "signal/mask_block_effective",
-        mask("signal/mask_block_readback") == baseline_mask | usr1_bit,
+        mask("signal/mask_block_readback") == baseline_mask.union(usr1_bit),
     );
     check::expect_ok(
         "signal/mask_unblock",
@@ -158,10 +158,10 @@ pub fn run() {
     );
     check::require(
         "signal/mask_unblock_effective",
-        mask("signal/mask_unblock_readback") == baseline_mask & !usr1_bit,
+        mask("signal/mask_unblock_readback") == baseline_mask.difference(usr1_bit),
     );
 
-    let all: SigSet = SigSet::MAX;
+    let all = SigSet::ALL;
     check::expect_ok(
         "signal/mask_setmask",
         sigprocmask(SigMaskHow::SetMask, Some(&all), None),
@@ -169,7 +169,8 @@ pub fn run() {
     );
     check::require(
         "signal/mask_kill_stop_unblockable",
-        mask("signal/mask_setmask_readback") == all & !(Signal::Kill.bit() | Signal::Stop.bit()),
+        mask("signal/mask_setmask_readback")
+            == all.difference(Signal::Kill.bit().union(Signal::Stop.bit())),
     );
     check::expect_ok(
         "signal/mask_restore",
@@ -182,9 +183,9 @@ pub fn run() {
         EINVAL,
     );
 
-    let mut pending: SigSet = 0;
+    let mut pending = SigSet::EMPTY;
     check::expect_ok("signal/pending_query", sigpending(&mut pending), ());
-    check::require("signal/pending_empty", pending == 0);
+    check::require("signal/pending_empty", pending.is_empty());
     check::expect_err(
         "signal/pending_null",
         ret(unsafe { syscall1(SYS_SIGPENDING, 0) }),

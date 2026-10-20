@@ -146,7 +146,7 @@ pub fn getpid() -> i64 {
 pub fn install_handler(signo: Signal, handler: extern "C" fn(Signal)) -> Result<(), Errno> {
     let action = SigAction {
         handler: SigHandler::new(handler as usize),
-        mask: 0,
+        mask: SigSet::EMPTY,
         flags: SaFlags::default(),
         restorer: sigreturn_restorer as *const () as usize,
     };

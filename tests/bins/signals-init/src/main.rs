@@ -113,13 +113,13 @@ fn role_a() {
 
     let _ = install_handler(Signal::Usr1, usr1_handler);
 
-    let usr1_set: SigSet = Signal::Usr1.bit();
+    let usr1_set = Signal::Usr1.bit();
     let _ = sigprocmask(SigMaskHow::Block, Some(&usr1_set), None);
     let _ = kill(0, Signal::Usr1);
 
-    let mut pending: SigSet = 0;
+    let mut pending = SigSet::EMPTY;
     let _ = sigpending(&mut pending);
-    if pending & Signal::Usr1.bit() != 0 {
+    if pending.contains(Signal::Usr1) {
         println!("A: pending ok");
     }
 

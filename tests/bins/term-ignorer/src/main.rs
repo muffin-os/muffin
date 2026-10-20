@@ -2,8 +2,8 @@
 #![no_main]
 
 use minilib::{
-    Errno, SaFlags, SigAction, SigHandler, Signal, Timespec, getpid, nanosleep, println, shutdown,
-    sigaction,
+    Errno, SaFlags, SigAction, SigHandler, SigSet, Signal, Timespec, getpid, nanosleep, println,
+    shutdown, sigaction,
 };
 
 fn sleep_ms(ms: u64) -> Result<(), Errno> {
@@ -19,7 +19,7 @@ fn victim() -> ! {
     // handler, so nothing ever returns through the restorer trampoline.
     let action = SigAction {
         handler: SigHandler::IGNORE,
-        mask: 0,
+        mask: SigSet::EMPTY,
         flags: SaFlags::default(),
         restorer: 0,
     };

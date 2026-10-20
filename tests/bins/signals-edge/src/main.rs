@@ -56,7 +56,7 @@ fn wait_runs(counter: &AtomicU32, target: u32, budget: u32) -> bool {
 fn custom_action(handler: extern "C" fn(Signal), flags: SaFlags) -> SigAction {
     SigAction {
         handler: SigHandler::new(handler as usize),
-        mask: 0,
+        mask: SigSet::EMPTY,
         flags,
         restorer: sigreturn_restorer as *const () as usize,
     }
@@ -121,7 +121,7 @@ fn role_a() {
 
     let no_restorer = SigAction {
         handler: SigHandler::new(noop_handler as *const () as usize),
-        mask: 0,
+        mask: SigSet::EMPTY,
         flags: SaFlags::default(),
         restorer: 0,
     };
@@ -143,16 +143,14 @@ fn role_a() {
         println!("A: sigpending einval ok");
     }
 
-    let full: SigSet = u64::MAX;
-    let _ = sigprocmask(SigMaskHow::Block, Some(&full), None);
-    let mut current: SigSet = 0;
+    let _ = sigprocmask(SigMaskHow::Block, Some(&SigSet::ALL), None);
+    let mut current = SigSet::EMPTY;
     let _ = sigprocmask(SigMaskHow::Block, None, Some(&mut current));
-    let unblockable = Signal::Kill.bit() | Signal::Stop.bit();
-    if current & unblockable == 0 && current & Signal::Terminate.bit() != 0 {
+    let unblockable = Signal::Kill.bit().union(Signal::Stop.bit());
+    if current.intersection(unblockable).is_empty() && current.contains(Signal::Terminate) {
         println!("A: unblockable ok");
     }
-    let empty: SigSet = 0;
-    let _ = sigprocmask(SigMaskHow::SetMask, Some(&empty), None);
+    let _ = sigprocmask(SigMaskHow::SetMask, Some(&SigSet::EMPTY), None);
 
     let urgent = custom_action(urgent_handler, SaFlags::RESETHAND);
     let _ = sigaction(Signal::Urgent, Some(&urgent), None);
@@ -203,7 +201,7 @@ fn role_b() {
     println!("B: start");
 
     let _ = install_handler(Signal::Segfault, b_segv_handler);
-    let segv: SigSet = Signal::Segfault.bit();
+    let segv = Signal::Segfault.bit();
     let _ = sigprocmask(SigMaskHow::Block, Some(&segv), None);
 
     println!("B: blocked fault next");
