@@ -9,8 +9,6 @@ use crate::backend::software::{
     SoftAdapter, SoftAllocator, SoftBackend, SoftCompiler, SoftFence, SoftQueue, SoftShaderDef,
 };
 
-// ── shared shader functions ──────────────────────────────────────────────────
-
 fn passthrough_vert(input: &[f32], output: &mut [f32]) {
     output[0] = input[0];
     output[1] = input[1];
@@ -37,14 +35,11 @@ fn color_frag(interp: &[f32]) -> u32 {
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
 fn encode_verts(floats: &[f32]) -> Vec<u8> {
     floats.iter().flat_map(|f| f.to_ne_bytes()).collect()
 }
 
-/// Build a backend and a simple (passthrough-vert, white-frag) pipeline.
-/// `vertex_stride` is the byte size of one vertex in the buffer.
+/// Compiles a passthrough-vert, white-frag pipeline on `backend`.
 fn simple_pipeline(
     backend: &mut SoftBackend,
     vertex_stride: usize,
@@ -68,8 +63,6 @@ fn simple_pipeline(
         })
         .unwrap()
 }
-
-// ── tests ────────────────────────────────────────────────────────────────────
 
 #[test]
 fn adapter_is_not_hw_accelerated() {
@@ -126,7 +119,7 @@ fn no_draw_leaves_framebuffer_blank() {
 
 #[test]
 fn triangle_writes_correct_pixels() {
-    // CCW triangle in NDC; screen corners in a 4×4 framebuffer:
+    // CW triangle in NDC. Screen corners in a 4×4 framebuffer:
     //   v0 (-0.5,  0.5) → screen (1, 1)
     //   v1 ( 0.5,  0.5) → screen (3, 1)
     //   v2 (-0.5, -0.5) → screen (1, 3)
@@ -261,8 +254,6 @@ fn interpolants_vary_across_triangle() {
         "pixel (2,3) near base → intensity < 0.5 → green"
     );
 }
-
-// ── Gouraud shading ──────────────────────────────────────────────────────────
 
 #[test]
 fn gouraud_triangle_blends_per_vertex_colors() {
