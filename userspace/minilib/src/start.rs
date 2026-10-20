@@ -79,10 +79,10 @@ pub fn env() -> impl Iterator<Item = &'static [u8]> {
     strings(&ENVP, &ENVC)
 }
 
-/// The strings live on the initial stack, which is never reclaimed, so they
-/// outlive every caller.
 fn strings(base: &AtomicUsize, count: &AtomicUsize) -> impl Iterator<Item = &'static [u8]> {
     let base = base.load(Ordering::Relaxed) as *const *const u8;
+    // Safety: the strings live on the initial stack, which is never reclaimed, so
+    // they outlive every caller.
     (0..count.load(Ordering::Relaxed)).map(move |i| unsafe { bytes_of(*base.add(i)) })
 }
 
