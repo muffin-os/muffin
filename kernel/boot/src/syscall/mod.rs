@@ -1,5 +1,6 @@
 use core::ops::Neg;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
+use core::time::Duration;
 
 use access::KernelAccess;
 use kernel_abi::{
@@ -375,36 +376,23 @@ fn dispatch_sys_lseek(fd: usize, offset: usize, whence: usize) -> Result<usize, 
 
 /// POSIX clock_gettime backed by the HPET main counter.
 fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno> {
-    let ns = u128::from(hpet().read().elapsed_ns());
-
-    let secs_since_boot = ns / 1_000_000_000;
-    // tv_nsec is always below 1e9 so the cast cannot truncate
-    let tv_nsec = (ns % 1_000_000_000) as i64;
-
-    let total_secs = match clockid {
-        kernel_abi::CLOCK_MONOTONIC => secs_since_boot,
+    let since_boot = Duration::from_nanos(hpet().read().elapsed_ns());
+    let now = match clockid {
+        kernel_abi::CLOCK_MONOTONIC => since_boot,
         kernel_abi::CLOCK_REALTIME => {
-            let boot = *crate::BOOT_TIME_SECONDS.get().ok_or(EINVAL)?;
-            boot as u128 + secs_since_boot
+            let boot = Duration::from_secs(*crate::BOOT_TIME_SECONDS.get().ok_or(EINVAL)?);
+            boot.checked_add(since_boot).ok_or(EINVAL)?
         }
         _ => return Err(EINVAL),
     };
-
-    // seconds since epoch stay within i64 for centuries, but convert fallibly to avoid truncation
-    let tv_sec = i64::try_from(total_secs).map_err(|_| EINVAL)?;
-    write_user::<Timespec>(tp, Timespec { tv_sec, tv_nsec })?;
+    write_user::<Timespec>(tp, Timespec::from(now))?;
     Ok(0)
 }
 
 /// POSIX nanosleep. Wake precision is one LAPIC tick.
 fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
-    let ts = read_user::<Timespec>(req)?;
-    if ts.tv_sec < 0 || !(0..1_000_000_000).contains(&ts.tv_nsec) {
-        return Err(EINVAL);
-    }
-    let duration_ns = (ts.tv_sec as u64)
-        .saturating_mul(1_000_000_000)
-        .saturating_add(ts.tv_nsec as u64);
+    let duration = Duration::try_from(read_user::<Timespec>(req)?)?;
+    let duration_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
     let deadline = hpet().read().elapsed_ns().saturating_add(duration_ns);
     let process = Process::current().clone();
 
@@ -422,13 +410,7 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
             // POSIX allows a null rem, which skips the remainder writeback.
             if rem != 0 {
                 let left = deadline - now;
-                write_user::<Timespec>(
-                    rem,
-                    Timespec {
-                        tv_sec: (left / 1_000_000_000) as i64,
-                        tv_nsec: (left % 1_000_000_000) as i64,
-                    },
-                )?;
+                write_user::<Timespec>(rem, Timespec::from(Duration::from_nanos(left)))?;
             }
             Err(EINTR)
         }

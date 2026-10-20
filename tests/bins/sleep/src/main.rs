@@ -1,37 +1,28 @@
 #![no_std]
 #![no_main]
 
+use core::time::Duration;
+
 use minilib::{
-    CLOCK_MONOTONIC, EINTR, Errno, Signal, Timespec, clock_gettime, getpid, install_handler, kill,
+    CLOCK_MONOTONIC, EINTR, Signal, Timespec, clock_gettime, getpid, install_handler, kill,
     nanosleep, println,
 };
 
 extern "C" fn urgent_handler(_signo: Signal) {}
 
-fn now_ms() -> u64 {
-    let mut ts = Timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
+fn now() -> Duration {
+    let mut ts = Timespec::default();
     let _ = clock_gettime(CLOCK_MONOTONIC, &mut ts);
-    ts.tv_sec as u64 * 1_000 + ts.tv_nsec as u64 / 1_000_000
-}
-
-fn sleep_ms(ms: u64) -> Result<(), Errno> {
-    let req = Timespec {
-        tv_sec: (ms / 1_000) as i64,
-        tv_nsec: ((ms % 1_000) * 1_000_000) as i64,
-    };
-    nanosleep(&req, None)
+    Duration::try_from(ts).unwrap_or_default()
 }
 
 fn victim() {
     println!("sleep: start");
 
-    let before = now_ms();
-    let rc = sleep_ms(200);
-    let elapsed = now_ms() - before;
-    if rc.is_ok() && elapsed >= 200 {
+    let before = now();
+    let rc = nanosleep(&Duration::from_millis(200).into(), None);
+    let elapsed = now().saturating_sub(before);
+    if rc.is_ok() && elapsed >= Duration::from_millis(200) {
         println!("sleep: duration ok");
     } else {
         println!("sleep: UNREACHABLE duration");
@@ -41,10 +32,10 @@ fn victim() {
     // the sleep. It must be installed before the driver's kill can land.
     let _ = install_handler(Signal::Urgent, urgent_handler);
 
-    let before = now_ms();
-    let rc = sleep_ms(10_000);
-    let elapsed = now_ms() - before;
-    if rc == Err(EINTR) && elapsed < 8_000 {
+    let before = now();
+    let rc = nanosleep(&Duration::from_secs(10).into(), None);
+    let elapsed = now().saturating_sub(before);
+    if rc == Err(EINTR) && elapsed < Duration::from_secs(8) {
         println!("sleep: eintr ok");
     } else {
         println!("sleep: UNREACHABLE eintr");
@@ -54,7 +45,7 @@ fn victim() {
 fn driver() {
     // Outlasts the victim's whole happy path, so the kill can only land inside
     // its 10s sleep.
-    let _ = sleep_ms(2_000);
+    let _ = nanosleep(&Duration::from_secs(2).into(), None);
     let _ = kill(1, Signal::Urgent);
 }
 

@@ -1,4 +1,5 @@
 use alloc::vec;
+use core::time::Duration;
 
 use minilib::{
     CLOCK_MONOTONIC, E2BIG, EFAULT, EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX, SYS_EXECVE,
@@ -8,7 +9,7 @@ use minilib::{
 use crate::check;
 
 const MISSING: &str = "/nonexistent";
-const SLOW_LIMIT_NANOS: i64 = 1_000_000_000;
+const SLOW_LIMIT: Duration = Duration::from_secs(1);
 
 fn raw_execve(path: &str, argv_ptr: usize, argc: usize, envp_ptr: usize, envc: usize) -> Errno {
     // Safety: `path` is live for the call, and the argv and envp values are the
@@ -27,19 +28,13 @@ fn raw_execve(path: &str, argv_ptr: usize, argc: usize, envp_ptr: usize, envc: u
     Errno::from(-(raw as isize))
 }
 
-fn now() -> Timespec {
+fn now() -> Duration {
     let mut ts = Timespec::default();
-    if clock_gettime(CLOCK_MONOTONIC, &mut ts).is_err() {
-        check::fail("execve/clock_setup");
-    }
-    ts
-}
-
-fn elapsed_nanos(start: &Timespec, end: &Timespec) -> i64 {
-    end.tv_sec
-        .saturating_sub(start.tv_sec)
-        .saturating_mul(1_000_000_000)
-        .saturating_add(end.tv_nsec.saturating_sub(start.tv_nsec))
+    check::unwrap_or_fail(
+        "execve/clock_setup",
+        clock_gettime(CLOCK_MONOTONIC, &mut ts),
+    );
+    check::unwrap_or_fail("execve/clock_setup", Duration::try_from(ts))
 }
 
 pub fn run() {
@@ -68,7 +63,7 @@ pub fn run() {
     let end = now();
     check::require(
         "execve/argc_dos_slow",
-        elapsed_nanos(&start, &end) <= SLOW_LIMIT_NANOS,
+        end.saturating_sub(start) <= SLOW_LIMIT,
     );
 
     let empty = vec![unsafe { StrSlice::from_raw(0, 0) }; 10_000];
@@ -87,7 +82,7 @@ pub fn run() {
     let end = now();
     check::require(
         "execve/envc_dos_slow",
-        elapsed_nanos(&start, &end) <= SLOW_LIMIT_NANOS,
+        end.saturating_sub(start) <= SLOW_LIMIT,
     );
 
     check::expect_errno("execve/null_argv", raw_execve(MISSING, 0, 1, 0, 0), EFAULT);

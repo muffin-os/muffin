@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::time::Duration;
 
 use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
 use gfx::backend::software::{
@@ -15,15 +16,18 @@ use minilib::{
     exit, fsync, ioctl, mmap, open, println,
 };
 
-// monotonic timestamp in microseconds; on failure the zeroed timespec yields 0
-fn now_us() -> u64 {
+// monotonic timestamp; on failure the zeroed timespec yields zero
+fn now() -> Duration {
     let mut tp = Timespec::default();
     let _ = clock_gettime(CLOCK_MONOTONIC, &mut tp);
-    (tp.tv_sec as u64) * 1_000_000 + (tp.tv_nsec as u64) / 1000
+    Duration::try_from(tp).unwrap_or_default()
 }
 
-fn report(label: &str, start_us: u64, end_us: u64) {
-    println!("fbdemo: {label} {}us", end_us.saturating_sub(start_us));
+fn report(label: &str, start: Duration, end: Duration) {
+    println!(
+        "fbdemo: {label} {}us",
+        end.saturating_sub(start).as_micros()
+    );
 }
 
 /// Unwraps a gfx pipeline result, reporting `FAIL gfx` and exiting on any error
@@ -71,25 +75,25 @@ fn color_frag(interp: &[f32]) -> u32 {
 minilib::entry!(main);
 
 fn main() -> i32 {
-    let t = now_us();
+    let t = now();
     let fd = open("/dev/fb0");
-    report("open", t, now_us());
+    report("open", t, now());
     let Ok(fd) = fd else {
         println!("fbdemo: FAIL open");
         return 1;
     };
 
     let mut info = FbScreenInfo::default();
-    let t = now_us();
+    let t = now();
     let ioctl_rc = ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info);
-    report("ioctl", t, now_us());
+    report("ioctl", t, now());
     if ioctl_rc.is_err() {
         println!("fbdemo: FAIL ioctl");
         return 1;
     }
 
     let len = info.pitch as usize * info.height as usize;
-    let t = now_us();
+    let t = now();
     let mapped = mmap(
         0,
         len,
@@ -98,29 +102,29 @@ fn main() -> i32 {
         fd as usize,
         0,
     );
-    report("mmap", t, now_us());
+    report("mmap", t, now());
     let Ok(addr) = mapped else {
         println!("fbdemo: FAIL mmap");
         return 1;
     };
 
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
-    let t = now_us();
+    let t = now();
     let vert = or_fail_gfx(backend.compile_shader(&SoftShaderDef::Vertex {
         func: color_vert,
         output_count: 5,
     }));
-    report("compile_vertex", t, now_us());
-    let t = now_us();
+    report("compile_vertex", t, now());
+    let t = now();
     let frag = or_fail_gfx(backend.compile_shader(&SoftShaderDef::Fragment(color_frag)));
-    report("compile_fragment", t, now_us());
-    let t = now_us();
+    report("compile_fragment", t, now());
+    let t = now();
     let pso = or_fail_gfx(backend.compile_pipeline(&PipelineDesc {
         vertex_shader: &vert,
         pixel_shader: &frag,
         vertex_stride: 5 * ATTRIBUTE_BYTES,
     }));
-    report("compile_pipeline", t, now_us());
+    report("compile_pipeline", t, now());
 
     // three vertices: red apex top, green bottom-left, blue bottom-right
     #[rustfmt::skip]
@@ -131,13 +135,13 @@ fn main() -> i32 {
     ];
     let bytes: Vec<u8> = verts.iter().flat_map(|f| f.to_ne_bytes()).collect();
 
-    let t = now_us();
+    let t = now();
     let mut vbuf = or_fail_gfx(backend.alloc_buffer(&BufferDesc {
         size: bytes.len(),
         is_dynamic: false,
     }));
     vbuf.data.copy_from_slice(&bytes);
-    report("alloc_buffer", t, now_us());
+    report("alloc_buffer", t, now());
 
     let stride = info.pitch as usize / 4;
     let width = info.width as usize;
@@ -157,28 +161,28 @@ fn main() -> i32 {
     // left there.
     fb_u32.fill(0);
 
-    let t = now_us();
+    let t = now();
     let mut q = SoftQueue::new(fb_u32, info.width, info.height, stride);
-    report("queue_new", t, now_us());
+    report("queue_new", t, now());
 
     for frame in 0..5u32 {
-        let t0 = now_us();
+        let t0 = now();
         or_fail_gfx(q.submit(|rec| {
             rec.bind_pipeline(&pso);
             rec.bind_vertex_buffer(&vbuf);
             rec.draw(3);
         }));
-        let t1 = now_us();
+        let t1 = now();
         let fsync_rc = fsync(fd);
-        let t2 = now_us();
+        let t2 = now();
         if fsync_rc.is_err() {
             println!("fbdemo: FAIL fsync");
             return 1;
         }
         println!(
             "fbdemo: frame {frame} submit {}us fsync {}us",
-            t1.saturating_sub(t0),
-            t2.saturating_sub(t1)
+            t1.saturating_sub(t0).as_micros(),
+            t2.saturating_sub(t1).as_micros()
         );
     }
 

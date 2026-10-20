@@ -2,8 +2,9 @@
 #![no_main]
 
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::time::Duration;
 
-use minilib::{Errno, Signal, Timespec, getpid, install_handler, nanosleep, println};
+use minilib::{Signal, getpid, install_handler, nanosleep, println};
 
 // Same spin as `PUMP_SPIN` in signals-init, which documents it.
 const PUMP_SPIN: u64 = 2_000_000;
@@ -20,14 +21,6 @@ static TERMINATED: AtomicBool = AtomicBool::new(false);
 extern "C" fn term_handler(_signo: Signal) {
     println!("term-witness: sigterm received");
     TERMINATED.store(true, Ordering::SeqCst);
-}
-
-fn sleep_ms(ms: u64) -> Result<(), Errno> {
-    let req = Timespec {
-        tv_sec: (ms / 1_000) as i64,
-        tv_nsec: ((ms % 1_000) * 1_000_000) as i64,
-    };
-    nanosleep(&req, None)
 }
 
 fn victim() -> i32 {
@@ -47,7 +40,7 @@ fn victim() -> i32 {
 fn driver() -> ! {
     // Outlasts the victim's sigaction, so the shutdown's SIGTERM broadcast never
     // finds the default action.
-    let _ = sleep_ms(2_000);
+    let _ = nanosleep(&Duration::from_secs(2).into(), None);
     minilib::shutdown()
 }
 

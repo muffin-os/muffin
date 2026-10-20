@@ -1,18 +1,11 @@
 #![no_std]
 #![no_main]
 
-use minilib::{
-    Errno, SaFlags, SigAction, SigHandler, SigSet, Signal, Timespec, getpid, nanosleep, println,
-    shutdown, sigaction,
-};
+use core::time::Duration;
 
-fn sleep_ms(ms: u64) -> Result<(), Errno> {
-    let req = Timespec {
-        tv_sec: (ms / 1_000) as i64,
-        tv_nsec: ((ms % 1_000) * 1_000_000) as i64,
-    };
-    nanosleep(&req, None)
-}
+use minilib::{
+    SaFlags, SigAction, SigHandler, SigSet, Signal, getpid, nanosleep, println, shutdown, sigaction,
+};
 
 fn victim() -> ! {
     // A restorer of 0 is sound only because an ignored signal never enters a
@@ -28,14 +21,14 @@ fn victim() -> ! {
     println!("term-ignorer: ignoring sigterm");
 
     loop {
-        let _ = sleep_ms(1_000);
+        let _ = nanosleep(&Duration::from_secs(1).into(), None);
     }
 }
 
 fn driver() -> ! {
     // Outlasts the victim's sigaction, so the shutdown's SIGTERM broadcast never
     // finds the default action.
-    let _ = sleep_ms(2_000);
+    let _ = nanosleep(&Duration::from_secs(2).into(), None);
     shutdown()
 }
 
