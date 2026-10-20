@@ -16,6 +16,9 @@ pub struct MmapRegion {
     pub len: usize,
 }
 
+// Safety: the region is only an address and a length. Dereferencing it is
+// already unsafe and on the caller, so sharing the value between threads
+// cannot cause a data race by itself.
 unsafe impl Send for MmapRegion {}
 unsafe impl Sync for MmapRegion {}
 
