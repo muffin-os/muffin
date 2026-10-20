@@ -43,8 +43,6 @@ pub enum ReadError {
         #[source]
         FsError,
     ),
-    #[error("end of file")]
-    EndOfFile,
     #[error("read failed")]
     ReadFailed,
     #[error("file is not readable")]

@@ -67,10 +67,10 @@ impl VfsNode {
     /// Reads up to `buf.len()` bytes from the file at the given
     /// `offset` into `buf` and returns the number of bytes read.
     ///
-    /// See [`FileSystem::read`] for more details.
+    /// See [`FileSystem::read`] for details, including how the end of the file is signalled.
     ///
     /// # Errors
-    /// Returns [`ReadError::EndOfFile`] if the end of the file is reached.
+    /// Returns an error if the file system is no longer mounted or if the read fails.
     pub fn read<B>(&self, mut buf: B, offset: usize) -> Result<usize, ReadError>
     where
         B: AsMut<[u8]>,

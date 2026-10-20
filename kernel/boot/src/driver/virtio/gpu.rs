@@ -119,9 +119,7 @@ impl FbDevFile {
 
 impl DevFile for FbDevFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<usize, ReadError> {
-        if offset >= self.len {
-            return Err(ReadError::EndOfFile);
-        }
+        let offset = offset.min(self.len);
         let n = buf.len().min(self.len - offset);
         let fb = self.as_slice_mut();
         buf[..n].copy_from_slice(&fb[offset..offset + n]);

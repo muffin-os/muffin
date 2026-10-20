@@ -31,11 +31,9 @@ pub trait FileSystem: Send + Sync {
     /// `handle` into `buf` and returns the number of bytes read.
     /// The read starts at `offset`.
     ///
-    /// At the end of the file, this returns [`ReadError::EndOfFile`].
-    /// **A result of `Ok(0)` does not indicate the end of the file.**
+    /// `Ok(0)` with a non-empty `buf` means the end of the file is reached.
     ///
     /// # Errors
-    /// Returns [`ReadError::EndOfFile`] if the end of the file is reached.
     ///
     /// Returns an error if the handle is invalid or already closed,
     /// or if there was an underlying error during reading (such as

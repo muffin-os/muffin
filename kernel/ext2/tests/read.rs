@@ -135,6 +135,18 @@ fn do_test_read_file(sector_size: usize) {
         assert_eq!(5, read_bytes);
         assert_eq!(b"World", &hello_txt_data[..]);
     }
+    {
+        // read at and past the end of the file
+        let mut hello_txt_data = [0_u8; 5];
+        assert_eq!(
+            Ok(0),
+            fs.read_from_file(&hello_txt, 14, &mut hello_txt_data)
+        );
+        assert_eq!(
+            Ok(0),
+            fs.read_from_file(&hello_txt, 100, &mut hello_txt_data)
+        );
+    }
 }
 
 #[test]

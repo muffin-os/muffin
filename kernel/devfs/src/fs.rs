@@ -243,14 +243,11 @@ mod tests {
 
     impl DevFile for TestDevFile {
         fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<usize, ReadError> {
-            if offset >= self.data.len() {
-                return Err(ReadError::EndOfFile);
-            }
+            let offset = offset.min(self.data.len());
+            let len = buf.len().min(self.data.len() - offset);
+            buf[..len].copy_from_slice(&self.data[offset..offset + len]);
 
-            let end = (offset + buf.len()).min(self.data.len());
-            buf[0..end].copy_from_slice(&self.data[offset..end]);
-
-            Ok(end - offset)
+            Ok(len)
         }
 
         fn write(&mut self, buf: &[u8], offset: usize) -> Result<usize, WriteError> {

@@ -15,8 +15,10 @@ impl<D: BlockDevice + Send + Sync> BlockDeviceFile<D> {
 
 impl<D: BlockDevice + Send + Sync> DevFile for BlockDeviceFile<D> {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<usize, ReadError> {
+        let size = self.device.sector_count() * self.device.sector_size();
+        let len = buf.len().min(size.saturating_sub(offset));
         self.device
-            .read_at(offset, buf)
+            .read_at(offset, &mut buf[..len])
             .map_err(|_| ReadError::ReadFailed)
     }
 
@@ -138,23 +140,22 @@ mod tests {
     }
 
     #[test]
-    fn read_past_device_end_fails() {
+    fn read_past_device_end_is_short() {
         let mut file = file();
 
         let mut buf = vec![0_u8; 1];
-        assert_eq!(Err(ReadError::ReadFailed), file.read(&mut buf, DEVICE_SIZE));
+        assert_eq!(Ok(0), file.read(&mut buf, DEVICE_SIZE));
 
         let mut buf = vec![0_u8; SECTOR_SIZE];
-        assert_eq!(Err(ReadError::ReadFailed), file.read(&mut buf, DEVICE_SIZE));
+        assert_eq!(Ok(0), file.read(&mut buf, DEVICE_SIZE + SECTOR_SIZE));
 
         let mut buf = vec![0_u8; DEVICE_SIZE + 1];
-        assert_eq!(Err(ReadError::ReadFailed), file.read(&mut buf, 0));
+        assert_eq!(Ok(DEVICE_SIZE), file.read(&mut buf, 0));
+        assert_eq!(expected(0, DEVICE_SIZE), buf[..DEVICE_SIZE]);
 
         let mut buf = vec![0_u8; 2];
-        assert_eq!(
-            Err(ReadError::ReadFailed),
-            file.read(&mut buf, DEVICE_SIZE - 1)
-        );
+        assert_eq!(Ok(1), file.read(&mut buf, DEVICE_SIZE - 1));
+        assert_eq!(expected(DEVICE_SIZE - 1, 1), buf[..1]);
     }
 
     #[test]

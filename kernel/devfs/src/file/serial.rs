@@ -23,7 +23,7 @@ where
     T: Write + Send + Sync,
 {
     fn read(&mut self, _: &mut [u8], _: usize) -> Result<usize, ReadError> {
-        Err(ReadError::EndOfFile)
+        Ok(0)
     }
 
     fn write(&mut self, buf: &[u8], _: usize) -> Result<usize, WriteError> {

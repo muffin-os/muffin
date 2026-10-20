@@ -166,6 +166,25 @@ mod tests {
     }
 
     #[test]
+    fn test_read_at_end_of_file() {
+        let mut fs = TestFs::default();
+        fs.insert_file(
+            AbsolutePath::try_new("/foo/bar.txt").unwrap(),
+            vec![0x00; 8],
+            Stat::default(),
+        );
+
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, fs).unwrap();
+        let node = vfs
+            .open(AbsolutePath::try_new("/foo/bar.txt").unwrap())
+            .unwrap();
+
+        assert_eq!(Ok(0), node.read(&mut [0_u8; 4], 8));
+        assert_eq!(Ok(0), node.read(&mut [0_u8; 4], 20));
+    }
+
+    #[test]
     fn test_mount() {
         let mut fs = TestFs::default();
         fs.insert_file(
