@@ -177,7 +177,7 @@ fn dispatch_sys_sigprocmask(how: usize, set: usize, oldset: usize) -> Result<usi
     };
 
     let process = Process::current();
-    let old_mask = process.signals_write().sigprocmask(how, new_set)?;
+    let old_mask = process.signals_write().sigprocmask(how, new_set);
 
     if oldset != 0 {
         write_user(oldset, old_mask)?;
