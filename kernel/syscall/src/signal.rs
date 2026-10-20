@@ -105,8 +105,7 @@ pub struct DeliverEffect {
     pub resume_tasks: bool,
 }
 
-/// Per-process signal state. One instance lives behind a lock on every
-/// `Process`. All delivery policy is decided here so it can be host-tested.
+/// Per-process signal state. All delivery policy is decided here.
 #[derive(Debug)]
 pub struct SignalState {
     actions: [SigAction; Signal::COUNT],
@@ -289,8 +288,8 @@ impl SignalState {
         self.blocked
     }
 
-    /// Restore the blocked mask (used by sigreturn), always dropping the
-    /// unblockable `Kill`/`Stop` bits.
+    /// Restores the blocked mask, always dropping the unblockable
+    /// `Kill`/`Stop` bits.
     pub fn set_blocked_raw(&mut self, set: SigSet) {
         self.blocked = set & !KILL_STOP_MASK;
     }
