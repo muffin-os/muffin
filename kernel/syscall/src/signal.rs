@@ -101,7 +101,7 @@ pub enum Disposition {
 /// Side effect the kernel must apply after a generation-time `deliver`.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct DeliverEffect {
-    pub resume_tasks: bool,
+    pub must_resume_tasks: bool,
 }
 
 /// Per-process signal state. All delivery policy is decided here.
@@ -142,10 +142,12 @@ impl SignalState {
         self.set_pending(signo);
         if matches!(signo, Signal::Continue | Signal::Kill) && self.stopped {
             self.stopped = false;
-            DeliverEffect { resume_tasks: true }
+            DeliverEffect {
+                must_resume_tasks: true,
+            }
         } else {
             DeliverEffect {
-                resume_tasks: false,
+                must_resume_tasks: false,
             }
         }
     }
@@ -1465,7 +1467,10 @@ mod tests {
         let mut state = SignalState::default();
         state.set_stopped(true);
         let effect = state.deliver(Signal::Continue);
-        assert!(effect.resume_tasks, "SIGCONT resumes a stopped process");
+        assert!(
+            effect.must_resume_tasks,
+            "SIGCONT resumes a stopped process"
+        );
         assert!(!state.stopped(), "stopped flag cleared");
     }
 
@@ -1475,7 +1480,7 @@ mod tests {
         state.set_stopped(true);
         let effect = state.deliver(Signal::Kill);
         assert!(
-            effect.resume_tasks,
+            effect.must_resume_tasks,
             "SIGKILL wakes a stopped process so it can die"
         );
         assert!(!state.stopped(), "stopped flag cleared");
@@ -1487,7 +1492,7 @@ mod tests {
         state.set_stopped(true);
         let effect = state.deliver(Signal::Terminate);
         assert!(
-            !effect.resume_tasks,
+            !effect.must_resume_tasks,
             "SIGTERM leaves a stopped process stopped"
         );
         assert!(state.stopped(), "stopped flag unchanged");
@@ -1498,7 +1503,7 @@ mod tests {
         let mut state = SignalState::default();
         let effect = state.deliver(Signal::Continue);
         assert!(
-            !effect.resume_tasks,
+            !effect.must_resume_tasks,
             "SIGCONT to a running process resumes nothing"
         );
     }
@@ -1559,7 +1564,7 @@ mod tests {
             let mut states = self.states.borrow_mut();
             let state = states.entry(pid).or_default();
             let effect = state.deliver(info.signo);
-            if effect.resume_tasks {
+            if effect.must_resume_tasks {
                 self.resumed.borrow_mut().push(pid);
             }
         }

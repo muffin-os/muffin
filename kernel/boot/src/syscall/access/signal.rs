@@ -80,7 +80,7 @@ impl SignalAccess for KernelAccess {
             }
             Disposition::Ignore | Disposition::Handler(_) => {}
         }
-        if effect.resume_tasks {
+        if effect.must_resume_tasks {
             info!("continuing process {pid}");
             guard.resume_stopped_tasks();
         }
