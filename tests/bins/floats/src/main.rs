@@ -36,17 +36,16 @@ fn pattern(pid: u64, tag: u64) -> [u64; 16] {
     p
 }
 
-/// The load, the spin and the readback must share one `asm!` block. Written as a
-/// separate Rust loop, the compiler spills the xmm registers around the spin and
-/// reloads them after, so the values survive on the stack whether or not the
-/// kernel preserved the registers, and the check passes against a broken save.
-/// Every check below that must survive a context switch keeps its spin inside
-/// the block for the same reason.
 fn check_xmm(pid: u64) -> bool {
     let input = pattern(pid, 0x4010_0000_0000_0000);
     for _ in 0..4 {
         let mut out = [0u64; 16];
         let cnt = SPIN;
+        // The load, the spin and the readback share one `asm!` block. As separate
+        // Rust code the compiler spills the xmm registers around the spin, so the
+        // values would survive on the stack even against a broken kernel save.
+        // Every check below that must survive a context switch keeps its spin
+        // inside the block for the same reason.
         unsafe {
             asm!(
                 "movsd xmm0,  [{inp}]",
@@ -252,11 +251,11 @@ fn check_sum() -> bool {
     result == (n as f64).to_bits()
 }
 
-/// Overwriting every xmm register is the point, not a bug. If the signal FPU
-/// path fails to save and restore the interrupted context, this pattern leaks
-/// back into the caller and the readback there diverges.
 extern "C" fn clobber_handler(_signo: Signal) {
     let pat: u64 = 0xBAD0_C0DE_DEAD_BEEF;
+    // Overwriting every xmm register is the point. If the signal FPU path fails
+    // to restore the interrupted context, this pattern leaks back into the
+    // caller and the readback there diverges.
     unsafe {
         asm!(
             "movq xmm0, {p}",
@@ -285,14 +284,13 @@ extern "C" fn clobber_handler(_signo: Signal) {
     }
 }
 
-/// The `kill` syscall is issued inline because signal handlers are delivered at
-/// syscall exit. The xmm values have to still be live in registers at that
-/// exit, so the `int 0x80` sits between the load and the readback in one block.
-/// The kernel preserves every register except `rax` across the syscall.
 fn check_signal(pid: u64) -> bool {
     let input = pattern(pid, 0x4020_0000_0000_0000);
     let mut out = [0u64; 16];
     let signo = Signal::Usr1.number() as usize;
+    // Handlers are delivered at syscall exit, so the `int 0x80` sits between the
+    // load and the readback in one block to keep the xmm values live in
+    // registers at that exit. The kernel preserves every register except `rax`.
     unsafe {
         asm!(
             "movsd xmm0,  [{inp}]",
