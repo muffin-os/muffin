@@ -9,7 +9,7 @@ use minilib::{
 use crate::check;
 
 const MISSING: &str = "/nonexistent";
-const SLOW_LIMIT: Duration = Duration::from_secs(1);
+const MAX_ELAPSED: Duration = Duration::from_secs(1);
 
 fn raw_execve(path: &str, argv_ptr: usize, argc: usize, envp_ptr: usize, envc: usize) -> Errno {
     // Safety: `path` is live for the call, and the argv and envp values are the
@@ -63,7 +63,7 @@ pub fn run() {
     let end = now();
     check::require(
         "execve/argc_dos_slow",
-        end.saturating_sub(start) <= SLOW_LIMIT,
+        end.saturating_sub(start) <= MAX_ELAPSED,
     );
 
     let empty = vec![unsafe { StrSlice::from_raw(0, 0) }; 10_000];
@@ -82,7 +82,7 @@ pub fn run() {
     let end = now();
     check::require(
         "execve/envc_dos_slow",
-        end.saturating_sub(start) <= SLOW_LIMIT,
+        end.saturating_sub(start) <= MAX_ELAPSED,
     );
 
     check::expect_errno("execve/null_argv", raw_execve(MISSING, 0, 1, 0, 0), EFAULT);

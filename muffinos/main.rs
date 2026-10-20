@@ -193,11 +193,11 @@ const KERNEL_RECORD_MARKER: &[u8] = b"\x1b[2m[";
 
 /// Bytes buffered while waiting for the first kernel record before giving up
 /// and passing everything through.
-const GATE_LIMIT: usize = 64 * 1024;
+const MAX_GATED_BYTES: usize = 64 * 1024;
 
 /// Copies the QEMU serial stream to `to`, dropping everything before the
 /// first kernel log record. If none arrives, the suppressed bytes are flushed
-/// on QEMU exit or once [`GATE_LIMIT`] is exceeded, so boot failures stay
+/// on QEMU exit or once [`MAX_GATED_BYTES`] is exceeded, so boot failures stay
 /// diagnosable.
 fn forward_kernel_output(mut from: impl std::io::Read, mut to: impl std::io::Write) {
     // OVMF mirrors the UEFI console to the serial port, so firmware and Limine
@@ -231,7 +231,7 @@ fn forward_kernel_output(mut from: impl std::io::Read, mut to: impl std::io::Wri
                 .expect("unable to write serial output");
             to.flush().expect("unable to write serial output");
             pending = vec![];
-        } else if pending.len() > GATE_LIMIT {
+        } else if pending.len() > MAX_GATED_BYTES {
             forwarding = true;
             to.write_all(&pending)
                 .expect("unable to write serial output");
