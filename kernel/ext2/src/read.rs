@@ -61,11 +61,9 @@ where
         let relative_offset = (offset % block_size) as usize;
         let block_count = (end_block - start_block + 1) as usize;
 
-        // read blocks
-        let mut data: Vec<u8> = vec![0_u8; block_count * block_size as usize]; // TODO: avoid allocation - maybe try to only allocate the first and last block if the read is not aligned, but read the rest directly into the buffer
+        let mut data: Vec<u8> = vec![0_u8; block_count * block_size as usize];
         let res =
             self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?;
-        // copy the data into buf, but only the requested part and only up to the file size
         let total_read = res.min(file_size - offset as usize).min(buf.len());
         buf[..total_read].copy_from_slice(&data[relative_offset..relative_offset + total_read]);
 
