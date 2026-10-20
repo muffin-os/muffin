@@ -268,7 +268,8 @@ extern "sysv64" fn invalid_opcode_handler_impl(
 }
 
 extern "x86-interrupt" fn invalid_tss_handler(stack_frame: InterruptStackFrame, error_code: u64) {
-    panic!("EXCEPTION: INVALID TSS:\nerror code: {error_code:#X}\n{stack_frame:#?}");
+    let error_code = SelectorErrorCode::from(error_code);
+    panic!("EXCEPTION: INVALID TSS:\nerror code: {error_code:#?}\n{stack_frame:#?}");
 }
 
 #[repr(C)]
