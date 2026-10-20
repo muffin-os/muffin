@@ -19,7 +19,6 @@ impl<T> Ext2Fs<T>
 where
     T: BlockDevice,
 {
-    // TODO: make this return some Result<impl Iterator<Item=DirEntry>, Error>
     pub fn list_dir(&self, dir: &Inode) -> Result<Vec<DirEntry>, Error> {
         if dir.typ() != Type::Directory {
             return Err(Error::NotDirectory);
@@ -32,6 +31,9 @@ where
             .required_features()
             .contains(RequiredFeatures::DIRECTORY_ENTRIES_HAVE_TYPE);
 
+        // shortcut: only the 12 direct blocks are scanned, so entries past
+        // 12 * block_size bytes of a directory are missing from the result.
+        // Walk resolve_block_index once a directory needs to grow that large.
         for addr in dir.direct_ptrs().flatten() {
             let mut data = vec![0_u8; block_size];
             self.read_block(addr, &mut data)
@@ -45,8 +47,6 @@ where
                 entries.push(dir_entry);
             }
         }
-
-        // TODO: handle indirect ptrsa
 
         Ok(entries)
     }
@@ -85,7 +85,6 @@ where
         if name.len() > MAX_NAME_LEN {
             return Err(Error::NameTooLong);
         }
-        // TODO: make this more efficient once we have indexed lookups implemented
         if self.find_entry(dir, |e| e.name() == Some(name))?.is_some() {
             return Err(Error::EntryExists);
         }
