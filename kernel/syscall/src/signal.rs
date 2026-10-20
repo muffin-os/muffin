@@ -838,87 +838,26 @@ mod tests {
     }
 
     #[test]
-    fn test_signal_number_sigkill() {
+    fn test_kill_delivers_the_requested_signal() {
         let current_pid = pid!(1);
         let target_pid = pid!(2);
 
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
-
-        let result = sys_kill(
-            &cx,
-            SignalTarget::SpecificProcess(target_pid),
+        for signal in [
+            Signal::Kill,
+            Signal::Stop,
+            Signal::Hangup,
             Signal::Interrupt,
-        );
-        assert_eq!(result, Ok(0), "kill succeeds");
-        assert_eq!(
-            cx.get_delivered()[0].siginfo.signo,
-            Signal::Interrupt,
-            "delivered SIGINT"
-        );
-    }
-
-    #[test]
-    fn test_signal_number_sigterm() {
-        let current_pid = pid!(1);
-        let target_pid = pid!(2);
-
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
-
-        let result = sys_kill(
-            &cx,
-            SignalTarget::SpecificProcess(target_pid),
             Signal::Terminate,
-        );
-        assert_eq!(result, Ok(0), "kill succeeds");
-        assert_eq!(
-            cx.get_delivered()[0].siginfo.signo,
-            Signal::Terminate,
-            "delivered SIGTERM"
-        );
-    }
+        ] {
+            let mut cx = TestContext::new(current_pid, current_pid, 1000);
+            cx.add_process(target_pid, target_pid, 1000);
 
-    #[test]
-    fn test_signal_number_sighup() {
-        let current_pid = pid!(1);
-        let target_pid = pid!(2);
-
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
-
-        let result = sys_kill(
-            &cx,
-            SignalTarget::SpecificProcess(target_pid),
-            Signal::Abort,
-        );
-        assert_eq!(result, Ok(0), "kill succeeds");
-        assert_eq!(
-            cx.get_delivered()[0].siginfo.signo,
-            Signal::Abort,
-            "delivered SIGABRT"
-        );
-    }
-
-    #[test]
-    fn test_signal_number_sigint() {
-        let current_pid = pid!(1);
-        let target_pid = pid!(2);
-
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
-
-        let result = sys_kill(
-            &cx,
-            SignalTarget::SpecificProcess(target_pid),
-            Signal::Alarm,
-        );
-        assert_eq!(result, Ok(0), "kill succeeds");
-        assert_eq!(
-            cx.get_delivered()[0].siginfo.signo,
-            Signal::Alarm,
-            "delivered SIGALRM"
-        );
+            let result = sys_kill(&cx, SignalTarget::SpecificProcess(target_pid), signal);
+            assert_eq!(result, Ok(0), "kill with {signal:?} succeeds");
+            let delivered = cx.get_delivered();
+            assert_eq!(delivered.len(), 1, "{signal:?} delivered once");
+            assert_eq!(delivered[0].siginfo.signo, signal, "delivered {signal:?}");
+        }
     }
 
     #[test]
