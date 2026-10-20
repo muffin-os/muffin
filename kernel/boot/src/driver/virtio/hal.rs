@@ -70,7 +70,8 @@ unsafe impl Hal for HalImpl {
         );
         unsafe {
             AddressSpace::kernel().unmap_range::<Size4KiB>(&segment, |_| {});
-            assert!(VirtualMemoryHigherHalf.release(segment));
+            let released = VirtualMemoryHigherHalf.release(segment);
+            assert!(released, "segment should have been reserved");
         }
 
         drop(frames);

@@ -77,7 +77,8 @@ impl AcpiHandler for AcpiHandlerImpl {
 
         let segment = Segment::new(vaddr, region.mapped_length() as u64);
         unsafe {
-            assert!(VirtualMemoryHigherHalf.release(segment));
+            let released = VirtualMemoryHigherHalf.release(segment);
+            assert!(released, "segment should have been reserved");
         }
     }
 }
