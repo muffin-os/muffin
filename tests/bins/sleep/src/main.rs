@@ -8,6 +8,25 @@ use minilib::{
     nanosleep, println,
 };
 
+/// Spawn order fixes the pid, so the pid picks the role.
+#[derive(Clone, Copy)]
+enum Role {
+    Victim = 1,
+    Driver = 2,
+}
+
+impl Role {
+    fn of(pid: i64) -> Option<Self> {
+        [Self::Victim, Self::Driver]
+            .into_iter()
+            .find(|role| role.pid() == pid)
+    }
+
+    fn pid(self) -> i64 {
+        self as i64
+    }
+}
+
 extern "C" fn urgent_handler(_signo: Signal) {}
 
 fn now() -> Duration {
@@ -50,16 +69,16 @@ fn driver() {
     // Outlasts the victim's whole happy path, so the kill can only land inside
     // its 10s sleep.
     let _ = nanosleep(&Duration::from_secs(2).into(), None);
-    let _ = kill(1, Signal::Urgent);
+    let _ = kill(Role::Victim.pid(), Signal::Urgent);
 }
 
 minilib::entry!(main);
 
 fn main() -> i32 {
-    match getpid() {
-        1 => victim(),
-        2 => driver(),
-        _ => println!("sleep: unexpected pid"),
+    match Role::of(getpid()) {
+        Some(Role::Victim) => victim(),
+        Some(Role::Driver) => driver(),
+        None => println!("sleep: unexpected pid"),
     }
 
     0

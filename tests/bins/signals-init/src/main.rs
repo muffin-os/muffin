@@ -8,6 +8,25 @@ use minilib::{
     println, sigpending, sigprocmask, syscall3,
 };
 
+/// Spawn order fixes the pid, so the pid picks the role.
+#[derive(Clone, Copy)]
+enum Role {
+    Driver = 1,
+    Victim = 2,
+}
+
+impl Role {
+    fn of(pid: i64) -> Option<Self> {
+        [Self::Driver, Self::Victim]
+            .into_iter()
+            .find(|role| role.pid() == pid)
+    }
+
+    fn pid(self) -> i64 {
+        self as i64
+    }
+}
+
 fn busy_delay_n(n: u64) {
     let mut counter: u64 = 0;
     while counter < n {
@@ -82,7 +101,7 @@ extern "C" fn on_ack(_signo: Signal) {
 /// Runs in the victim when the driver pings it. The reply is what proves the
 /// victim was scheduled and able to take a signal.
 extern "C" fn on_ping(_signo: Signal) {
-    let _ = kill(1, ACK);
+    let _ = kill(Role::Driver.pid(), ACK);
 }
 
 extern "C" fn segv_handler(_signo: Signal) {
@@ -131,31 +150,31 @@ fn role_a() {
     // A ping answered while B runs normally is the baseline the later phases
     // are compared against.
     let before = acks();
-    let _ = kill(2, PING);
+    let _ = kill(Role::Victim.pid(), PING);
     wait_acks(before + 1, ACK_BUDGET);
     let pre = acks().saturating_sub(before).min(REPORT_CLAMP);
 
     // Stop B, let the tick park it, then ping. A stopped process is never
     // scheduled, so the ping stays pending and no ack must arrive.
-    let _ = kill(2, Signal::Stop);
+    let _ = kill(Role::Victim.pid(), Signal::Stop);
     spin(SETTLE_BUDGET);
     let before = acks();
-    let _ = kill(2, PING);
+    let _ = kill(Role::Victim.pid(), PING);
     spin(NEG_BUDGET);
     let stop = acks().saturating_sub(before).min(REPORT_CLAMP);
 
     // Continue B. The ping left pending across the stop is delivered on resume,
     // so exactly one ack must arrive.
     let before = acks();
-    let _ = kill(2, Signal::Continue);
+    let _ = kill(Role::Victim.pid(), Signal::Continue);
     wait_acks(before + 1, ACK_BUDGET);
     let cont = acks().saturating_sub(before).min(REPORT_CLAMP);
 
     // Terminate B, then ping the dead process. No ack must arrive.
-    let _ = kill(2, Signal::Terminate);
+    let _ = kill(Role::Victim.pid(), Signal::Terminate);
     spin(SETTLE_BUDGET);
     let before = acks();
-    let _ = kill(2, PING);
+    let _ = kill(Role::Victim.pid(), PING);
     spin(NEG_BUDGET);
     let term = acks().saturating_sub(before).min(REPORT_CLAMP);
 
@@ -181,7 +200,7 @@ fn role_a() {
 fn role_b() -> ! {
     // `main` armed the ping handler before the role was known. pid 1 is created
     // before pid 2, so the driver always exists to receive this announcement.
-    let _ = kill(1, ACK);
+    let _ = kill(Role::Driver.pid(), ACK);
 
     // Spin in user mode so ticks can deliver the ping handler.
     loop {
@@ -204,12 +223,10 @@ fn main() -> i32 {
     let pid = getpid();
     println!("init: pid={pid}");
 
-    match pid {
-        1 => role_a(),
-        2 => role_b(),
-        _ => {
-            println!("init: unexpected pid");
-        }
+    match Role::of(pid) {
+        Some(Role::Driver) => role_a(),
+        Some(Role::Victim) => role_b(),
+        None => println!("init: unexpected pid"),
     }
 
     0

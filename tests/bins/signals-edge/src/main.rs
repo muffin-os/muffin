@@ -19,6 +19,29 @@ static URGENT_RUNS: AtomicU32 = AtomicU32::new(0);
 static WINCH_RUNS: AtomicU32 = AtomicU32::new(0);
 static CHILD_RUNS: AtomicU32 = AtomicU32::new(0);
 
+/// Spawn order fixes the pid, so the pid picks the role.
+#[derive(Clone, Copy)]
+enum Role {
+    A = 1,
+    B = 2,
+    C = 3,
+    D = 4,
+    E = 5,
+    F = 6,
+}
+
+impl Role {
+    fn of(pid: i64) -> Option<Self> {
+        [Self::A, Self::B, Self::C, Self::D, Self::E, Self::F]
+            .into_iter()
+            .find(|role| role.pid() == pid)
+    }
+
+    fn pid(self) -> i64 {
+        self as i64
+    }
+}
+
 fn busy_delay_n(n: u64) {
     let mut counter: u64 = 0;
     while counter < n {
@@ -60,7 +83,7 @@ extern "C" fn urgent_handler(_signo: Signal) {
 extern "C" fn winch_handler(_signo: Signal) {
     let run = WINCH_RUNS.fetch_add(1, Ordering::SeqCst) + 1;
     if run == 1 {
-        let _ = kill(1, Signal::WindowChanged);
+        let _ = kill(Role::A.pid(), Signal::WindowChanged);
         spin(NEG_BUDGET);
         if WINCH_RUNS.load(Ordering::SeqCst) == 1 {
             println!("A: defer ok");
@@ -71,7 +94,7 @@ extern "C" fn winch_handler(_signo: Signal) {
 extern "C" fn child_handler(_signo: Signal) {
     let run = CHILD_RUNS.fetch_add(1, Ordering::SeqCst) + 1;
     if run == 1 {
-        let _ = kill(1, Signal::Child);
+        let _ = kill(Role::A.pid(), Signal::Child);
         if wait_runs(&CHILD_RUNS, 2, NEST_BUDGET) {
             println!("A: nodefer nested ok");
         }
@@ -87,7 +110,7 @@ extern "C" fn b_segv_handler(_signo: Signal) {
 fn role_a() {
     println!("A: start");
 
-    if unsafe { syscall2(SYS_KILL, 1, 0) } == 0 {
+    if unsafe { syscall2(SYS_KILL, Role::A.pid() as usize, 0) } == 0 {
         println!("A: sig0 self ok");
     }
 
@@ -95,7 +118,9 @@ fn role_a() {
         println!("A: sig0 esrch ok");
     }
 
-    if unsafe { syscall2(SYS_KILL, 1, Signal::COUNT + 1) } as isize == -isize::from(EINVAL) {
+    if unsafe { syscall2(SYS_KILL, Role::A.pid() as usize, Signal::COUNT + 1) } as isize
+        == -isize::from(EINVAL)
+    {
         println!("A: kill einval ok");
     }
 
@@ -149,9 +174,9 @@ fn role_a() {
         println!("A: query ok");
     }
 
-    let _ = kill(1, Signal::Urgent);
+    let _ = kill(Role::A.pid(), Signal::Urgent);
     if wait_runs(&URGENT_RUNS, 1, DELIVER_BUDGET) {
-        let _ = kill(1, Signal::Urgent);
+        let _ = kill(Role::A.pid(), Signal::Urgent);
         spin(NEG_BUDGET);
         if URGENT_RUNS.load(Ordering::SeqCst) == 1 {
             println!("A: resethand ok");
@@ -159,14 +184,14 @@ fn role_a() {
     }
 
     let _ = install_handler(Signal::WindowChanged, winch_handler);
-    let _ = kill(1, Signal::WindowChanged);
+    let _ = kill(Role::A.pid(), Signal::WindowChanged);
     if wait_runs(&WINCH_RUNS, 2, NEST_BUDGET) {
         println!("A: redeliver ok");
     }
 
     let child = handler_action(child_handler, SaFlags::NODEFER);
     let _ = sigaction(Signal::Child, Some(&child), None);
-    let _ = kill(1, Signal::Child);
+    let _ = kill(Role::A.pid(), Signal::Child);
     wait_runs(&CHILD_RUNS, 2, NEST_BUDGET);
 
     forged_sigreturn();
@@ -256,14 +281,14 @@ fn role_f() {
 minilib::entry!(main);
 
 fn main() -> i32 {
-    match getpid() {
-        1 => role_a(),
-        2 => role_b(),
-        3 => role_c(),
-        4 => role_d(),
-        5 => role_e(),
-        6 => role_f(),
-        _ => println!("edge: unexpected pid"),
+    match Role::of(getpid()) {
+        Some(Role::A) => role_a(),
+        Some(Role::B) => role_b(),
+        Some(Role::C) => role_c(),
+        Some(Role::D) => role_d(),
+        Some(Role::E) => role_e(),
+        Some(Role::F) => role_f(),
+        None => println!("edge: unexpected pid"),
     }
 
     0
