@@ -8,20 +8,36 @@ pub trait FileInfo {}
 pub trait FileAccess {
     type FileInfo: FileInfo;
     type Fd: From<c_int> + Into<c_int> + Clone + core::fmt::Debug;
-    type OpenError;
-    type ReadError;
-    type WriteError;
-    type CloseError;
 
-    fn file_info(&self, path: &AbsolutePath) -> Option<Self::FileInfo>;
+    /// Resolves `path` to something `open` can turn into a descriptor.
+    ///
+    /// # Errors
+    /// Returns `ENOENT` when nothing exists at `path` and `EIO` when the
+    /// backing file system failed while looking it up.
+    fn file_info(&self, path: &AbsolutePath) -> Result<Self::FileInfo, Errno>;
 
-    fn open(&self, info: &Self::FileInfo) -> Result<Self::Fd, Self::OpenError>;
+    fn open(&self, info: &Self::FileInfo) -> Self::Fd;
 
-    fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Self::ReadError>;
+    /// Reads from an open file at its current offset. `Ok(0)` on a non-empty
+    /// `buf` means the end of the file.
+    ///
+    /// # Errors
+    /// Returns `EBADF` when `fd` is not open, `EISDIR` when it names a
+    /// directory and `EIO` when the backing file system failed.
+    fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno>;
 
-    fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Self::WriteError>;
+    /// Writes to an open file at its current offset.
+    ///
+    /// # Errors
+    /// Returns `EBADF` when `fd` is not open and `EIO` when the backing file
+    /// system failed.
+    fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Errno>;
 
-    fn close(&self, fd: Self::Fd) -> Result<(), Self::CloseError>;
+    /// Releases an open file descriptor.
+    ///
+    /// # Errors
+    /// Returns `EBADF` when `fd` is not open.
+    fn close(&self, fd: Self::Fd) -> Result<(), Errno>;
 
     /// Performs a device-specific control operation on an open file.
     ///
@@ -79,7 +95,7 @@ pub mod testing {
     use core::sync::atomic::AtomicUsize;
     use core::sync::atomic::Ordering::Relaxed;
 
-    use kernel_abi::{EBADF, Errno, Stat};
+    use kernel_abi::{EBADF, ENOENT, Errno, Stat};
     use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath};
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
@@ -154,76 +170,61 @@ pub mod testing {
     impl FileAccess for Mutex<MemoryFileAccess> {
         type FileInfo = MemoryFileInfo;
         type Fd = MemoryFd;
-        type OpenError = ();
-        type ReadError = ();
-        type WriteError = ();
-        type CloseError = ();
 
-        fn file_info(&self, path: &AbsolutePath) -> Option<Self::FileInfo> {
+        fn file_info(&self, path: &AbsolutePath) -> Result<Self::FileInfo, Errno> {
             let guard = self.lock();
             if guard.files.contains_key(path) {
-                Some(Self::FileInfo {
+                Ok(Self::FileInfo {
                     path: path.to_owned(),
                 })
             } else {
-                None
+                Err(ENOENT)
             }
         }
 
-        fn open(&self, info: &Self::FileInfo) -> Result<Self::Fd, ()> {
+        fn open(&self, info: &Self::FileInfo) -> Self::Fd {
             let mut guard = self.lock();
 
-            if let Some(file) = guard.files.get(&info.path).cloned() {
-                let fd_num: c_int = guard
-                    .open_fds
-                    .keys()
-                    .fold(0, |acc, fd| if acc == fd.num { acc + 1 } else { acc });
-                let fd = MemoryFd::from(fd_num);
-                guard.open_fds.insert(fd.clone(), file.clone());
-                Ok(fd)
-            } else {
-                Err(())
-            }
+            let file = guard.files[&info.path].clone();
+            let fd_num: c_int = guard
+                .open_fds
+                .keys()
+                .fold(0, |acc, fd| if acc == fd.num { acc + 1 } else { acc });
+            let fd = MemoryFd::from(fd_num);
+            guard.open_fds.insert(fd.clone(), file);
+            fd
         }
 
-        fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, ()> {
+        fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
             let guard = self.lock();
 
-            if let Some(file) = guard.open_fds.get(&fd) {
-                let data = file.data.read();
-                let len = data.len().min(buf.len());
-                buf[..len].copy_from_slice(&data[..len]);
-                Ok(len)
-            } else {
-                Err(())
-            }
+            let file = guard.open_fds.get(&fd).ok_or(EBADF)?;
+            let data = file.data.read();
+            let position = fd.position.load(Relaxed).min(data.len());
+            let len = (data.len() - position).min(buf.len());
+            buf[..len].copy_from_slice(&data[position..position + len]);
+            let _ = fd.position.fetch_add(len, Relaxed);
+            Ok(len)
         }
 
-        fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, ()> {
+        fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Errno> {
             let guard = self.lock();
 
-            if let Some(file) = guard.open_fds.get(&fd) {
-                let mut data = file.data.write();
-                let file_len = data.len();
-                let need_max_len = fd.position.load(Relaxed) + buf.len();
-                if need_max_len > file_len {
-                    data.resize(need_max_len, 0);
-                }
-                let _ = fd.position.fetch_add(buf.len(), Relaxed);
-                Ok(buf.len())
-            } else {
-                Err(())
+            let file = guard.open_fds.get(&fd).ok_or(EBADF)?;
+            let mut data = file.data.write();
+            let file_len = data.len();
+            let need_max_len = fd.position.load(Relaxed) + buf.len();
+            if need_max_len > file_len {
+                data.resize(need_max_len, 0);
             }
+            let _ = fd.position.fetch_add(buf.len(), Relaxed);
+            Ok(buf.len())
         }
 
-        fn close(&self, fd: Self::Fd) -> Result<(), ()> {
+        fn close(&self, fd: Self::Fd) -> Result<(), Errno> {
             let mut guard = self.lock();
 
-            if guard.open_fds.remove(&fd).is_some() {
-                Ok(())
-            } else {
-                Err(())
-            }
+            guard.open_fds.remove(&fd).map(|_| ()).ok_or(EBADF)
         }
 
         fn fstat(&self, fd: Self::Fd) -> Result<Stat, Errno> {

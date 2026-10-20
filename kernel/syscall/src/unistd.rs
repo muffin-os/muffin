@@ -38,12 +38,12 @@ pub fn sys_getcwd<Cx: CwdAccess>(
 
 #[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
 pub fn sys_read<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
-    cx.read(fildes, buf).map_err(|_| EINVAL)
+    cx.read(fildes, buf)
 }
 
 #[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
 pub fn sys_write<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd, buf: &[u8]) -> Result<usize, Errno> {
-    cx.write(fildes, buf).map_err(|_| EINVAL)
+    cx.write(fildes, buf)
 }
 
 pub fn sys_ioctl<Cx: FileAccess>(
@@ -91,14 +91,14 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec;
 
-    use kernel_abi::{EINVAL, EOVERFLOW, ERANGE, Whence};
+    use kernel_abi::{EBADF, EINVAL, EOVERFLOW, ERANGE, Whence};
     use kernel_vfs::path::AbsoluteOwnedPath;
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
 
     use crate::access::testing::{MemoryFd, MemoryFile, MemoryFileAccess};
     use crate::access::{CwdAccess, FileAccess};
-    use crate::unistd::{sys_getcwd, sys_lseek};
+    use crate::unistd::{sys_getcwd, sys_lseek, sys_read, sys_write};
 
     #[test]
     fn test_getcwd() {
@@ -147,8 +147,26 @@ mod tests {
         let info = cx
             .file_info(path.as_ref())
             .expect("fixture file must exist");
-        let fd = cx.open(&info).expect("fixture file must open");
+        let fd = cx.open(&info);
         (cx, fd)
+    }
+
+    #[test]
+    fn sys_read_and_write_reject_unopened_fd() {
+        let (cx, _fd) = lseek_fixture();
+        let unopened = MemoryFd::from(99);
+
+        assert_eq!(Err(EBADF), sys_read(&cx, unopened.clone(), &mut [0_u8; 4]));
+        assert_eq!(Err(EBADF), sys_write(&cx, unopened, b"data"));
+    }
+
+    #[test]
+    fn sys_read_at_end_of_file_returns_zero() {
+        let (cx, fd) = lseek_fixture();
+        cx.set_position(fd.clone(), 15)
+            .expect("fixture file must accept a position");
+
+        assert_eq!(Ok(0), sys_read(&cx, fd, &mut [0_u8; 4]));
     }
 
     #[test]

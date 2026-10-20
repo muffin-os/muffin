@@ -2,7 +2,7 @@ use alloc::borrow::ToOwned;
 use core::ffi::c_int;
 use core::slice::from_raw_parts;
 
-use kernel_abi::{EINVAL, ENAMETOOLONG, ENOENT, Errno, PATH_MAX};
+use kernel_abi::{EINVAL, ENAMETOOLONG, Errno, PATH_MAX};
 use kernel_vfs::path::{AbsolutePath, Path};
 use tracing::{Level, debug, instrument};
 
@@ -36,8 +36,8 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
 
     debug!(?path, "open");
 
-    let info = cx.file_info(path.as_ref()).ok_or(ENOENT)?;
-    let fd = cx.open(&info).map_err(|_| EINVAL)?; // TODO: check error
+    let info = cx.file_info(path.as_ref())?;
+    let fd = cx.open(&info);
     let fd_num = Into::<c_int>::into(fd);
     Ok(fd_num as usize)
 }
@@ -48,7 +48,7 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec;
 
-    use kernel_abi::ENOENT;
+    use kernel_abi::{ENOENT, Errno};
     use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
@@ -90,28 +90,24 @@ mod tests {
     {
         type FileInfo = F::FileInfo;
         type Fd = F::Fd;
-        type OpenError = F::OpenError;
-        type ReadError = F::ReadError;
-        type WriteError = F::WriteError;
-        type CloseError = F::CloseError;
 
-        fn file_info(&self, path: &AbsolutePath) -> Option<Self::FileInfo> {
+        fn file_info(&self, path: &AbsolutePath) -> Result<Self::FileInfo, Errno> {
             self.file_access.file_info(path)
         }
 
-        fn open(&self, info: &Self::FileInfo) -> Result<Self::Fd, Self::OpenError> {
+        fn open(&self, info: &Self::FileInfo) -> Self::Fd {
             self.file_access.open(info)
         }
 
-        fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Self::ReadError> {
+        fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
             self.file_access.read(fd, buf)
         }
 
-        fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Self::WriteError> {
+        fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Errno> {
             self.file_access.write(fd, buf)
         }
 
-        fn close(&self, fd: Self::Fd) -> Result<(), Self::CloseError> {
+        fn close(&self, fd: Self::Fd) -> Result<(), Errno> {
             self.file_access.close(fd)
         }
     }

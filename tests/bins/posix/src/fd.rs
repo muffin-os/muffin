@@ -1,5 +1,5 @@
 use minilib::{
-    EBADF, EFAULT, EINVAL, ENOENT, ENOSYS, ENOTTY, FbScreenInfo, IoctlRequest, SYS_CLOSE,
+    EBADF, EFAULT, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTTY, FbScreenInfo, IoctlRequest, SYS_CLOSE,
     SYS_IOCTL, SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, fstat, fsync, ioctl, lseek, open,
     read, ret, write,
 };
@@ -70,8 +70,8 @@ pub fn run() {
         ENOTTY,
     );
 
-    check::expect_err("fd/read_unopened", read(UNOPENED_FD, &mut one), EINVAL);
-    check::expect_err("fd/write_unopened", write(UNOPENED_FD, HELLO), EINVAL);
+    check::expect_err("fd/read_unopened", read(UNOPENED_FD, &mut one), EBADF);
+    check::expect_err("fd/write_unopened", write(UNOPENED_FD, HELLO), EBADF);
     check::expect_err("fd/fsync_unopened", fsync(UNOPENED_FD), EBADF);
     check::expect_err("fd/fstat_unopened", fstat(UNOPENED_FD, &mut stat), EBADF);
     check::expect_err(
@@ -142,7 +142,7 @@ pub fn run() {
 
     let dir = check::unwrap_or_fail("fd/open_dir", open("/data/dir"));
     check::require("fd/open_dir_next_free", dir == fd + 1);
-    check::expect_err("fd/read_dir", read(dir, &mut one), EINVAL);
+    check::expect_err("fd/read_dir", read(dir, &mut one), EISDIR);
     check::expect_ok("fd/fstat_dir", fstat(dir, &mut stat), ());
     check::require("fd/fstat_dir_size", stat.size == 1024);
 
@@ -157,4 +157,7 @@ pub fn run() {
         ret(minilib::syscall1(SYS_CLOSE, fd as usize)),
         ENOSYS,
     );
+    let null = check::unwrap_or_fail("fd/open_dev_null", open("/dev/null"));
+    check::expect_ok("fd/read_dev_null", read(null, &mut one), 0);
+    check::expect_ok("fd/write_dev_null", write(null, HELLO), HELLO.len());
 }

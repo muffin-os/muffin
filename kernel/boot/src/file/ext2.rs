@@ -58,7 +58,10 @@ where
 
         let (found_num, found) = self
             .find_inode(path)
-            .map_err(|_| OpenError::NotFound)?
+            .map_err(|e| match e {
+                Error::NotDirectory => OpenError::NotFound,
+                _ => OpenError::OpenFailed,
+            })?
             .ok_or(OpenError::NotFound)?;
 
         let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));

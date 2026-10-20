@@ -2,12 +2,13 @@ use alloc::sync::Arc;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
-    EBADF, EINVAL, EIO, ENODEV, ENOMEM, ENOTTY, Errno, IoctlRequest, ProtFlags, Stat,
+    EBADF, EINVAL, EIO, EISDIR, ENODEV, ENOENT, ENOMEM, ENOTTY, Errno, IoctlRequest, ProtFlags,
+    Stat,
 };
 use kernel_syscall::access::{CwdAccess, FileAccess};
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
-use kernel_vfs::{FsyncError, IoctlError, MmapError, Stat as VfsStat};
+use kernel_vfs::{FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat};
 use spin::rwlock::RwLock;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
@@ -53,18 +54,16 @@ impl kernel_syscall::access::FileInfo for FileInfo {}
 impl FileAccess for KernelAccess {
     type FileInfo = FileInfo;
     type Fd = FdNum;
-    type OpenError = ();
-    type ReadError = ();
-    type WriteError = ();
-    type CloseError = ();
 
-    fn file_info(&self, path: &AbsolutePath) -> Option<Self::FileInfo> {
-        Some(FileInfo {
-            node: vfs().read().open(path).ok()?,
-        })
+    fn file_info(&self, path: &AbsolutePath) -> Result<Self::FileInfo, Errno> {
+        let node = vfs().read().open(path).map_err(|e| match e {
+            OpenError::NotFound => ENOENT,
+            OpenError::OpenFailed => EIO,
+        })?;
+        Ok(FileInfo { node })
     }
 
-    fn open(&self, info: &Self::FileInfo) -> Result<Self::Fd, ()> {
+    fn open(&self, info: &Self::FileInfo) -> Self::Fd {
         let ofd = OpenFileDescription::from(info.node.clone());
         let num = self
             .process
@@ -83,17 +82,20 @@ impl FileAccess for KernelAccess {
 
         self.process.file_descriptors().write().insert(num, fd);
 
-        Ok(num)
+        num
     }
 
-    fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, ()> {
+    fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
         let fds = self.process.file_descriptors();
         let guard = fds.read();
 
-        let desc = guard.get(&fd).ok_or(())?;
+        let desc = guard.get(&fd).ok_or(EBADF)?;
         let ofd = desc.file_description();
         let offset = ofd.position().load(Relaxed);
-        let read = ofd.read(buf, offset.into_usize()).map_err(|_| ())?;
+        let read = ofd.read(buf, offset.into_usize()).map_err(|e| match e {
+            ReadError::NotReadable => EISDIR,
+            ReadError::FsError(_) | ReadError::ReadFailed => EIO,
+        })?;
         // The load and the store are separate, which is sound only while a
         // single task reaches a file description. Nothing forks and no
         // thread-spawn syscall is dispatched.
@@ -101,21 +103,25 @@ impl FileAccess for KernelAccess {
         Ok(read)
     }
 
-    fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, ()> {
+    fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Errno> {
         let fds = self.process.file_descriptors();
         let guard = fds.read();
 
-        let desc = guard.get(&fd).ok_or(())?;
+        let desc = guard.get(&fd).ok_or(EBADF)?;
         let ofd = desc.file_description();
         let offset = ofd.position().load(Relaxed);
-        let written = ofd.write(buf, offset.into_usize()).map_err(|_| ())?;
+        let written = ofd.write(buf, offset.into_usize()).map_err(|_| EIO)?;
         ofd.position().store(offset + written.into_u64(), Relaxed);
         Ok(written)
     }
 
-    fn close(&self, fd: Self::Fd) -> Result<(), ()> {
-        self.process.file_descriptors().write().remove(&fd);
-        Ok(())
+    fn close(&self, fd: Self::Fd) -> Result<(), Errno> {
+        self.process
+            .file_descriptors()
+            .write()
+            .remove(&fd)
+            .map(|_| ())
+            .ok_or(EBADF)
     }
 
     fn ioctl(&self, fd: Self::Fd, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, Errno> {

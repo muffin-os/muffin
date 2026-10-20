@@ -19,6 +19,8 @@ pub enum ExistsError {}
 pub enum OpenError {
     #[error("not found")]
     NotFound,
+    #[error("open failed")]
+    OpenFailed,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
