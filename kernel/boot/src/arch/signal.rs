@@ -107,7 +107,7 @@ fn write_sigframe(
     let base = user_rsp.wrapping_sub(128).wrapping_sub(size) & !0xF;
     let start = base.wrapping_sub(8);
 
-    let mut uptr = match unsafe { UserspaceMutPtr::<u8>::try_from_usize(start as usize) } {
+    let mut uptr = match UserspaceMutPtr::<u8>::try_from_usize(start as usize) {
         Ok(ptr) => ptr,
         Err(_) => terminate_current(Signal::Segfault),
     };
@@ -230,7 +230,7 @@ pub fn reap_current_if_requested(task: &Task) -> bool {
 /// the frame is not readable user memory or its magic does not match.
 pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
     let addr = frame.stack_pointer.as_u64() as usize;
-    let ptr = match unsafe { UserspaceMutPtr::<SigFrame>::try_from_usize(addr) } {
+    let ptr = match UserspaceMutPtr::<SigFrame>::try_from_usize(addr) {
         Ok(ptr) => ptr,
         Err(_) => terminate_current(Signal::Segfault),
     };

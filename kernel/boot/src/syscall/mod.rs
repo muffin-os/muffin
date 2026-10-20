@@ -128,7 +128,7 @@ fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
 /// Making the range resident up front keeps a bad pointer from faulting the
 /// copy-out in Ring 0 and panicking the kernel.
 fn write_user<T>(addr: usize, value: T) -> Result<(), Errno> {
-    let mut ptr = unsafe { UserspaceMutPtr::<T>::try_from_usize(addr) }.map_err(|_| EFAULT)?;
+    let mut ptr = UserspaceMutPtr::<T>::try_from_usize(addr).map_err(|_| EFAULT)?;
     ptr.validate_range(size_of::<T>()).map_err(|_| EFAULT)?;
     make_user_range_resident(addr, size_of::<T>(), UserAccess::Write)?;
     unsafe {
@@ -144,7 +144,7 @@ fn write_user<T>(addr: usize, value: T) -> Result<(), Errno> {
 /// Making the range resident up front keeps a bad pointer from faulting the
 /// copy-in in Ring 0 and panicking the kernel.
 fn read_user<T>(addr: usize) -> Result<T, Errno> {
-    let ptr = unsafe { UserspacePtr::<T>::try_from_usize(addr) }.map_err(|_| EFAULT)?;
+    let ptr = UserspacePtr::<T>::try_from_usize(addr).map_err(|_| EFAULT)?;
     ptr.validate_range(size_of::<T>()).map_err(|_| EFAULT)?;
     make_user_range_resident(addr, size_of::<T>(), UserAccess::Read)?;
     // Safety: the range is lower-half, resident, and user readable, so this
@@ -264,7 +264,7 @@ fn make_user_range_resident(ptr: usize, len: usize, access: UserAccess) -> Resul
 fn dispatch_sys_getcwd(path: usize, size: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
-    let path = unsafe { UserspaceMutPtr::try_from_usize(path) }.map_err(|_| EFAULT)?;
+    let path = UserspaceMutPtr::try_from_usize(path).map_err(|_| EFAULT)?;
     path.validate_range(size).map_err(|_| EFAULT)?;
     make_user_range_resident(path.addr(), size, UserAccess::Write)?;
     sys_getcwd(&cx, path, size)
@@ -280,7 +280,7 @@ fn dispatch_sys_mmap(
 ) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
-    let addr = unsafe { UserspacePtr::try_from_usize(addr)? };
+    let addr = UserspacePtr::try_from_usize(addr)?;
     let prot = i32::try_from(prot)?;
     let flags = i32::try_from(flags)?;
     let fd = i32::try_from(fd)?;
@@ -296,7 +296,7 @@ fn dispatch_sys_open(
     let cx = KernelAccess::new();
 
     make_user_range_resident(path, path_len, UserAccess::Read)?;
-    let path = unsafe { UserspacePtr::try_from_usize(path)? };
+    let path = UserspacePtr::try_from_usize(path)?;
     sys_open(&cx, path, path_len, oflag as i32, mode as i32)
 }
 

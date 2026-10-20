@@ -155,7 +155,7 @@ mod tests {
                 }
             };
 
-            let ptr = unsafe { UserspacePtr::try_from_usize(addr).unwrap() };
+            let ptr = UserspacePtr::try_from_usize(addr).unwrap();
 
             self.mappings.lock().push((addr, size, prot));
 
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn test_mmap_anonymous_private() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -198,7 +198,7 @@ mod tests {
             ProtFlags::READ | ProtFlags::EXEC,
         ] {
             let cx = Arc::new(TestMemoryAccess::new());
-            let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+            let addr = UserspacePtr::try_from_usize(0).unwrap();
 
             let mapped = sys_mmap(
                 &cx,
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn test_mmap_zero_size() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn test_mmap_not_private() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -255,7 +255,7 @@ mod tests {
     fn test_mmap_fixed() {
         let cx = Arc::new(TestMemoryAccess::new());
         let fixed_addr = 0x100000;
-        let addr = unsafe { UserspacePtr::try_from_usize(fixed_addr).unwrap() };
+        let addr = UserspacePtr::try_from_usize(fixed_addr).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn mmap_fixed_unaligned_addr_rejected() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0x1001).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0x1001).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn test_mmap_write_exec_mutually_exclusive() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn mmap_file_requires_exactly_one_sharing_mode() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         for flags in [MapFlags::empty(), MapFlags::SHARED | MapFlags::PRIVATE] {
             let result = sys_mmap(&cx, addr, 4096, ProtFlags::READ.bits(), flags.bits(), 3, 0);
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn mmap_private_fd_unsupported() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn mmap_private_file_fixed_rejected() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn mmap_file_bad_fd() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn mmap_shared_fd_unsupported() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn mmap_shared_offset_rejected() {
         let cx = Arc::new(TestMemoryAccess::new());
-        let addr = unsafe { UserspacePtr::try_from_usize(0).unwrap() };
+        let addr = UserspacePtr::try_from_usize(0).unwrap();
 
         let result = sys_mmap(
             &cx,
