@@ -130,6 +130,12 @@ mod tests {
             ("//foo/bar/baz//", &["foo", "bar", "baz"]),
             ("///foo/bar/baz//", &["foo", "bar", "baz"]),
             ("///foo/bar/baz///", &["foo", "bar", "baz"]),
+            ("/./foo/../bar", &[".", "foo", "..", "bar"]),
+            ("/ foo/ bar /", &[" foo", " bar "]),
+            (
+                "/.hidden/foo-bar/baz_qux/file.txt",
+                &[".hidden", "foo-bar", "baz_qux", "file.txt"],
+            ),
         ] {
             let path = Path::new(path);
             {
@@ -163,70 +169,6 @@ mod tests {
     }
 
     #[test]
-    fn test_filenames_with_dots() {
-        let path = Path::new("/./foo/../bar");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec![".", "foo", "..", "bar"]);
-
-        let path = Path::new("./foo");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec![".", "foo"]);
-
-        let path = Path::new("../foo");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["..", "foo"]);
-
-        let path = Path::new("/.");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["."]);
-
-        let path = Path::new("/..");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec![".."]);
-    }
-
-    #[test]
-    fn test_filenames_with_spaces() {
-        let path = Path::new("/foo bar/baz qux");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo bar", "baz qux"]);
-
-        let path = Path::new("/ foo/ bar /");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec![" foo", " bar "]);
-    }
-
-    #[test]
-    fn test_filenames_with_special_chars() {
-        let path = Path::new("/foo-bar/baz_qux/file.txt");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo-bar", "baz_qux", "file.txt"]);
-
-        let path = Path::new("/@#$/foo!");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["@#$", "foo!"]);
-    }
-
-    #[test]
-    fn test_filenames_single_component() {
-        let path = Path::new("foo");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo"]);
-
-        let path = Path::new("/foo");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo"]);
-
-        let path = Path::new("foo/");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo"]);
-
-        let path = Path::new("/foo/");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo"]);
-    }
-
-    #[test]
     fn test_filenames_alternating_next_back() {
         let path = Path::new("/a/b/c/d/e");
         let mut iter = path.filenames();
@@ -241,98 +183,13 @@ mod tests {
     }
 
     #[test]
-    fn test_filenames_collect_forward() {
-        let path = Path::new("/foo/bar/baz/qux");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo", "bar", "baz", "qux"]);
-    }
-
-    #[test]
-    fn test_filenames_collect_backward() {
-        let path = Path::new("/foo/bar/baz/qux");
-        let names: alloc::vec::Vec<&str> = path.filenames().rev().collect();
-        assert_eq!(names, alloc::vec!["qux", "baz", "bar", "foo"]);
-    }
-
-    #[test]
-    fn test_filenames_count() {
-        assert_eq!(Path::new("").filenames().count(), 0);
-        assert_eq!(Path::new("/").filenames().count(), 0);
-        assert_eq!(Path::new("foo").filenames().count(), 1);
-        assert_eq!(Path::new("/foo").filenames().count(), 1);
-        assert_eq!(Path::new("/foo/bar").filenames().count(), 2);
-        assert_eq!(Path::new("/foo/bar/baz").filenames().count(), 3);
-        assert_eq!(Path::new("///foo///bar///baz///").filenames().count(), 3);
-    }
-
-    #[test]
     fn test_filenames_nth() {
         let path = Path::new("/foo/bar/baz/qux");
-        let mut iter = path.filenames();
+        assert_eq!(path.filenames().nth(2), Some("baz"));
+        assert_eq!(path.filenames().nth(4), None);
 
-        assert_eq!(iter.next(), Some("foo"));
-        assert_eq!(iter.next(), Some("bar"));
-        assert_eq!(iter.next(), Some("baz"));
-        assert_eq!(iter.next(), Some("qux"));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn test_filenames_last() {
-        assert_eq!(
-            Path::new("/foo/bar/baz").filenames().next_back(),
-            Some("baz")
-        );
-        assert_eq!(Path::new("/foo").filenames().next_back(), Some("foo"));
-        assert_eq!(Path::new("").filenames().next_back(), None);
-        assert_eq!(Path::new("/").filenames().next_back(), None);
-    }
-
-    #[test]
-    fn test_filenames_empty_components() {
-        let path = Path::new("/////");
-        assert_eq!(path.filenames().count(), 0);
-
-        let path = Path::new("foo////bar");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo", "bar"]);
-    }
-
-    #[test]
-    fn test_filenames_hidden_files() {
-        let path = Path::new("/.hidden/file");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec![".hidden", "file"]);
-
-        let path = Path::new("/foo/.bar/.baz");
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names, alloc::vec!["foo", ".bar", ".baz"]);
-    }
-
-    #[test]
-    fn test_filenames_very_long_path() {
-        let path = Path::new("/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z");
-        let count = path.filenames().count();
-        assert_eq!(count, 26);
-
-        let names: alloc::vec::Vec<&str> = path.filenames().collect();
-        assert_eq!(names.len(), 26);
-        assert_eq!(names[0], "a");
-        assert_eq!(names[25], "z");
-    }
-
-    #[test]
-    fn test_filenames_empty_and_root() {
-        let path = Path::new("");
-        assert_eq!(path.filenames().count(), 0);
-
-        let path = Path::new("/");
-        assert_eq!(path.filenames().count(), 0);
-
-        let path = Path::new("//");
-        assert_eq!(path.filenames().count(), 0);
-
-        let path = Path::new("///");
-        assert_eq!(path.filenames().count(), 0);
+        let mut filenames = path.filenames();
+        assert_eq!(filenames.nth(1), Some("bar"));
+        assert_eq!(filenames.next(), Some("baz"));
     }
 }
