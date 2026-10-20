@@ -40,7 +40,7 @@ unsafe extern "C" fn main() -> ! {
             .expect("should be able to create process from executable");
     });
 
-    // TODO: start this from init through some kind of "autostart"
+    // TODO(tpdenk): launch /bin/fbdemo from init instead of the kernel
     let path = AbsolutePath::try_new("/bin/fbdemo").expect("executable path should be absolute");
     Process::create_from_executable(Process::root(), path)
         .expect("should be able to create process from executable");
