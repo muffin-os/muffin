@@ -61,7 +61,7 @@ impl OwnedPath {
     /// assert_eq!(path.as_str(), "/foo.txt");
     /// ```
     ///
-    /// This is different from [`push_str`], which appends a string to
+    /// This is different from [`push`](Self::push), which appends a string to
     /// the end of the path as a new component.
     pub fn append_str(&mut self, other: &str) {
         self.inner.push_str(other);
@@ -90,16 +90,10 @@ impl OwnedPath {
     {
         let other = other.as_ref();
 
-        // Always add a separator
-        if !self.inner.ends_with(FILEPATH_SEPARATOR) {
-            self.inner.push(FILEPATH_SEPARATOR);
-        } else if other.is_empty() {
-            // If path already ends with separator and we're pushing empty,
-            // add another separator
+        // An empty component must still show up as its own separator.
+        if !self.inner.ends_with(FILEPATH_SEPARATOR) || other.is_empty() {
             self.inner.push(FILEPATH_SEPARATOR);
         }
-
-        // Append the other path
         self.inner.push_str(other);
     }
 }
