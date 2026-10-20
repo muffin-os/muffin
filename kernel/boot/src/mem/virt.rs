@@ -204,7 +204,7 @@ impl VirtualMemoryAllocator for VirtualMemoryHigherHalf {
     fn reserve(&self, pages: usize) -> Option<OwnedSegment<'static>> {
         vmm()
             .write()
-            .reserve(pages * 4096)
+            .reserve_bytes((pages * 4096).into_u64())
             .map(|segment| OwnedSegment::new_ref(vmm(), segment))
             .inspect(|segment| assert!(segment.start.is_aligned(Size4KiB::SIZE)))
     }
@@ -227,7 +227,7 @@ impl VirtualMemoryAllocator for VirtualMemoryHigherHalf {
 impl VirtualMemoryAllocator for Arc<RwLock<VirtualMemoryManager>> {
     fn reserve(&self, pages: usize) -> Option<OwnedSegment<'static>> {
         self.write()
-            .reserve(pages * 4096)
+            .reserve_bytes((pages * 4096).into_u64())
             .map(|segment| OwnedSegment::new_rc(self.clone(), segment))
     }
 

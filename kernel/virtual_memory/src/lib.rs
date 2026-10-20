@@ -32,8 +32,7 @@ impl VirtualMemoryManager {
         }
     }
 
-    pub fn reserve(&mut self, n: usize) -> Option<Segment> {
-        let len = n as u64;
+    pub fn reserve_bytes(&mut self, len: u64) -> Option<Segment> {
         if len == 0 || len > self.mem_size {
             return None;
         }
@@ -112,7 +111,7 @@ mod tests {
         let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0xabcd), size as u64);
         for n in (1..=size).step_by(713) {
             let segment = vmm
-                .reserve(n)
+                .reserve_bytes(n as u64)
                 .unwrap_or_else(|| panic!("should be able to reserve segment of size {n}"));
 
             assert_eq!(segment.len, n as u64);
@@ -152,7 +151,7 @@ mod tests {
     fn reserve_larger_than_manager() {
         let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0x1_0000_0000), 0x7F00_0000_0000);
         assert_eq!(
-            vmm.reserve(1 << 47),
+            vmm.reserve_bytes(1 << 47),
             None,
             "request exceeding the managed range must be refused"
         );
@@ -165,7 +164,7 @@ mod tests {
         vmm.mark_as_reserved(Segment::new(VirtAddr::new(0x7FFF_FFFF_8000), 0x1000))
             .unwrap();
         assert_eq!(
-            vmm.reserve(0x9000),
+            vmm.reserve_bytes(0x9000),
             None,
             "no gap fits the request, refusal must not panic"
         );
@@ -178,7 +177,7 @@ mod tests {
             .unwrap();
         vmm.mark_as_reserved(Segment::new(VirtAddr::new(0x2000), 0))
             .unwrap();
-        let segment = vmm.reserve(0x1000);
+        let segment = vmm.reserve_bytes(0x1000);
         assert!(
             segment.is_some(),
             "zero-length entries must not block reservations"
