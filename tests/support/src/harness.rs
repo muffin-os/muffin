@@ -213,14 +213,10 @@ impl KernelTest {
                         });
                     } else if parse_spawn_complete(&line).is_some() {
                         all_announced = true;
-                    } else if let Some((pid, code)) = parse_exit(&line)
+                    } else if let Some((pid, outcome)) = parse_outcome(&line)
                         && let Some(proc) = pending.iter_mut().find(|p| p.pid == pid)
                     {
-                        proc.outcome = Some(Outcome::Exited(code));
-                    } else if let Some((name, pid)) = parse_signal(&line)
-                        && let Some(proc) = pending.iter_mut().find(|p| p.pid == pid)
-                    {
-                        proc.outcome = Some(Outcome::Signaled(name));
+                        proc.outcome = Some(outcome);
                     }
                     transcript.push(line);
 
@@ -507,18 +503,17 @@ fn parse_spawn_complete(line: &str) -> Option<u64> {
         .ok()
 }
 
-/// Parses `test-kernel: outcome pid={N} exit={code}` into `(pid, code)`.
-fn parse_exit(line: &str) -> Option<(u64, u64)> {
+/// Parses `test-kernel: outcome pid={N} exit={code}` and
+/// `test-kernel: outcome pid={N} signal={NAME}` into the pid and its outcome.
+fn parse_outcome(line: &str) -> Option<(u64, Outcome)> {
     let rest = anchor_after(line, "test-kernel: outcome pid=")?;
-    let (pid, code) = rest.split_once(" exit=")?;
-    Some((pid.trim().parse().ok()?, code.trim().parse().ok()?))
-}
-
-/// Parses `test-kernel: outcome pid={N} signal={NAME}` into `(name, pid)`.
-fn parse_signal(line: &str) -> Option<(String, u64)> {
-    let rest = anchor_after(line, "test-kernel: outcome pid=")?;
-    let (pid, name) = rest.split_once(" signal=")?;
-    Some((name.trim().to_owned(), pid.trim().parse().ok()?))
+    let (pid, rest) = rest.trim().split_once(' ')?;
+    let outcome = match rest.split_once('=')? {
+        ("exit", code) => Outcome::Exited(code.parse().ok()?),
+        ("signal", name) => Outcome::Signaled(name.to_owned()),
+        _ => return None,
+    };
+    Some((pid.parse().ok()?, outcome))
 }
 
 /// Returns the text following `anchor`, or `None` if `anchor` is absent. Used to
@@ -530,6 +525,19 @@ fn anchor_after<'a>(line: &'a str, anchor: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_outcome_reads_exit_and_signal() {
+        assert_eq!(
+            parse_outcome("[INFO] test-kernel: outcome pid=3 exit=42"),
+            Some((3, Outcome::Exited(42)))
+        );
+        assert_eq!(
+            parse_outcome("test-kernel: outcome pid=1 signal=SIGSEGV"),
+            Some((1, Outcome::Signaled("SIGSEGV".to_owned())))
+        );
+        assert_eq!(parse_outcome("test-kernel: outcome pid=1 exit=x"), None);
+    }
 
     fn signaled_report() -> RunReport {
         RunReport {
