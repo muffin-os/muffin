@@ -73,11 +73,8 @@ impl HigherHalfStack {
         Ok(stack)
     }
 
-    /// Allocates a plain, unmodified stack with the given number of 4KiB pages.
-    ///
-    /// One page of the given count is reserved for the guard page below the stack,
-    /// so that for `pages` pages, the usable stack size is `pages - 1`. The allocation
-    /// is guarded, which additionally reserves an unmapped page above the stack.
+    /// Allocates a plain, unmodified stack of `pages - 1` usable 4 KiB pages
+    /// with an unmapped guard page below and above it.
     ///
     /// # Errors
     /// Returns an error if stack memory couldn't be allocated, either
@@ -123,7 +120,6 @@ impl HigherHalfStack {
         Segment::new(self.alloc.start() - Size4KiB::SIZE, Size4KiB::SIZE)
     }
 
-    /// Returns the mapped segment, which is the part of the stack that is actually mapped in memory.
     #[must_use]
     pub fn mapped_segment(&self) -> Segment {
         Segment::new(self.alloc.start(), self.alloc.len().into_u64())
