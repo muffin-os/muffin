@@ -23,7 +23,7 @@ fn busy_delay_n(n: u64) {
 const PING: Signal = Signal::WindowChanged;
 const ACK: Signal = Signal::Urgent;
 
-/// Roughly 14ms of spin per pump.
+/// Roughly 14ms of spin, the unit every budget below counts in.
 const PUMP_SPIN: u64 = 2_000_000;
 
 /// Handlers are delivered at timer ticks that land in user mode. The spin

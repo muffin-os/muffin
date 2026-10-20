@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use minilib::{Errno, Signal, Timespec, getpid, install_handler, nanosleep, println};
 
-/// Roughly 14ms of spin per pump, same shape as signals-init.
+// Same spin as `PUMP_SPIN` in signals-init, which documents it.
 const PUMP_SPIN: u64 = 2_000_000;
 
 fn busy_delay_n(n: u64) {

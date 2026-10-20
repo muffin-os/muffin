@@ -9,6 +9,7 @@ use minilib::{
     println, sigaction, sigprocmask, sigreturn_restorer, syscall0, syscall1, syscall2, syscall3,
 };
 
+// Same spin as `PUMP_SPIN` in signals-init, which documents it.
 const PUMP_SPIN: u64 = 2_000_000;
 const DELIVER_BUDGET: u32 = 60;
 const NEST_BUDGET: u32 = 120;
