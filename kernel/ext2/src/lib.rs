@@ -12,7 +12,7 @@ use kernel_device::block::BlockDevice;
 use spin::Mutex;
 pub use superblock::*;
 
-use crate::block_group::{BlockGroupDescriptor, BlockGroupDescriptorTable};
+use crate::block_group::{BGD_SIZE, BlockGroupDescriptor, BlockGroupDescriptorTable};
 use crate::read::IndirectCache;
 
 mod address;
@@ -37,7 +37,6 @@ pub struct Ext2Fs<T> {
 }
 
 const SUPERBLOCK_OFFSET: usize = 1024;
-const BGD_SIZE: usize = 32;
 
 impl<T> Ext2Fs<T>
 where
@@ -46,7 +45,9 @@ where
     /// Reads and validates the superblock and block group descriptor table.
     ///
     /// Returns [`Error::InvalidSuperblock`] if the magic number is wrong, a
-    /// per-group count is zero, or the block size is larger than 64 KiB.
+    /// per-group count is zero, or the block size is larger than 64 KiB, and
+    /// [`Error::InvalidBlockGroupDescriptor`] if a group points a bitmap or
+    /// its inode table at block 0.
     pub fn try_new(block_device: T) -> Result<Self, Error> {
         let mut superblock_data = [0_u8; 1024];
         block_device
@@ -77,8 +78,9 @@ where
         for i in 0..number_of_block_groups as usize {
             let offset = i * BGD_SIZE;
             let end = offset + BGD_SIZE;
-            let bgd_data = TryInto::<[u8; BGD_SIZE]>::try_into(&bgdt_data[offset..end]).unwrap();
-            let bgd = BlockGroupDescriptor::try_from(bgd_data).unwrap();
+            let bgd_data = TryInto::<&[u8; BGD_SIZE]>::try_into(&bgdt_data[offset..end]).unwrap();
+            let bgd = BlockGroupDescriptor::try_from(bgd_data)
+                .map_err(|()| Error::InvalidBlockGroupDescriptor(i as u32))?;
             bgdt.push(bgd);
         }
 
@@ -106,8 +108,7 @@ where
         let inodes_per_group = self.superblock.inodes_per_group();
         let block_group_index = (addr.get() - 1) / inodes_per_group;
         let block_group = &self.bgdt[block_group_index as usize];
-        let itable_start_block =
-            BlockAddress::new(block_group.inode_table_starting_block()).unwrap();
+        let itable_start_block = block_group.inode_table_starting_block();
 
         let index = (addr.get() - 1) % inodes_per_group;
         let inode_size = self.superblock.inode_size();
@@ -126,8 +127,7 @@ where
         let inodes_per_group = self.superblock.inodes_per_group();
         let block_group_index = (addr.get() - 1) / inodes_per_group;
         let block_group = &self.bgdt[block_group_index as usize];
-        let itable_start_block =
-            BlockAddress::new(block_group.inode_table_starting_block()).unwrap();
+        let itable_start_block = block_group.inode_table_starting_block();
 
         let index = (addr.get() - 1) % inodes_per_group;
         let inode_size = self.superblock.inode_size();
@@ -188,8 +188,6 @@ where
                 Resource::Block => descriptor.block_usage_bitmap_block(),
                 Resource::Inode => descriptor.inode_usage_bitmap_block(),
             };
-            let bitmap_block = BlockAddress::new(bitmap_block)
-                .expect("bgdt does not have valid block address for bitmap block");
             let Some(bit) = self.reserve_first_free_bit(bitmap_block)? else {
                 continue;
             };

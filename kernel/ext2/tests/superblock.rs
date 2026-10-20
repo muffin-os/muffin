@@ -55,9 +55,37 @@ fn test_oversized_log2_block_size_is_rejected() {
     assert_eq!(Err(Error::InvalidSuperblock), mount(image).map(|_| ()));
 }
 
+const BGDT_OFFSET: usize = 2048;
+const BGD_SIZE: usize = 32;
+
+// Points every descriptor's bitmaps and inode table at blocks 1, 2 and 3.
+fn fill_bgdt(image: &mut [u8], groups: usize) {
+    for group in 0..groups {
+        let bgd = &mut image[BGDT_OFFSET + group * BGD_SIZE..][..12];
+        bgd[0..4].copy_from_slice(&1_u32.to_le_bytes());
+        bgd[4..8].copy_from_slice(&2_u32.to_le_bytes());
+        bgd[8..12].copy_from_slice(&3_u32.to_le_bytes());
+    }
+}
+
 #[test]
 fn test_bgdt_spanning_multiple_blocks_mounts() {
     let mut image = minimal_image();
     image[NUM_BLOCKS_OFFSET..NUM_BLOCKS_OFFSET + 4].copy_from_slice(&(33 * 8192_u32).to_le_bytes());
+    fill_bgdt(&mut image, 33);
     assert!(mount(image).is_ok());
+}
+
+#[test]
+fn test_zero_bgd_pointer_is_rejected() {
+    for field_offset in [0, 4, 8] {
+        let mut image = minimal_image();
+        image[NUM_BLOCKS_OFFSET..NUM_BLOCKS_OFFSET + 4].copy_from_slice(&1_u32.to_le_bytes());
+        fill_bgdt(&mut image, 1);
+        image[BGDT_OFFSET + field_offset..][..4].fill(0);
+        assert_eq!(
+            Err(Error::InvalidBlockGroupDescriptor(0)),
+            mount(image).map(|_| ())
+        );
+    }
 }

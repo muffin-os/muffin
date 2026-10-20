@@ -7,6 +7,7 @@ pub enum Error {
     UnableToWriteSuperblock,
     UnableToReadBlockGroupDescriptorTable,
     UnableToWriteBlockGroupDescriptorTable,
+    InvalidBlockGroupDescriptor(u32),
     NotDirectory,
     NotRegularFile,
     DeviceRead,

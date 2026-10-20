@@ -15,6 +15,9 @@ macro_rules! bytefield_field_read {
     };
     (u16, $offset:literal, $source:expr) => { $crate::bytefield_field_read!(integer u16, $offset, $source) };
     (u32, $offset:literal, $source:expr) => { $crate::bytefield_field_read!(integer u32, $offset, $source) };
+    (BlockAddress, $offset:literal, $source:expr) => {
+        $crate::BlockAddress::new($crate::bytefield_field_read!(u32, $offset, $source)).ok_or(())?
+    };
     (u64, $offset:literal, $source:expr) => { $crate::bytefield_field_read!(integer u64, $offset, $source) };
     (u128, $offset:literal, $source:expr) => { $crate::bytefield_field_read!(integer u128, $offset, $source) };
     (integer $typ:ty, $offset:literal, $source:expr) => {
@@ -54,6 +57,9 @@ macro_rules! bytefield_field_write {
     };
     (u16, $field:expr, $offset:literal, $target:expr) => { $crate::bytefield_field_write!(integer u16, $field, $offset, $target) };
     (u32, $field:expr, $offset:literal, $target:expr) => { $crate::bytefield_field_write!(integer u32, $field, $offset, $target) };
+    (BlockAddress, $field:expr, $offset:literal, $target:expr) => {
+        $crate::bytefield_field_write!(u32, $field.into_u32(), $offset, $target)
+    };
     (u64, $field:expr, $offset:literal, $target:expr) => { $crate::bytefield_field_write!(integer u64, $field, $offset, $target) };
     (u128, $field:expr, $offset:literal, $target:expr) => { $crate::bytefield_field_write!(integer u128, $field, $offset, $target) };
     (integer $typ:ty, $field:expr, $offset:literal, $target:expr) => {

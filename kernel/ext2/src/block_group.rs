@@ -1,13 +1,17 @@
 use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 
-use crate::{bytefield, bytefield_field_read, bytefield_field_write, check_is_implemented};
+use crate::{
+    BlockAddress, bytefield, bytefield_field_read, bytefield_field_write, check_is_implemented,
+};
+
+pub const BGD_SIZE: usize = 32;
 
 bytefield! {
-    pub struct BlockGroupDescriptor ([u8; 32]) {
-        block_usage_bitmap_block: u32 = 0,
-        inode_usage_bitmap_block: u32 = 4,
-        inode_table_starting_block: u32 = 8,
+    pub struct BlockGroupDescriptor ([u8; BGD_SIZE]) {
+        block_usage_bitmap_block: BlockAddress = 0,
+        inode_usage_bitmap_block: BlockAddress = 4,
+        inode_table_starting_block: BlockAddress = 8,
         num_unallocated_blocks: u16 = 12,
         num_unallocated_inodes: u16 = 14,
         num_directories: u16 = 16,
@@ -15,15 +19,15 @@ bytefield! {
 }
 
 impl BlockGroupDescriptor {
-    pub fn block_usage_bitmap_block(&self) -> u32 {
+    pub fn block_usage_bitmap_block(&self) -> BlockAddress {
         self.block_usage_bitmap_block
     }
 
-    pub fn inode_usage_bitmap_block(&self) -> u32 {
+    pub fn inode_usage_bitmap_block(&self) -> BlockAddress {
         self.inode_usage_bitmap_block
     }
 
-    pub fn inode_table_starting_block(&self) -> u32 {
+    pub fn inode_table_starting_block(&self) -> BlockAddress {
         self.inode_table_starting_block
     }
 
