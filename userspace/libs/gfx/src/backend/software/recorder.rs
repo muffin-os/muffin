@@ -1,8 +1,8 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{SoftBackend, SoftBuffer, SoftPipeline};
 use crate::api::CommandRecorder;
+use crate::error::{GfxError, Result};
 
 /// A single recorded draw call with all state snapshotted at `draw()` time.
 #[derive(Debug)]
@@ -14,16 +14,11 @@ pub struct DrawCmd {
 }
 
 /// Software command recorder; accumulates draw calls for CPU-side execution.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SoftRecorder {
-    pipeline: SoftPipeline,
-    raw_data: Vec<u8>,
+    pipeline: Option<SoftPipeline>,
+    raw_data: Option<Vec<u8>>,
     pub cmds: Vec<DrawCmd>,
-}
-
-fn noop_vert(_: &[f32], _: &mut [f32]) {}
-fn noop_frag(_: &[f32]) -> u32 {
-    0
 }
 
 impl SoftRecorder {
@@ -32,37 +27,26 @@ impl SoftRecorder {
     }
 }
 
-impl Default for SoftRecorder {
-    fn default() -> Self {
-        Self {
-            // A zero stride makes the rasterizer skip draws issued before any
-            // pipeline is bound.
-            pipeline: SoftPipeline {
-                vertex_fn: noop_vert,
-                fragment_fn: noop_frag,
-                vertex_stride: 0,
-                output_count: 0,
-            },
-            raw_data: vec![],
-            cmds: vec![],
-        }
-    }
-}
-
 impl CommandRecorder<SoftBackend> for SoftRecorder {
     fn bind_pipeline(&mut self, pso: &SoftPipeline) {
-        self.pipeline = *pso;
+        self.pipeline = Some(*pso);
     }
 
     fn bind_vertex_buffer(&mut self, buf: &SoftBuffer) {
-        self.raw_data = buf.data.clone();
+        self.raw_data = Some(buf.data.clone());
     }
 
-    fn draw(&mut self, vertices: u32) {
+    fn draw(&mut self, vertices: u32) -> Result<()> {
+        let pipeline = self.pipeline.ok_or(GfxError::PipelineNotBound)?;
+        let raw_data = self
+            .raw_data
+            .clone()
+            .ok_or(GfxError::VertexBufferNotBound)?;
         self.cmds.push(DrawCmd {
-            pipeline: self.pipeline,
-            raw_data: self.raw_data.clone(),
+            pipeline,
+            raw_data,
             vertices,
         });
+        Ok(())
     }
 }

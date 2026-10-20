@@ -72,8 +72,9 @@ pub trait CommandRecorder<B: GfxBackend> {
     /// subsequent draw calls.
     fn bind_vertex_buffer(&mut self, buf: &B::Buffer);
     /// Records a non-indexed draw call consuming `vertices` vertices
-    /// from the currently bound vertex buffer.
-    fn draw(&mut self, vertices: u32);
+    /// from the currently bound vertex buffer. Fails when no pipeline or
+    /// no vertex buffer is bound.
+    fn draw(&mut self, vertices: u32) -> Result<()>;
 }
 
 /// Submits recorded command buffers to the GPU and manages frame
@@ -83,10 +84,11 @@ pub trait GfxQueue<B: GfxBackend> {
     type Recorder: CommandRecorder<B>;
 
     /// Records a batch of commands via `recorder_cmds` and submits
-    /// them to the GPU for execution.
+    /// them to the GPU for execution. Nothing is executed when
+    /// `recorder_cmds` fails.
     fn submit<F>(&mut self, recorder_cmds: F) -> Result<()>
     where
-        F: FnOnce(&mut Self::Recorder);
+        F: FnOnce(&mut Self::Recorder) -> Result<()>;
 
     /// Presents the current frame to the display surface.
     fn present(&mut self) -> Result<()>;

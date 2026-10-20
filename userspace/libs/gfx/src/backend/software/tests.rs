@@ -9,6 +9,7 @@ use crate::backend::software::{
     ATTRIBUTE_BYTES, SoftAdapter, SoftAllocator, SoftBackend, SoftCompiler, SoftFence, SoftQueue,
     SoftShaderDef,
 };
+use crate::error::GfxError;
 
 fn passthrough_vert(input: &[f32], output: &mut [f32]) {
     output[0] = input[0];
@@ -109,7 +110,7 @@ fn no_draw_leaves_framebuffer_blank() {
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
-        rec.draw(0);
+        rec.draw(0)
     })
     .unwrap();
 
@@ -139,7 +140,7 @@ fn triangle_writes_correct_pixels() {
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
-        rec.draw(3);
+        rec.draw(3)
     })
     .unwrap();
 
@@ -165,6 +166,77 @@ fn wrong_shader_kind_is_rejected() {
         vertex_stride: 2 * ATTRIBUTE_BYTES,
     });
     assert!(result.is_err());
+}
+
+#[test]
+fn draw_without_pipeline_is_rejected() {
+    let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let buf = backend
+        .alloc_buffer(&BufferDesc {
+            size: 6 * ATTRIBUTE_BYTES,
+            is_dynamic: false,
+        })
+        .unwrap();
+
+    let mut target = [0xDEAD_BEEFu32; 16];
+    let mut q = SoftQueue::new(&mut target, 4, 4, 4);
+    let result = q.submit(|rec| {
+        rec.bind_vertex_buffer(&buf);
+        rec.draw(3)
+    });
+
+    assert_eq!(result, Err(GfxError::PipelineNotBound));
+    assert!(q.framebuffer().iter().all(|&p| p == 0xDEAD_BEEF));
+}
+
+#[test]
+fn draw_without_vertex_buffer_is_rejected() {
+    let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let pso = simple_pipeline(&mut backend, 2 * ATTRIBUTE_BYTES);
+
+    let mut target = [0xDEAD_BEEFu32; 16];
+    let mut q = SoftQueue::new(&mut target, 4, 4, 4);
+    let result = q.submit(|rec| {
+        rec.bind_pipeline(&pso);
+        rec.draw(3)
+    });
+
+    assert_eq!(result, Err(GfxError::VertexBufferNotBound));
+    assert!(q.framebuffer().iter().all(|&p| p == 0xDEAD_BEEF));
+}
+
+#[test]
+fn invalid_pipeline_parameters_are_rejected() {
+    let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let vert = SoftShaderDef::Vertex {
+        func: passthrough_vert,
+        output_count: 2,
+    };
+    let frag = SoftShaderDef::Fragment(white_frag);
+
+    for stride in [0, ATTRIBUTE_BYTES + 1] {
+        let result = backend.compile_pipeline(&PipelineDesc {
+            vertex_shader: &vert,
+            pixel_shader: &frag,
+            vertex_stride: stride,
+        });
+        assert_eq!(
+            result.err(),
+            Some(GfxError::InvalidVertexStride),
+            "stride {stride} is not a whole number of attributes"
+        );
+    }
+
+    let position_only = SoftShaderDef::Vertex {
+        func: passthrough_vert,
+        output_count: 1,
+    };
+    let result = backend.compile_pipeline(&PipelineDesc {
+        vertex_shader: &position_only,
+        pixel_shader: &frag,
+        vertex_stride: 2 * ATTRIBUTE_BYTES,
+    });
+    assert_eq!(result.err(), Some(GfxError::InvalidOutputCount));
 }
 
 // Vertex layout (x, y, intensity).
@@ -230,7 +302,7 @@ fn interpolants_vary_across_triangle() {
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
-        rec.draw(3);
+        rec.draw(3)
     })
     .unwrap();
 
@@ -300,7 +372,7 @@ fn gouraud_triangle_blends_per_vertex_colors() {
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
-        rec.draw(3);
+        rec.draw(3)
     })
     .unwrap();
 
@@ -347,7 +419,7 @@ fn draw_respects_stride_padding() {
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
         rec.bind_vertex_buffer(&buf);
-        rec.draw(3);
+        rec.draw(3)
     })
     .unwrap();
 
@@ -410,10 +482,10 @@ fn each_draw_uses_the_pipeline_bound_at_draw_time() {
     q.submit(|rec| {
         rec.bind_pipeline(&white);
         rec.bind_vertex_buffer(&top_buf);
-        rec.draw(3);
+        rec.draw(3)?;
         rec.bind_pipeline(&blue);
         rec.bind_vertex_buffer(&bottom_buf);
-        rec.draw(3);
+        rec.draw(3)
     })
     .unwrap();
 

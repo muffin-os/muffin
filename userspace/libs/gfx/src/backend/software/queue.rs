@@ -84,9 +84,6 @@ impl<'fb> SoftQueue<'fb> {
             vertex_stride,
             output_count,
         } = cmd.pipeline;
-        if vertex_stride == 0 || output_count < 2 {
-            return;
-        }
 
         let w = self.width as f32;
         let h = self.height as f32;
@@ -246,10 +243,10 @@ impl<'fb> GfxQueue<SoftBackend> for SoftQueue<'fb> {
 
     fn submit<F>(&mut self, recorder_cmds: F) -> Result<()>
     where
-        F: FnOnce(&mut Self::Recorder),
+        F: FnOnce(&mut Self::Recorder) -> Result<()>,
     {
         let mut rec = SoftRecorder::new();
-        recorder_cmds(&mut rec);
+        recorder_cmds(&mut rec)?;
         for cmd in &rec.cmds {
             self.rasterize(cmd);
         }

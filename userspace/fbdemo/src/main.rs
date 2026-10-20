@@ -179,7 +179,7 @@ fn main() -> i32 {
         or_fail_gfx(q.submit(|rec| {
             rec.bind_pipeline(&pso);
             rec.bind_vertex_buffer(&vbuf);
-            rec.draw(3);
+            rec.draw(3)
         }));
         let t1 = now();
         let fsync_rc = fsync(fd);

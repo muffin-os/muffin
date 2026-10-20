@@ -1,3 +1,4 @@
+use super::ATTRIBUTE_BYTES;
 use crate::api::{GfxCompiler, PipelineDesc};
 use crate::error::{GfxError, Result};
 
@@ -18,16 +19,18 @@ pub enum SoftShaderDef {
     Fragment(fn(interpolants: &[f32]) -> u32),
 }
 
-/// CPU-interpreted render state produced by the software compiler.
+/// CPU-interpreted render state produced by the software compiler. Only
+/// [`SoftCompiler::compile_pipeline`] builds one, so the rasterizer can rely
+/// on the stride and output count it validated.
 #[derive(Debug, Clone, Copy)]
 pub struct SoftPipeline {
-    pub vertex_fn: fn(&[f32], &mut [f32]),
-    pub fragment_fn: fn(&[f32]) -> u32,
+    pub(super) vertex_fn: fn(&[f32], &mut [f32]),
+    pub(super) fragment_fn: fn(&[f32]) -> u32,
     /// Bytes between the start of consecutive vertices in the input buffer.
-    pub vertex_stride: usize,
+    pub(super) vertex_stride: usize,
     /// Total number of `f32` values the vertex shader writes per vertex
     /// (position counts as 2).
-    pub output_count: usize,
+    pub(super) output_count: usize,
 }
 
 /// Software compiler; translates shader definitions and pipeline descriptions
@@ -55,6 +58,12 @@ impl GfxCompiler for SoftCompiler {
             SoftShaderDef::Fragment(f) => *f,
             SoftShaderDef::Vertex { .. } => return Err(GfxError::WrongShaderKind),
         };
+        if desc.vertex_stride == 0 || !desc.vertex_stride.is_multiple_of(ATTRIBUTE_BYTES) {
+            return Err(GfxError::InvalidVertexStride);
+        }
+        if output_count < 2 {
+            return Err(GfxError::InvalidOutputCount);
+        }
         Ok(SoftPipeline {
             vertex_fn,
             fragment_fn,
