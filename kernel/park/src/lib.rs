@@ -53,10 +53,10 @@ impl<T> Slot<T> {
 // ownership of `T` crosses threads and `T: Sync` is not required.
 unsafe impl<T: Send> Sync for Slot<T> {}
 
-/// A segment is never freed while the lot is alive, so a slot address stays
-/// valid for as long as the lot does. That is what lets a ticket hold a
-/// borrow of its slot instead of an index, and it is why the lot grows by
-/// appending segments rather than by reallocating one contiguous buffer.
+// A segment is never freed while the lot is alive, so a slot address stays
+// valid for as long as the lot does. That is what lets a ticket hold a
+// borrow of its slot instead of an index, and it is why the lot grows by
+// appending segments rather than by reallocating one contiguous buffer.
 struct Segment<T> {
     slots: [Slot<T>; SEGMENT_SLOTS],
     next: AtomicPtr<Segment<T>>,
@@ -111,8 +111,7 @@ impl<T> Segment<T> {
 
 /// A set of slots that values can be parked in and retrieved from.
 ///
-/// The head segment is inline, so [`ParkingLot::new`] is `const` and a lot can
-/// live in a `static` without lazy initialization.
+/// [`ParkingLot::new`] is `const`, so a lot can live in a `static`.
 pub struct ParkingLot<T> {
     head: Segment<T>,
 }
@@ -127,9 +126,9 @@ impl<T> ParkingLot<T> {
 
     /// Claims a free slot and returns its reservation.
     ///
-    /// Scans slots linearly and skips the ones in use, so the cost grows with
-    /// the number of slots currently in use. May allocate a fresh segment when
-    /// every existing slot is taken, but never locks.
+    /// Takes time proportional to the number of slots in use and may
+    /// allocate, but never locks. See [`ParkingLot::try_reserve`] for
+    /// interrupt context.
     #[must_use = "dropping a reservation leaves the slot reserved for the lifetime of the lot"]
     pub fn reserve(&self) -> Reservation<'_, T> {
         let mut segment = &self.head;
@@ -193,12 +192,11 @@ impl<T> Debug for ParkingLot<T> {
 }
 
 impl<T> Drop for ParkingLot<T> {
-    /// The exclusive borrow proves no ticket is alive and no other thread can
-    /// touch a slot, so every access below is unsynchronized on purpose.
-    ///
-    /// The walk is iterative because the chain can be long and one stack frame
-    /// per segment would overflow the kernel stack.
     fn drop(&mut self) {
+        // The exclusive borrow proves no ticket is alive and no other thread
+        // can touch a slot, so every access below is unsynchronized on purpose.
+        // The walk is iterative because the chain can be long and one stack
+        // frame per segment would overflow the kernel stack.
         self.head.drop_values();
         let mut next = *self.head.next.get_mut();
         while !next.is_null() {
@@ -213,11 +211,6 @@ impl<T> Drop for ParkingLot<T> {
 }
 
 /// An unsplit claim on one slot, holding both of its ticket rights.
-///
-/// While a reservation exists neither ticket has been created, so the slot
-/// is `Reserved` and no other party can act on it. That exclusivity is what
-/// makes [`Reservation::release`] sound, and it pairs the two tickets of
-/// [`Reservation::split`] to the same slot by construction.
 #[must_use = "dropping a reservation leaves the slot reserved for the lifetime of the lot"]
 pub struct Reservation<'a, T> {
     slot: &'a Slot<T>,
@@ -305,11 +298,10 @@ impl<T> UnparkTicket<'_, T> {
     /// Retrieves the parked value, or `None` when the park side has not
     /// published yet. In that case the park fails with
     /// [`ParkError::Unparked`] and keeps ownership of the value.
-    ///
-    /// One exchange suffices with no retry, because the state can only be
-    /// `Reserved` or `Occupied` here and neither can change under it.
     #[must_use]
     pub fn unpark(self) -> Option<T> {
+        // One exchange suffices with no retry, because the state can only be
+        // `Reserved` or `Occupied` here and neither can change under it.
         if self
             .slot
             .state
@@ -342,11 +334,12 @@ impl<T> Debug for UnparkTicket<'_, T> {
 impl<T: Send> UnparkTicket<'static, T> {
     /// Wraps the ticket in a cloneable one-shot [`Waker`].
     ///
-    /// Allocates, so this is task-context only. The `'static` lifetime is
-    /// what makes storing the raw slot pointer sound: the slot lives as long
-    /// as the lot, and the lot outlives every waker clone.
+    /// Allocates, so this is task-context only.
     #[must_use]
     pub fn into_waker(self) -> Waker<T> {
+        // The `'static` lifetime is what makes storing the raw slot pointer
+        // sound. The slot lives as long as the lot, and the lot outlives every
+        // waker clone.
         Waker {
             slot: Arc::new(AtomicPtr::new(from_ref(self.slot).cast_mut())),
         }
@@ -551,8 +544,8 @@ impl<T> ParkError<T> {
     }
 }
 
-/// Written by hand rather than derived, so the payload needs no `Debug` bound
-/// of its own and a whole parked value never lands in an error message.
+// Written by hand rather than derived, so the payload needs no `Debug` bound
+// of its own and a whole parked value never lands in an error message.
 impl<T> Debug for ParkError<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
