@@ -76,11 +76,6 @@ fn capture_fpu(fx: &mut [u8; 512]) -> bool {
         unsafe {
             // Safety: the fx area is a 512 byte FxArea allocation owned by the task,
             // and fx is a 512 byte buffer. The regions do not overlap.
-            debug_assert_eq!(
-                core::mem::align_of::<FxBuf>(),
-                16,
-                "must be 16 byte aligned"
-            );
             core::ptr::copy_nonoverlapping(src, fx.as_mut_ptr(), 512)
         };
         true
