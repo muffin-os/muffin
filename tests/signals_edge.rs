@@ -1,7 +1,7 @@
 //! End-to-end signal edge-case test.
 //!
-//! Boots the shared generic `test-kernel` under QEMU with a two-line `/spawn`
-//! manifest that launches two instances of a dedicated test init at
+//! Boots the shared generic `test-kernel` under QEMU with a `/spawn` manifest
+//! that launches one instance of a dedicated test init per role at
 //! `/bin/init`. The harness boots the images its Bazel target declared and
 //! parses the serial transcript.
 //!
@@ -13,9 +13,11 @@
 //! process on SIGSEGV without taking the kernel down. Role B blocks SIGSEGV
 //! with a handler installed and faults, which must kill it without ever
 //! running that handler. Role C forges a `sigreturn` with no readable frame
-//! at its stack pointer, which must also die on SIGSEGV.
+//! at its stack pointer, which must also die on SIGSEGV. Role D raises a
+//! handled signal with its stack pointer in unmapped memory, so the kernel
+//! has nowhere to write the signal frame and must kill it on SIGSEGV.
 //!
-//! All three processes die by signal, so the run completes once each reports
+//! All four processes die by signal, so the run completes once each reports
 //! its outcome. The production kernel and init stay free of test-only
 //! branches.
 
@@ -48,15 +50,18 @@ fn signal_edge_cases_end_to_end() {
 
     report.assert_markers_in_order(&MARKERS);
 
-    // Roles B and C run concurrently with A, so their markers carry no
+    // Roles B, C and D run concurrently with A, so their markers carry no
     // ordering relationship to A's phases.
     report.assert_line_contains("B: blocked fault next");
     report.assert_line_contains("C: forged sigreturn next");
+    report.assert_line_contains("D: wild stack delivery next");
     report.assert_line_contains("terminating process on signal SIGSEGV (pid 2)");
     report.assert_line_contains("terminating process on signal SIGSEGV (pid 3)");
+    report.assert_line_contains("terminating process on signal SIGSEGV (pid 4)");
     report.assert_line_contains("outcome pid=1 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=2 signal=SIGSEGV");
     report.assert_line_contains("outcome pid=3 signal=SIGSEGV");
+    report.assert_line_contains("outcome pid=4 signal=SIGSEGV");
 
     report.assert_no_line_contains("UNREACHABLE");
 }

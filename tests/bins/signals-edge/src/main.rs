@@ -215,6 +215,32 @@ fn role_c() {
     println!("C: UNREACHABLE");
 }
 
+// Raise `Usr1` with `rsp` pointing into the unmapped page below the ELF
+// image. The handler is installed, so the kernel must build a frame on this
+// stack and has nowhere to put it.
+fn role_d() {
+    let _ = install_handler(Signal::Usr1, noop_handler);
+
+    println!("D: wild stack delivery next");
+    let pid = getpid() as usize;
+    let wild_rsp: usize = 0x1000;
+    unsafe {
+        // Safety: rsp is swapped back right after the trap. The kernel is
+        // expected to terminate the process before that instruction runs.
+        core::arch::asm!(
+            "xchg rsp, {wild}",
+            "int 0x80",
+            "xchg rsp, {wild}",
+            wild = inout(reg) wild_rsp => _,
+            inout("rax") SYS_KILL => _,
+            in("rdi") pid,
+            in("rsi") Signal::Usr1.number() as usize,
+        );
+    }
+
+    println!("D: UNREACHABLE");
+}
+
 minilib::entry!(main);
 
 fn main() -> i32 {
@@ -222,6 +248,7 @@ fn main() -> i32 {
         1 => role_a(),
         2 => role_b(),
         3 => role_c(),
+        4 => role_d(),
         _ => println!("edge: unexpected pid"),
     }
 

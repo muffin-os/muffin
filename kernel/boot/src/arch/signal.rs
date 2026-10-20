@@ -85,6 +85,8 @@ fn capture_fpu(fx: &mut [u8; 512]) -> bool {
 }
 
 /// Build a signal frame on the user stack and return the frame base address.
+/// Terminates the process on `Segfault` when the frame range is not mapped
+/// user writable memory.
 ///
 /// The frame is placed 128 bytes below the interrupted stack pointer, then
 /// aligned down to 16 bytes. Muffin's own toolchain disables the red zone,
@@ -94,7 +96,6 @@ fn capture_fpu(fx: &mut [u8; 512]) -> bool {
 /// The restorer address is written at `base - 8` so the handler returns into
 /// it, and the handler entry stack pointer becomes `base - 8` which gives
 /// the `rsp % 16 == 8` shape the SysV ABI expects right after a `call`.
-// NOTE: user stack MUST be large enough to hold such a frame
 fn write_sigframe(
     frame: &InterruptStackFrame,
     regs: &SyscallRegisters,
@@ -105,13 +106,22 @@ fn write_sigframe(
     let user_rsp = frame.stack_pointer.as_u64();
     let size = size_of::<SigFrame>() as u64;
     let base = user_rsp.wrapping_sub(128).wrapping_sub(size) & !0xF;
-    let start = base - 8;
+    let start = base.wrapping_sub(8);
 
     let mut uptr = match unsafe { UserspaceMutPtr::<u8>::try_from_usize(start as usize) } {
         Ok(ptr) => ptr,
         Err(_) => terminate_current(Signal::Segfault),
     };
-    if uptr.validate_range(size_of::<SigFrame>() + 8).is_err() {
+    let len = size_of::<SigFrame>() + 8;
+    if uptr.validate_range(len).is_err() {
+        terminate_current(Signal::Segfault);
+    }
+    // Delivery runs with interrupts off, so a lazily mapped page cannot be
+    // paged in here and counts as unwritable.
+    if !Process::current()
+        .address_space()
+        .is_user_writable(VirtAddr::new(start), len)
+    {
         terminate_current(Signal::Segfault);
     }
 
@@ -130,8 +140,8 @@ fn write_sigframe(
 
     let dst = uptr.as_mut_ptr();
     unsafe {
-        // Safety: the range start .. start + size_of + 8 was validated as writable
-        // lower half memory. The user stack is eagerly mapped by the trampoline.
+        // Safety: the range start .. start + len is lower half, resident and
+        // user writable, so these writes cannot fault.
         core::ptr::write_unaligned(dst.cast::<u64>(), action.restorer as u64);
         core::ptr::write_unaligned(dst.add(8).cast::<SigFrame>(), sf);
     }
