@@ -105,7 +105,7 @@ fn new_rejects_byte_pitch_passed_as_pixel_stride() {
 }
 
 #[test]
-fn no_draw_leaves_framebuffer_blank() {
+fn zero_vertex_draw_leaves_target_untouched() {
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
     let pso = simple_pipeline(&mut backend, 8);
     let buf = backend
@@ -115,7 +115,7 @@ fn no_draw_leaves_framebuffer_blank() {
         })
         .unwrap();
 
-    let mut target = [0u32; 16];
+    let mut target = [0xDEAD_BEEFu32; 16];
     let mut q = SoftQueue::new(&mut target, 4, 4, 4);
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
@@ -124,15 +124,16 @@ fn no_draw_leaves_framebuffer_blank() {
     })
     .unwrap();
 
-    assert!(q.framebuffer().iter().all(|&p| p == 0));
+    assert!(q.framebuffer().iter().all(|&p| p == 0xDEAD_BEEF));
 }
 
 #[test]
 fn triangle_writes_correct_pixels() {
-    // CW triangle in NDC. Screen corners in a 4×4 framebuffer:
-    //   v0 (-0.5,  0.5) → screen (1, 1)
-    //   v1 ( 0.5,  0.5) → screen (3, 1)
-    //   v2 (-0.5, -0.5) → screen (1, 3)
+    // The CW triangle's vertices v0 (-0.5, 0.5), v1 (0.5, 0.5) and v2
+    // (-0.5, -0.5) land on the pixel corners (1, 1), (3, 1) and (1, 3) of a 4×4
+    // framebuffer.
+    // Pixels are sampled at their centres, so only (1, 1), (2, 1) and (1, 2)
+    // are covered, and the last two sit exactly on the hypotenuse.
     let bytes = encode_verts(&[-0.5, 0.5, 0.5, 0.5, -0.5, -0.5]);
 
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
@@ -145,7 +146,7 @@ fn triangle_writes_correct_pixels() {
         .unwrap();
     buf.data.copy_from_slice(&bytes);
 
-    let mut target = [0u32; 16];
+    let mut target = [0xDEAD_BEEFu32; 16];
     let mut q = SoftQueue::new(&mut target, 4, 4, 4);
     q.submit(|rec| {
         rec.bind_pipeline(&pso);
@@ -154,10 +155,16 @@ fn triangle_writes_correct_pixels() {
     })
     .unwrap();
 
-    let fb = q.framebuffer();
-    assert_eq!(fb[5], 0xFFFF_FFFF, "pixel (1,1) should be inside");
-    assert_eq!(fb[3 * 4 + 3], 0x0000_0000, "pixel (3,3) should be outside");
-    assert_eq!(fb[0], 0x0000_0000, "pixel (0,0) should be outside");
+    const W: u32 = 0xFFFF_FFFF;
+    const B: u32 = 0xDEAD_BEEF;
+    #[rustfmt::skip]
+    let expected = [
+        B, B, B, B,
+        B, W, W, B,
+        B, W, B, B,
+        B, B, B, B,
+    ];
+    assert_eq!(q.framebuffer(), expected);
 }
 
 #[test]
