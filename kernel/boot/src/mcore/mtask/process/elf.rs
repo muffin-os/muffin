@@ -290,8 +290,12 @@ impl ValidatedExecutable {
             let slice = alloc.as_mut();
             read_exact(node, &mut slice[..tls.filesz], tls.offset)?;
             slice[tls.filesz..].fill(0);
-            FsBase::write(alloc.start());
+            // The scheduler reloads FsBase from the stored slot on every
+            // switch, so storing first keeps a preempting tick from switching
+            // back in with FsBase zeroed.
+            let start = alloc.start();
             *task.tls().write() = Some(alloc);
+            FsBase::write(start);
         }
 
         Ok(self.entry)

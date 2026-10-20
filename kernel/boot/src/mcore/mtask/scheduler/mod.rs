@@ -123,6 +123,10 @@ impl Scheduler {
             }
         }
 
+        // A blocking read would deadlock when the incoming task was preempted
+        // while holding its own TLS write lock. Only the owning task takes that
+        // lock, and afterwards it either rewrites FsBase or never returns to user
+        // mode, so the zero written here never reaches Ring 3.
         if let Some(guard) = self.current_task.tls().try_read()
             && let Some(tls) = guard.as_ref()
         {
