@@ -11,21 +11,9 @@ impl Display for ProcessId {
     }
 }
 
-impl<T> From<T> for ProcessId
-where
-    T: Into<u64> + Copy,
-{
-    fn from(value: T) -> Self {
-        Self(value.into())
-    }
-}
-
-impl<T> PartialEq<T> for ProcessId
-where
-    T: Into<u64> + Copy,
-{
-    fn eq(&self, other: &T) -> bool {
-        self.0 == (*other).into()
+impl From<u64> for ProcessId {
+    fn from(value: u64) -> Self {
+        Self(value)
     }
 }
 
