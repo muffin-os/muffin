@@ -21,6 +21,16 @@ use crate::mcore::mtask::wait::try_reserve;
 /// userspace program corrupted or forged.
 pub const SIGFRAME_MAGIC: u64 = 0x8D2F_FAB8_19E3_EECC;
 
+// The flags userspace owns, the same set Linux's FIX_EFLAGS lets sigreturn restore.
+const USER_RFLAGS: RFlags = RFlags::CARRY_FLAG
+    .union(RFlags::PARITY_FLAG)
+    .union(RFlags::AUXILIARY_CARRY_FLAG)
+    .union(RFlags::ZERO_FLAG)
+    .union(RFlags::SIGN_FLAG)
+    .union(RFlags::TRAP_FLAG)
+    .union(RFlags::DIRECTION_FLAG)
+    .union(RFlags::OVERFLOW_FLAG);
+
 /// The full context saved on the user stack when a handler is entered. It is
 /// read back verbatim by `sys_sigreturn` to restore the interrupted context.
 #[repr(C, align(16))]
@@ -245,9 +255,7 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
     *regs = saved.regs;
 
     let sel = Selectors::current();
-    // Preserve the arithmetic flags the handler observed, force interrupts on,
-    // and drop everything else the user must not control.
-    let rflags = (saved.rflags & 0xDD5) | 0x200;
+    let rflags = (RFlags::from_bits_retain(saved.rflags) & USER_RFLAGS) | RFlags::INTERRUPT_FLAG;
 
     // Safety: rebuilding the interrupted user context. cs/ss come from the
     // trampoline selectors rather than the untrusted frame.
@@ -255,7 +263,7 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
         frame.as_mut().update(|f| {
             f.instruction_pointer = VirtAddr::new_truncate(saved.rip);
             f.stack_pointer = VirtAddr::new_truncate(saved.rsp);
-            f.cpu_flags = RFlags::from_bits_retain(rflags);
+            f.cpu_flags = rflags;
             f.code_segment = sel.user_code;
             f.stack_segment = sel.user_data;
         });
