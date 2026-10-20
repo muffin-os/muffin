@@ -16,11 +16,14 @@ use minilib::{
     exit, fsync, ioctl, mmap, open, println,
 };
 
-// monotonic timestamp; on failure the zeroed timespec yields zero
 fn now() -> Duration {
     let mut tp = Timespec::default();
-    let _ = clock_gettime(CLOCK_MONOTONIC, &mut tp);
-    Duration::try_from(tp).unwrap_or_default()
+    let Ok(now) = clock_gettime(CLOCK_MONOTONIC, &mut tp).and_then(|()| Duration::try_from(tp))
+    else {
+        println!("fbdemo: FAIL clock");
+        exit(1);
+    };
+    now
 }
 
 fn report(label: &str, start: Duration, end: Duration) {
