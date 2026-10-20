@@ -52,3 +52,14 @@ rust_test(
         "//kernel/device",
     ],
 )
+
+rust_test(
+    name = "superblock_test",
+    srcs = ["tests/superblock.rs"],
+    edition = "2024",
+    size = "small",
+    deps = [
+        ":ext2",
+        "//kernel/device",
+    ],
+)

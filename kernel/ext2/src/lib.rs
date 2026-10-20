@@ -43,6 +43,10 @@ impl<T> Ext2Fs<T>
 where
     T: BlockDevice,
 {
+    /// Reads and validates the superblock and block group descriptor table.
+    ///
+    /// Returns [`Error::InvalidSuperblock`] if the magic number is wrong, a
+    /// per-group count is zero, or the block size is larger than 64 KiB.
     pub fn try_new(block_device: T) -> Result<Self, Error> {
         let mut superblock_data = [0_u8; 1024];
         block_device
@@ -50,6 +54,13 @@ where
             .map_err(|_| Error::UnableToReadSuperblock)?;
 
         let superblock = Superblock::try_from(SuperblockArray::from(superblock_data)).unwrap();
+        if superblock.magic_number() != EXT2_MAGIC
+            || superblock.blocks_per_group() == 0
+            || superblock.inodes_per_group() == 0
+            || superblock.log2_block_size() > MAX_LOG2_BLOCK_SIZE
+        {
+            return Err(Error::InvalidSuperblock);
+        }
         let number_of_block_groups = superblock
             .num_blocks()
             .div_ceil(superblock.blocks_per_group());
@@ -60,7 +71,9 @@ where
             superblock.block_size()
         } as usize;
 
-        let mut bgdt_data = vec![0_u8; superblock.block_size() as usize];
+        let block_size = superblock.block_size() as usize;
+        let bgdt_len = (number_of_block_groups as usize * BGD_SIZE).next_multiple_of(block_size);
+        let mut bgdt_data = vec![0_u8; bgdt_len];
         block_device
             .read_at(bgdt_offset, &mut bgdt_data)
             .map_err(|_| Error::UnableToReadBlockGroupDescriptorTable)?;

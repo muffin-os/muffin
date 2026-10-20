@@ -38,6 +38,10 @@ impl DerefMut for SuperblockArray {
     }
 }
 
+pub const EXT2_MAGIC: u16 = 0xEF53;
+/// Largest `log2_block_size` ext2 allows (64 KiB blocks).
+pub const MAX_LOG2_BLOCK_SIZE: u32 = 6;
+
 bytefield! {
     #[derive(Debug, Eq, PartialEq)]
     pub struct Superblock (SuperblockArray) {
@@ -115,6 +119,10 @@ impl Superblock {
 
     pub fn first_data_block(&self) -> u32 {
         self.first_data_block
+    }
+
+    pub fn log2_block_size(&self) -> u32 {
+        self.log2_block_size
     }
 
     pub fn block_size(&self) -> u32 {
