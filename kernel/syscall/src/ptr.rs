@@ -52,18 +52,10 @@ impl<T> UserspacePtr<T> {
 
     /// Checks that `size` bytes from this pointer stay in the lower half.
     ///
-    /// The end address `addr + size` is checked as an address in its own
-    /// right, so a range that ends exactly at the top of the lower half is
-    /// rejected, as is one whose end overflows.
+    /// A range may end exactly at the top of the lower half. An empty range
+    /// is always valid because the pointer itself was already checked.
     pub fn validate_range(&self, size: usize) -> Result<(), NotUserspace> {
-        let start = self.addr();
-        let end = start.checked_add(size).ok_or(NotUserspace(start))?;
-
-        if is_upper_half(end)? {
-            Err(NotUserspace(end))
-        } else {
-            Ok(())
-        }
+        validate_range(self.addr(), size)
     }
 
     #[must_use]
@@ -83,6 +75,18 @@ const UPPER_HALF_START: u64 = 0xFFFF_8000_0000_0000;
 fn is_upper_half(addr: usize) -> Result<bool, NotUserspace> {
     let virt_addr = VirtAddr::try_new(addr as u64).map_err(|_| NotUserspace(addr))?;
     Ok(virt_addr.as_u64() >= UPPER_HALF_START)
+}
+
+fn validate_range(start: usize, size: usize) -> Result<(), NotUserspace> {
+    let Some(len_to_last) = size.checked_sub(1) else {
+        return Ok(());
+    };
+    let last = start.checked_add(len_to_last).ok_or(NotUserspace(start))?;
+    if is_upper_half(last)? {
+        Err(NotUserspace(last))
+    } else {
+        Ok(())
+    }
 }
 
 pub struct UserspaceMutPtr<T> {
@@ -122,18 +126,10 @@ impl<T> UserspaceMutPtr<T> {
 
     /// Checks that `size` bytes from this pointer stay in the lower half.
     ///
-    /// The end address `addr + size` is checked as an address in its own
-    /// right, so a range that ends exactly at the top of the lower half is
-    /// rejected, as is one whose end overflows.
+    /// A range may end exactly at the top of the lower half. An empty range
+    /// is always valid because the pointer itself was already checked.
     pub fn validate_range(&self, size: usize) -> Result<(), NotUserspace> {
-        let start = self.addr();
-        let end = start.checked_add(size).ok_or(NotUserspace(start))?;
-
-        if is_upper_half(end)? {
-            Err(NotUserspace(end))
-        } else {
-            Ok(())
-        }
+        validate_range(self.addr(), size)
     }
 
     #[must_use]
@@ -178,8 +174,9 @@ mod tests {
         let max_lower_half = (1_usize << 47) - 1;
         let ptr = UserspacePtr::<u8>::try_from_usize(max_lower_half).unwrap();
         assert!(ptr.validate_range(0).is_ok());
-        // The end address 0x0000_8000_0000_0000 is non-canonical.
-        assert!(ptr.validate_range(1).is_err());
+        assert!(ptr.validate_range(1).is_ok());
+        // The last byte 0x0000_8000_0000_0000 is non-canonical.
+        assert!(ptr.validate_range(2).is_err());
     }
 
     #[test]
@@ -201,20 +198,20 @@ mod tests {
         let base = 0x0000_7FFF_FFFF_F000_usize;
         let ptr = UserspacePtr::<u8>::try_from_usize(base).unwrap();
 
-        assert!(ptr.validate_range(0xFFF).is_ok());
+        // The last page of the lower half is fully usable.
+        assert!(ptr.validate_range(0x1000).is_ok());
         // base + 0x1000 = 0x0000_8000_0000_0000 is non-canonical
-        assert!(ptr.validate_range(0x1000).is_err());
+        assert!(ptr.validate_range(0x1001).is_err());
         assert!(ptr.validate_range(0x2000).is_err());
     }
 
     #[test]
     fn test_validate_range_from_zero() {
         let ptr = UserspacePtr::<u8>::try_from_usize(0).unwrap();
-        // Can map up to the entire lower half (48-bit addressing)
-        let max_lower_half = (1_usize << 47) - 1;
-        assert!(ptr.validate_range(max_lower_half).is_ok());
-        // But not including the boundary (bit 47 set)
-        assert!(ptr.validate_range(1_usize << 47).is_err());
+        // The whole lower half (47 bits) is addressable
+        assert!(ptr.validate_range(1_usize << 47).is_ok());
+        // One byte more reaches the non-canonical hole
+        assert!(ptr.validate_range((1_usize << 47) + 1).is_err());
     }
 
     #[test]
@@ -269,10 +266,10 @@ mod tests {
         assert!(result.is_ok());
 
         let ptr = result.unwrap();
-        // Should be able to access 1 byte (up to 0x0000_7FFF_FFFF_FFFF)
-        assert!(ptr.validate_range(1).is_ok());
-        // The end address 0x0000_8000_0000_0000 is non-canonical.
-        assert!(ptr.validate_range(2).is_err());
+        // Two bytes reach 0x0000_7FFF_FFFF_FFFF, the last lower-half byte
+        assert!(ptr.validate_range(2).is_ok());
+        // The third byte 0x0000_8000_0000_0000 is non-canonical.
+        assert!(ptr.validate_range(3).is_err());
     }
 
     #[test]
