@@ -6,7 +6,7 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::IoctlRequest;
 use kernel_vfs::fs::{FileSystem, FsHandle};
-use kernel_vfs::path::{AbsolutePath, ROOT};
+use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CloseError, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError, Stat,
     StatError, WriteError,
@@ -78,7 +78,7 @@ impl DevFs {
         O: Fn() -> Result<F, OpenError> + Send + Sync + 'static,
         F: DevFile + 'static,
     {
-        let parent = path.parent().unwrap_or(ROOT);
+        let parent = path.parent().ok_or(ResolveError::ParentNotFound)?;
         let filename = path.file_name().ok_or(ResolveError::ParentNotFound)?;
 
         let parent_node = self.resolve_node_mut(parent)?;
@@ -208,6 +208,8 @@ mod tests {
     use alloc::vec::Vec;
     use core::sync::atomic::AtomicUsize;
     use core::sync::atomic::Ordering::{Acquire, Release};
+
+    use kernel_vfs::path::ROOT;
 
     use super::*;
 

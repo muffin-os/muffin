@@ -108,16 +108,12 @@ impl Vfs {
 
     fn find_mount<'a>(&'a self, path: &'a AbsolutePath) -> Option<(&'a AbsolutePath, Fs)> {
         let mut current = path;
-        if let Some(fs) = self.file_systems.get(current) {
-            return Some((path, fs.clone()));
-        }
-        while let Some(parent) = current.parent() {
-            if let Some(fs) = self.file_systems.get(parent) {
-                return Some((parent, fs.clone()));
+        loop {
+            if let Some(fs) = self.file_systems.get(current) {
+                return Some((current, fs.clone()));
             }
-            current = parent;
+            current = current.parent()?;
         }
-        self.file_systems.get(ROOT).cloned().map(|v| (ROOT, v))
     }
 }
 

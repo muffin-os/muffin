@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(path.parent(), Some(Path::new("/foo/bar")));
 
         let path: AbsoluteOwnedPath = "/foo".try_into().unwrap();
-        assert_eq!(path.parent(), None);
+        assert_eq!(path.parent(), Some(Path::new("/")));
 
         let path = AbsoluteOwnedPath::new();
         assert_eq!(path.parent(), None);

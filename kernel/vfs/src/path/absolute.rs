@@ -161,7 +161,7 @@ mod tests {
 
         let path: &AbsolutePath = "/foo".try_into().unwrap();
         let parent = path.parent();
-        assert!(parent.is_none());
+        assert_eq!(&parent.unwrap().to_string(), "/");
 
         let path: &AbsolutePath = "/".try_into().unwrap();
         let parent = path.parent();
@@ -174,7 +174,7 @@ mod tests {
 
         let path: &AbsolutePath = "//foo".try_into().unwrap();
         let parent = path.parent();
-        assert!(parent.is_none());
+        assert_eq!(&parent.unwrap().to_string(), "/");
 
         let path: &AbsolutePath = "/foo/bar/".try_into().unwrap();
         let parent = path.parent();

@@ -79,6 +79,10 @@ impl Path {
         self.filenames().next_back()
     }
 
+    /// Returns the path without its last component, ignoring trailing separators.
+    /// A top-level absolute entry such as `/foo` has the root `/` as its parent,
+    /// and `.` and `..` are their own parent. Returns `None` for `/`, the empty
+    /// path, and a single relative name such as `foo`.
     #[must_use]
     pub fn parent(&self) -> Option<&Path> {
         if self.inner.is_empty() {
@@ -94,16 +98,11 @@ impl Path {
         let sep_pos = self.inner[..last_non_sep_pos + 1].rfind(FILEPATH_SEPARATOR);
 
         if let Some(sep) = sep_pos {
+            // Nothing but separators precedes the last component, so the parent is the root.
             let parent_end = self.inner[..sep]
                 .rfind(|c| c != FILEPATH_SEPARATOR)
-                .map(|pos| pos + 1);
-
-            if let Some(end) = parent_end {
-                Some(Path::new(&self.inner[..end]))
-            } else {
-                // Parent is all separators before the component (e.g., "/" for "/foo")
-                None
-            }
+                .map_or(1, |pos| pos + 1);
+            Some(Path::new(&self.inner[..parent_end]))
         } else {
             // "." and ".." are their own parent. A plain name has none.
             if &self.inner == "." || &self.inner == ".." {
@@ -175,10 +174,10 @@ mod tests {
             ("/foo//bar", Some("/foo")),
             ("///foo/bar", Some("///foo")),
             ("foo", None),
-            ("/foo", None),
-            ("//foo", None),
+            ("/foo", Some("/")),
+            ("//foo", Some("/")),
             ("foo/", None),
-            ("/foo/", None),
+            ("/foo/", Some("/")),
             ("/foo/bar/baz/", Some("/foo/bar")),
             ("/foo/bar/baz//", Some("/foo/bar")),
             ("/foo/bar/baz///", Some("/foo/bar")),
@@ -272,8 +271,8 @@ mod tests {
         assert_eq!(Path::new("..").parent(), Some(Path::new("..")));
         assert_eq!(Path::new("./foo").parent(), Some(Path::new(".")));
         assert_eq!(Path::new("../foo").parent(), Some(Path::new("..")));
-        assert_eq!(Path::new("/.").parent(), None);
-        assert_eq!(Path::new("/..").parent(), None);
+        assert_eq!(Path::new("/.").parent(), Some(Path::new("/")));
+        assert_eq!(Path::new("/..").parent(), Some(Path::new("/")));
 
         assert_eq!(
             Path::new("/a/b/c/d/e/f").parent(),
