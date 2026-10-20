@@ -138,18 +138,6 @@ fn init_interrupts() {
     unsafe {
         const OFFSET: u8 = 32;
         io_apic.init(OFFSET);
-
-        // TODO: redirect interrupt vectors
-
-        // for vector in 0..u8::MAX - OFFSET {
-        //     let mut entry = RedirectionTableEntry::default();
-        //     entry.set_mode(IrqMode::Fixed);
-        //     entry.set_flags(IrqFlags::LEVEL_TRIGGERED | IrqFlags::LOW_ACTIVE);
-        //     entry.set_vector(vector);
-        //     entry.set_dest(u8::try_from(lapic_id).expect("invalid lapic id"));
-        //
-        //     io_apic.set_table_entry(vector, entry);
-        //     io_apic.enable_irq(vector);
-        // }
+        // TODO(tpdenk): program IO APIC redirection entries once a driver needs a device IRQ.
     }
 }
