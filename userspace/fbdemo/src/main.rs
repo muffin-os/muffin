@@ -144,8 +144,13 @@ fn main() -> i32 {
     let stride = info.pitch as usize / 4;
     let width = info.width as usize;
     let height = info.height as usize;
+    if height == 0 || width * 4 > info.pitch as usize {
+        println!("fbdemo: FAIL geometry");
+        return 1;
+    }
     // SAFETY: the mmap covers `len` bytes and is page-aligned, hence u32-aligned.
-    // `stride * (height - 1) + width` u32 words stay within that mapping.
+    // The geometry check above keeps `stride * (height - 1) + width` u32 words
+    // within `len = pitch * height` bytes.
     let fb_u32 = unsafe {
         core::slice::from_raw_parts_mut(addr.cast::<u32>(), stride * (height - 1) + width)
     };
