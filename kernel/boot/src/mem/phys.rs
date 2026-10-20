@@ -220,8 +220,7 @@ pub(in crate::mem) fn init_stage2() {
     3. USABLE regions are 4KiB aligned (address and length)
      */
 
-    // Build memory regions for usable regions
-    // Preallocate to avoid fragmentation in stage1 (which can't deallocate)
+    // Preallocated because stage 1 cannot deallocate, so a growing Vec would leak.
     let usable_region_count = regions
         .iter()
         .filter(|r| r.entry_type == EntryType::USABLE)
@@ -240,10 +239,8 @@ pub(in crate::mem) fn init_stage2() {
             .expect("preallocated capacity should be sufficient");
     }
 
-    // Mark frames allocated by stage1
     for frame in stage1.usable_frames().take(stage_one_next_free) {
         let addr = frame.start_address().as_u64();
-        // Find which region this frame belongs to and mark it as allocated
         for region in &mut memory_regions {
             if let Some(idx) = region.frame_index(addr) {
                 region.frames_mut()[idx] = kernel_physical_memory::FrameState::Allocated;
@@ -252,7 +249,6 @@ pub(in crate::mem) fn init_stage2() {
         }
     }
 
-    // Create sparse physical memory manager - much more memory efficient!
     let bitmap_allocator = PhysicalMemoryManager::new(memory_regions);
     let mut stage2 = MultiStageAllocator::Stage2(bitmap_allocator);
     swap(&mut *guard, &mut stage2);
