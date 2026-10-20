@@ -48,9 +48,12 @@ impl MemoryRegions {
         region
     }
 
-    /// Removes `region` by pointer identity and unmaps its pages. The
-    /// owning process's address space must be active on this CPU.
+    /// Removes `region` by pointer identity and unmaps its pages.
+    ///
+    /// # Panics
+    /// In debug builds, panics if `address_space` is not active on this CPU.
     pub fn remove_region(&self, address_space: &AddressSpace, region: &Arc<MemoryRegion>) {
+        debug_assert!(address_space.is_active());
         interrupts::without_interrupts(|| {
             self.regions.lock().retain(|r| !Arc::ptr_eq(r, region));
         });
