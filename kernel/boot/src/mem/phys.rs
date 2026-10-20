@@ -77,11 +77,10 @@ impl Drop for OwnedPhysicalMemory {
 
 /// Zero-sized facade to the global physical memory allocator.
 ///
-/// This provides a stateless interface to a two-stage allocator:
-/// - **Stage 1**: A bump allocator used during early boot before the heap is initialized.
-///   Only supports 4 KiB allocations, no deallocation.
-/// - **Stage 2**: A sparse bitmap allocator that efficiently tracks free frames across
-///   non-contiguous memory regions. Supports all page sizes and deallocation.
+/// Until the heap is initialized only 4 KiB frames can be allocated and
+/// nothing can be deallocated. The allocator is guarded by a spinlock that
+/// does not disable interrupts, so it must never be used from an interrupt
+/// handler.
 #[derive(Copy, Clone)]
 pub struct PhysicalMemory;
 
@@ -99,10 +98,6 @@ impl PhysicalMemory {
     /// contiguous physical memory. Useful when physical memory is fragmented or when the
     /// caller doesn't need physically contiguous memory (e.g., for page tables that use
     /// virtual addressing anyway).
-    ///
-    /// Each call to `next()` acquires and releases the allocator's spinlock, so batch
-    /// allocation with [`allocate_frames()`](Self::allocate_frames) is more efficient when
-    /// contiguous memory is available. Do not call with interrupts disabled.
     pub fn allocate_frames_non_contiguous<S: PageSize>() -> impl Iterator<Item = PhysFrame<S>>
     where
         PhysicalMemoryManager: PhysicalFrameAllocator<S>,
@@ -117,7 +112,9 @@ impl PhysicalMemory {
     /// sufficiently large aligned region, which may fail even if enough total memory exists
     /// but is fragmented.
     ///
-    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
+    /// # Panics
+    ///
+    /// Panics if the heap is not initialized yet and `S` is not 4 KiB.
     #[must_use]
     pub fn allocate_frame<S: PageSize>() -> Option<PhysFrame<S>>
     where
@@ -129,16 +126,12 @@ impl PhysicalMemory {
     /// Allocates `n` contiguous frames of the specified page size.
     ///
     /// Searches for a contiguous, properly aligned region of physical memory. This is
-    /// required for DMA operations and more efficient than using the non-contiguous
-    /// iterator for bulk allocations. May fail even when sufficient total memory exists
+    /// required for DMA operations. May fail even when sufficient total memory exists
     /// if the memory is fragmented.
-    ///
-    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
     ///
     /// # Panics
     ///
-    /// Panics if stage 1 allocator is still active (stage 1 doesn't support contiguous
-    /// allocation). Stage 2 is initialized after the heap becomes available.
+    /// Panics if the heap is not initialized yet.
     #[must_use]
     pub fn allocate_frames<S: PageSize>(n: usize) -> Option<OwnedPhysicalMemory>
     where
@@ -153,15 +146,11 @@ impl PhysicalMemory {
     /// Returns the frame to the free pool for future allocations.
     ///
     /// For large pages (2 MiB, 1 GiB), this deallocates all constituent 4 KiB frames.
-    /// Double-freeing a frame is a bug and will panic in debug builds.
-    ///
-    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if:
-    /// - The frame is already free or was never allocated
-    /// - Stage 1 allocator is active (stage 1 doesn't support deallocation)
+    /// Panics if the heap is not initialized yet. In debug builds, also panics if the
+    /// frame is already free or was never allocated.
     pub fn deallocate_frame<S: PageSize>(frame: PhysFrame<S>)
     where
         PhysicalMemoryManager: PhysicalFrameAllocator<S>,
@@ -171,17 +160,12 @@ impl PhysicalMemory {
 
     /// Deallocates all frames in the range, returning them to the free pool.
     ///
-    /// Iterates through the range deallocating each frame individually. In debug builds a
-    /// double-free panics at the offending frame and leaves the rest allocated. In release
-    /// builds the offending frame is skipped and the rest are still deallocated.
-    ///
-    /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
-    ///
     /// # Panics
     ///
-    /// In debug builds, panics if:
-    /// - Any frame in the range is already free or was never allocated
-    /// - Stage 1 allocator is active (stage 1 doesn't support deallocation)
+    /// Panics if the heap is not initialized yet. In debug builds, also panics if any
+    /// frame in the range is already free or was never allocated, leaving the rest of
+    /// the range allocated. In release builds such frames are skipped and the rest are
+    /// still deallocated.
     pub fn deallocate_frames<S: PageSize>(range: PhysFrameRangeInclusive<S>)
     where
         PhysicalMemoryManager: PhysicalFrameAllocator<S>,
