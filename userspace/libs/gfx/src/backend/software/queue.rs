@@ -8,8 +8,8 @@ use crate::error::Result;
 /// queue never owns or allocates the backing pixels.
 ///
 /// Per-vertex scratch is reused across frames, but every `submit` allocates for
-/// the commands it records, including a copy of each bound vertex buffer per
-/// draw.
+/// the commands it records, plus one copy of each vertex buffer per
+/// `bind_vertex_buffer`, which the draws recorded against that binding share.
 pub struct SoftQueue<'fb> {
     target: &'fb mut [u32],
     width: u32,

@@ -1,3 +1,4 @@
+use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 use kernel_abi::gfx::BufferDesc;
@@ -7,7 +8,7 @@ use crate::api::{
 };
 use crate::backend::software::{
     ATTRIBUTE_BYTES, SoftAdapter, SoftAllocator, SoftBackend, SoftCompiler, SoftFence, SoftQueue,
-    SoftShaderDef,
+    SoftRecorder, SoftShaderDef,
 };
 use crate::error::GfxError;
 
@@ -246,6 +247,29 @@ fn invalid_pipeline_parameters_are_rejected() {
         vertex_stride: 2 * ATTRIBUTE_BYTES,
     });
     assert_eq!(result.err(), Some(GfxError::InvalidOutputCount));
+}
+
+#[test]
+fn draws_share_the_bound_vertex_bytes() {
+    let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let pso = simple_pipeline(&mut backend, 2 * ATTRIBUTE_BYTES);
+    let buf = backend
+        .alloc_buffer(&BufferDesc {
+            size: 6 * ATTRIBUTE_BYTES,
+            is_dynamic: false,
+        })
+        .unwrap();
+
+    let mut rec = SoftRecorder::new();
+    rec.bind_pipeline(&pso);
+    rec.bind_vertex_buffer(&buf);
+    rec.draw(3).unwrap();
+    rec.draw(3).unwrap();
+
+    assert!(
+        Rc::ptr_eq(&rec.cmds[0].raw_data, &rec.cmds[1].raw_data),
+        "a second draw against the same binding must not copy the vertex bytes"
+    );
 }
 
 // Vertex layout (x, y, intensity).

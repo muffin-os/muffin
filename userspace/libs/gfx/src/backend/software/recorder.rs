@@ -1,3 +1,4 @@
+use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 use super::{SoftBackend, SoftBuffer, SoftPipeline};
@@ -8,8 +9,9 @@ use crate::error::{GfxError, Result};
 #[derive(Debug)]
 pub struct DrawCmd {
     pub pipeline: SoftPipeline,
-    /// Raw bytes from the bound vertex buffer.
-    pub raw_data: Vec<u8>,
+    /// Raw bytes of the vertex buffer bound at `draw()` time, shared with
+    /// every other draw recorded against the same binding.
+    pub raw_data: Rc<[u8]>,
     pub vertices: u32,
 }
 
@@ -17,7 +19,7 @@ pub struct DrawCmd {
 #[derive(Debug, Default)]
 pub struct SoftRecorder {
     pipeline: Option<SoftPipeline>,
-    raw_data: Option<Vec<u8>>,
+    raw_data: Option<Rc<[u8]>>,
     pub cmds: Vec<DrawCmd>,
 }
 
@@ -33,7 +35,7 @@ impl CommandRecorder<SoftBackend> for SoftRecorder {
     }
 
     fn bind_vertex_buffer(&mut self, buf: &SoftBuffer) {
-        self.raw_data = Some(buf.data.clone());
+        self.raw_data = Some(Rc::from(buf.data.as_slice()));
     }
 
     fn draw(&mut self, vertices: u32) -> Result<()> {
