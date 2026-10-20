@@ -4,9 +4,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use x86_64::PhysAddr;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::{PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB};
+use x86_64::{PhysAddr, align_up};
 
 mod region;
 pub use region::MemoryRegion;
@@ -121,27 +121,12 @@ impl PhysicalMemoryManager {
                 continue;
             }
 
-            // Align search_start up to the required page size alignment
-            // We must consider the region's base address, not just the frame index
-            let aligned_search_start = {
-                let start_addr = match region.frame_address(search_start) {
-                    Some(addr) => addr,
-                    None => continue, // skip to next region if out of bounds
-                };
-                let alignment = S::SIZE;
-
-                // Calculate how much to add to reach next aligned address
-                let misalignment = start_addr % alignment;
-                if misalignment == 0 {
-                    search_start
-                } else {
-                    let bytes_to_add = alignment - misalignment;
-                    let frames_to_add = (bytes_to_add / Size4KiB::SIZE) as usize;
-                    search_start + frames_to_add
-                }
+            let Some(start_addr) = region.frame_address(search_start) else {
+                continue;
             };
+            let skipped = (align_up(start_addr, S::SIZE) - start_addr) / Size4KiB::SIZE;
 
-            let mut current_start = aligned_search_start;
+            let mut current_start = search_start + skipped as usize;
             while current_start + small_frame_count <= region.len() {
                 let all_free = region.frames()[current_start..current_start + small_frame_count]
                     .iter()
