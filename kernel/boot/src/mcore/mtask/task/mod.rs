@@ -33,12 +33,9 @@ pub use state::*;
 
 #[derive(Debug)]
 pub struct Task {
-    /// The unique identifier of the task.
     tid: TaskId,
-    /// The name of the task, not necessarily unique.
+    /// Not necessarily unique.
     name: String,
-    /// The parent process that this task belongs to.
-    /// If upon rescheduling, the parent process is not alive, the task will be terminated.
     process: Arc<Process>,
     /// Whether this task should be terminated upon the next reschedule.
     /// This can be set at any point.
@@ -125,8 +122,8 @@ impl Task {
         })
     }
 
-    /// Creates a new stack in the specified process. Stack will be allocated immediately in the
-    /// current address space.
+    /// Creates a task with a freshly allocated kernel stack that starts in
+    /// `entry_point` and terminates the task when `entry_point` returns.
     ///
     /// # Errors
     /// Returns an error if the stack could not be allocated.
