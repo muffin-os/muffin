@@ -349,7 +349,6 @@ mod tests {
     struct TestProcess {
         pid: ProcessId,
         pgid: ProcessId,
-        uid: u32,
     }
 
     impl ProcessAccess for TestProcess {
@@ -364,6 +363,7 @@ mod tests {
 
     struct TestContext {
         current: TestProcess,
+        current_uid: u32,
         processes: Vec<TestProcess>,
         delivered: RefCell<Vec<DeliveredSignal>>,
         permission_denied: RefCell<Vec<ProcessId>>,
@@ -371,21 +371,20 @@ mod tests {
 
     impl TestContext {
         fn new(current_pid: ProcessId, current_pgid: ProcessId, current_uid: u32) -> Self {
-            let current = TestProcess {
-                pid: current_pid,
-                pgid: current_pgid,
-                uid: current_uid,
-            };
             Self {
-                current,
+                current: TestProcess {
+                    pid: current_pid,
+                    pgid: current_pgid,
+                },
+                current_uid,
                 processes: vec![],
                 delivered: RefCell::new(vec![]),
                 permission_denied: RefCell::new(vec![]),
             }
         }
 
-        fn add_process(&mut self, pid: ProcessId, pgid: ProcessId, uid: u32) {
-            self.processes.push(TestProcess { pid, pgid, uid });
+        fn add_process(&mut self, pid: ProcessId, pgid: ProcessId) {
+            self.processes.push(TestProcess { pid, pgid });
         }
 
         fn deny_permission(&self, pid: ProcessId) {
@@ -401,7 +400,7 @@ mod tests {
         fn current_identity(&self) -> Identity {
             Identity {
                 process_id: self.current.pid,
-                user_id: self.current.uid,
+                user_id: self.current_uid,
                 process_group_id: self.current.pgid,
             }
         }
@@ -440,7 +439,7 @@ mod tests {
         let target_pgid = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pgid, 1000);
+        cx.add_process(target_pid, target_pgid);
 
         let result = sys_kill(
             &cx,
@@ -480,7 +479,7 @@ mod tests {
         let target_pid = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1001);
+        cx.add_process(target_pid, target_pid);
         cx.deny_permission(target_pid);
 
         let result = sys_kill(
@@ -520,7 +519,7 @@ mod tests {
         let current_pid = pid!(1);
         let target_pid = pid!(2);
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
+        cx.add_process(target_pid, target_pid);
 
         let result = sys_kill(
             &cx,
@@ -541,7 +540,7 @@ mod tests {
         let current_pid = pid!(1);
         let target_pid = pid!(2);
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
+        cx.add_process(target_pid, target_pid);
 
         let result = sys_kill(
             &cx,
@@ -557,7 +556,7 @@ mod tests {
         let target_pid = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
+        cx.add_process(target_pid, target_pid);
 
         sys_kill(
             &cx,
@@ -587,6 +586,7 @@ mod tests {
 
         let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
         assert_eq!(result, Err(ESRCH), "broadcast with no targets yields ESRCH");
+        assert!(cx.get_delivered().is_empty(), "nothing delivered");
     }
 
     #[test]
@@ -595,7 +595,7 @@ mod tests {
         let target_pid = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
+        cx.add_process(target_pid, target_pid);
 
         let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
         assert_eq!(result, Ok(0), "broadcast to one target succeeds");
@@ -615,9 +615,9 @@ mod tests {
         let pgid3 = pid!(3);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid2, 1000);
-        cx.add_process(pid3, pgid2, 1000);
-        cx.add_process(pid4, pgid3, 1000);
+        cx.add_process(pid2, pgid2);
+        cx.add_process(pid3, pgid2);
+        cx.add_process(pid4, pgid3);
 
         let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
         assert_eq!(result, Ok(0), "broadcast to many succeeds");
@@ -636,8 +636,8 @@ mod tests {
         let pid3 = pid!(3);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid!(0), pid!(0), 0);
-        cx.add_process(pid3, pid3, 1000);
+        cx.add_process(pid!(0), pid!(0));
+        cx.add_process(pid3, pid3);
 
         let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
         assert_eq!(result, Ok(0), "broadcast with root present succeeds");
@@ -659,8 +659,8 @@ mod tests {
         let pgid2 = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid2, 1000);
-        cx.add_process(pid3, pgid2, 1001);
+        cx.add_process(pid2, pgid2);
+        cx.add_process(pid3, pgid2);
         cx.deny_permission(pid3);
 
         let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
@@ -683,8 +683,8 @@ mod tests {
         let pgid2 = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid2, 1001);
-        cx.add_process(pid3, pgid2, 1001);
+        cx.add_process(pid2, pgid2);
+        cx.add_process(pid3, pgid2);
         cx.deny_permission(pid2);
         cx.deny_permission(pid3);
 
@@ -694,39 +694,14 @@ mod tests {
     }
 
     #[test]
-    fn test_broadcast_all_preserves_success_after_failure() {
-        let current_pid = pid!(1);
-        let pid2 = pid!(2);
-        let pid3 = pid!(3);
-        let pid4 = pid!(4);
-        let pgid2 = pid!(2);
-
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid2, 1000);
-        cx.add_process(pid3, pgid2, 1001);
-        cx.add_process(pid4, pgid2, 1000);
-        cx.deny_permission(pid3);
-
-        let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
-        assert_eq!(
-            result,
-            Ok(0),
-            "Should return Ok if at least one signal was delivered"
-        );
-
-        let delivered = cx.get_delivered();
-        assert_eq!(delivered.len(), 2, "two permitted targets received");
-    }
-
-    #[test]
     fn test_process_group_zero_is_the_kernel_group() {
         let current_pid = pid!(1);
         let current_pgid = pid!(5);
         let pid2 = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pgid, 1000);
-        cx.add_process(pid!(0), pid!(0), 0);
-        cx.add_process(pid2, current_pgid, 1000);
+        cx.add_process(pid!(0), pid!(0));
+        cx.add_process(pid2, current_pgid);
 
         let result = sys_kill(&cx, SignalTarget::ProcessGroup(pid!(0)), Signal::Interrupt);
         assert_eq!(result, Ok(0), "group 0 kill succeeds");
@@ -745,9 +720,9 @@ mod tests {
         let pgid6 = pid!(6);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid5, 1000);
-        cx.add_process(pid3, pgid5, 1000);
-        cx.add_process(pid4, pgid6, 1000);
+        cx.add_process(pid2, pgid5);
+        cx.add_process(pid3, pgid5);
+        cx.add_process(pid4, pgid6);
 
         let result = sys_kill(&cx, SignalTarget::ProcessGroup(pgid5), Signal::Interrupt);
         assert_eq!(result, Ok(0), "specific group kill succeeds");
@@ -768,8 +743,8 @@ mod tests {
         let target_pgid = pid!(5);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pid2, 1000);
-        cx.add_process(pid3, pid3, 1000);
+        cx.add_process(pid2, pid2);
+        cx.add_process(pid3, pid3);
 
         let result = sys_kill(
             &cx,
@@ -788,8 +763,8 @@ mod tests {
         let pgid5 = pid!(5);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid5, 1001);
-        cx.add_process(pid3, pgid5, 1001);
+        cx.add_process(pid2, pgid5);
+        cx.add_process(pid3, pgid5);
         cx.deny_permission(pid2);
         cx.deny_permission(pid3);
 
@@ -806,8 +781,8 @@ mod tests {
         let pgid5 = pid!(5);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid5, 1000);
-        cx.add_process(pid3, pgid5, 1001);
+        cx.add_process(pid2, pgid5);
+        cx.add_process(pid3, pgid5);
         cx.deny_permission(pid3);
 
         let result = sys_kill(&cx, SignalTarget::ProcessGroup(pgid5), Signal::Interrupt);
@@ -823,7 +798,7 @@ mod tests {
         let current_pid = pid!(1);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(current_pid, current_pid, 1000);
+        cx.add_process(current_pid, current_pid);
 
         let result = sys_kill(
             &cx,
@@ -850,7 +825,7 @@ mod tests {
             Signal::Terminate,
         ] {
             let mut cx = TestContext::new(current_pid, current_pid, 1000);
-            cx.add_process(target_pid, target_pid, 1000);
+            cx.add_process(target_pid, target_pid);
 
             let result = sys_kill(&cx, SignalTarget::SpecificProcess(target_pid), signal);
             assert_eq!(result, Ok(0), "kill with {signal:?} succeeds");
@@ -866,7 +841,7 @@ mod tests {
         let target_pid = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid, 1000);
+        cx.add_process(target_pid, target_pid);
 
         sys_kill(
             &cx,
@@ -906,8 +881,8 @@ mod tests {
         let pgid2 = pid!(2);
 
         let mut cx = TestContext::new(current_pid, current_pgid, 2000);
-        cx.add_process(pid2, pgid2, 1000);
-        cx.add_process(pid3, pgid2, 1000);
+        cx.add_process(pid2, pgid2);
+        cx.add_process(pid3, pgid2);
 
         sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt).unwrap();
 
@@ -934,9 +909,9 @@ mod tests {
         let pgid8 = pid!(8);
 
         let mut cx = TestContext::new(current_pid, pgid7, 1000);
-        cx.add_process(pid8, pgid7, 1000);
-        cx.add_process(pid9, pgid7, 1000);
-        cx.add_process(pid10, pgid8, 1000);
+        cx.add_process(pid8, pgid7);
+        cx.add_process(pid9, pgid7);
+        cx.add_process(pid10, pgid8);
 
         let result = sys_kill(&cx, SignalTarget::CallerGroup, Signal::Interrupt);
         assert_eq!(result, Ok(0), "caller group kill succeeds");
@@ -956,7 +931,7 @@ mod tests {
 
         let mut cx = TestContext::new(current_pid, current_pid, 1000);
         for i in 2..102 {
-            cx.add_process(pid!(i), pgid5, 1000);
+            cx.add_process(pid!(i), pgid5);
         }
 
         let result = sys_kill(&cx, SignalTarget::ProcessGroup(pgid5), Signal::Interrupt);
@@ -967,67 +942,25 @@ mod tests {
     }
 
     #[test]
-    fn test_permission_check_with_different_uids() {
+    fn test_group_delivery_skips_any_denied_member() {
         let current_pid = pid!(1);
-        let pid2 = pid!(2);
-        let pid3 = pid!(3);
-
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pid2, 1001);
-        cx.add_process(pid3, pid3, 1002);
-        cx.deny_permission(pid2);
-        cx.deny_permission(pid3);
-
-        let result = sys_kill(&cx, SignalTarget::SpecificProcess(pid2), Signal::Interrupt);
-        assert_eq!(result, Err(EPERM), "denied pid2 yields EPERM");
-
-        let result = sys_kill(&cx, SignalTarget::SpecificProcess(pid3), Signal::Interrupt);
-        assert_eq!(result, Err(EPERM), "denied pid3 yields EPERM");
-    }
-
-    #[test]
-    fn test_distribute_signal_order_independence() {
-        let current_pid = pid!(1);
-        let pid2 = pid!(2);
-        let pid3 = pid!(3);
-        let pid4 = pid!(4);
         let pgid5 = pid!(5);
+        let members = [pid!(2), pid!(3), pid!(4)];
 
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pgid5, 1000);
-        cx.add_process(pid3, pgid5, 1001);
-        cx.add_process(pid4, pgid5, 1000);
-        cx.deny_permission(pid3);
+        for denied in members {
+            let mut cx = TestContext::new(current_pid, current_pid, 1000);
+            for pid in members {
+                cx.add_process(pid, pgid5);
+            }
+            cx.deny_permission(denied);
 
-        let result = sys_kill(&cx, SignalTarget::ProcessGroup(pgid5), Signal::Interrupt);
-        assert_eq!(result, Ok(0), "mixed permissions still succeed");
+            let result = sys_kill(&cx, SignalTarget::ProcessGroup(pgid5), Signal::Interrupt);
+            assert_eq!(result, Ok(0), "denying {denied} still succeeds");
 
-        let delivered = cx.get_delivered();
-        assert_eq!(delivered.len(), 2, "two permitted members received");
-    }
-
-    #[test]
-    fn test_empty_process_list_broadcast() {
-        let current_pid = pid!(1);
-        let cx = TestContext::new(current_pid, current_pid, 1000);
-
-        let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
-        assert_eq!(result, Err(ESRCH), "empty broadcast yields ESRCH");
-        assert!(cx.get_delivered().is_empty(), "nothing delivered");
-    }
-
-    #[test]
-    fn test_single_permission_failure_in_broadcast() {
-        let current_pid = pid!(1);
-        let pid2 = pid!(2);
-
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(pid2, pid2, 1001);
-        cx.deny_permission(pid2);
-
-        let result = sys_kill(&cx, SignalTarget::BroadcastAll, Signal::Interrupt);
-        assert_eq!(result, Err(EPERM), "sole denied target yields EPERM");
-        assert!(cx.get_delivered().is_empty(), "nothing delivered");
+            let pids: Vec<_> = cx.get_delivered().iter().map(|s| s.pid).collect();
+            let permitted: Vec<_> = members.into_iter().filter(|&p| p != denied).collect();
+            assert_eq!(pids, permitted, "every permitted member received");
+        }
     }
 
     #[test]
@@ -1434,6 +1367,7 @@ mod tests {
 
     struct StatefulTestContext {
         current: TestProcess,
+        current_uid: u32,
         processes: Vec<TestProcess>,
         states: RefCell<BTreeMap<ProcessId, SignalState>>,
         resumed: RefCell<Vec<ProcessId>>,
@@ -1441,21 +1375,20 @@ mod tests {
 
     impl StatefulTestContext {
         fn new(current_pid: ProcessId, current_pgid: ProcessId, current_uid: u32) -> Self {
-            let current = TestProcess {
-                pid: current_pid,
-                pgid: current_pgid,
-                uid: current_uid,
-            };
             Self {
-                current,
+                current: TestProcess {
+                    pid: current_pid,
+                    pgid: current_pgid,
+                },
+                current_uid,
                 processes: vec![],
                 states: RefCell::new(BTreeMap::new()),
                 resumed: RefCell::new(vec![]),
             }
         }
 
-        fn add_process(&mut self, pid: ProcessId, pgid: ProcessId, uid: u32) {
-            self.processes.push(TestProcess { pid, pgid, uid });
+        fn add_process(&mut self, pid: ProcessId, pgid: ProcessId) {
+            self.processes.push(TestProcess { pid, pgid });
             self.states.borrow_mut().entry(pid).or_default();
         }
     }
@@ -1464,7 +1397,7 @@ mod tests {
         fn current_identity(&self) -> Identity {
             Identity {
                 process_id: self.current.pid,
-                user_id: self.current.uid,
+                user_id: self.current_uid,
                 process_group_id: self.current.pgid,
             }
         }
@@ -1499,7 +1432,7 @@ mod tests {
         let current = pid!(1);
         let target = pid!(2);
         let mut cx = StatefulTestContext::new(current, current, 1000);
-        cx.add_process(target, target, 1000);
+        cx.add_process(target, target);
 
         sys_kill(
             &cx,
@@ -1531,7 +1464,7 @@ mod tests {
         let current = pid!(1);
         let target = pid!(2);
         let mut cx = StatefulTestContext::new(current, current, 1000);
-        cx.add_process(target, target, 1000);
+        cx.add_process(target, target);
 
         {
             let mut states = cx.states.borrow_mut();
@@ -1612,9 +1545,9 @@ mod tests {
         let group = pid!(5);
 
         let mut cx = StatefulTestContext::new(current, current, 1000);
-        cx.add_process(member_a, group, 1000);
-        cx.add_process(member_b, group, 1000);
-        cx.add_process(outsider, pid!(6), 1000);
+        cx.add_process(member_a, group);
+        cx.add_process(member_b, group);
+        cx.add_process(outsider, pid!(6));
 
         sys_kill(&cx, SignalTarget::ProcessGroup(group), Signal::Usr1).unwrap();
 
@@ -1638,7 +1571,7 @@ mod tests {
         let current = pid!(1);
         let target = pid!(2);
         let mut cx = StatefulTestContext::new(current, current, 1000);
-        cx.add_process(target, target, 1000);
+        cx.add_process(target, target);
 
         sys_kill(&cx, SignalTarget::SpecificProcess(target), Signal::Stop).unwrap();
         {
@@ -1676,7 +1609,7 @@ mod tests {
         let current = pid!(1);
         let target = pid!(2);
         let mut cx = StatefulTestContext::new(current, current, 1000);
-        cx.add_process(target, target, 1000);
+        cx.add_process(target, target);
 
         sys_kill(&cx, SignalTarget::SpecificProcess(target), Signal::Stop).unwrap();
         {
@@ -1934,7 +1867,7 @@ mod tests {
         let current = pid!(1);
         let target = pid!(2);
         let mut cx = StatefulTestContext::new(current, current, 1000);
-        cx.add_process(target, target, 1000);
+        cx.add_process(target, target);
 
         {
             let mut states = cx.states.borrow_mut();
