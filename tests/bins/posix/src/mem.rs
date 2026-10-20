@@ -1,9 +1,10 @@
 use minilib::{
-    EBADF, EINVAL, ENOMEM, EOVERFLOW, Errno, MapFlags, ProtFlags, SYS_MMAP, SigSet, mmap, ret,
-    sigpending, syscall6,
+    EBADF, EINVAL, ENOMEM, EOVERFLOW, Errno, MapFlags, ProtFlags, SYS_MMAP, SigSet, mmap, open,
+    ret, sigpending, syscall6,
 };
 
 use crate::check;
+use crate::fd::HELLO;
 
 const PAGE: usize = 4096;
 
@@ -122,6 +123,27 @@ pub fn run() {
         "mmap/file_unopened_fd",
         mmap(0, PAGE, rw, MapFlags::PRIVATE, 100, 0),
         EBADF,
+    );
+
+    let hello = check::unwrap_or_fail("mmap/open_hello", open("/data/hello.txt"));
+    let file = check::unwrap_or_fail(
+        "mmap/file_private",
+        mmap(
+            0,
+            PAGE,
+            ProtFlags::READ,
+            MapFlags::PRIVATE,
+            hello as usize,
+            0,
+        ),
+    );
+    // Offset 0 of the file must land at the returned address, so the tail of
+    // the page reads as zero.
+    let page = unsafe { core::slice::from_raw_parts(file, PAGE) };
+    check::require("mmap/file_private_contents", &page[..HELLO.len()] == HELLO);
+    check::require(
+        "mmap/file_private_tail_zero",
+        page[HELLO.len()..].iter().all(|&b| b == 0),
     );
 
     let rw_bits = rw.bits() as usize;

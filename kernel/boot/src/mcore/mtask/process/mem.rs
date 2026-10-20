@@ -140,13 +140,12 @@ pub enum MemoryRegion {
 }
 
 impl MemoryRegion {
+    /// The first user-addressable byte, after any guard page.
     pub fn addr(&self) -> VirtAddr {
         match self {
-            MemoryRegion::Private(private_memory_region) => private_memory_region.start,
-            MemoryRegion::FileBacked(file_backed_memory_region) => {
-                file_backed_memory_region.region.segment().start
-            }
-            MemoryRegion::Shared(shared_memory_region) => shared_memory_region.segment.start,
+            MemoryRegion::Private(r) => r.start(),
+            MemoryRegion::FileBacked(r) => r.start(),
+            MemoryRegion::Shared(r) => r.start(),
         }
     }
 
@@ -182,8 +181,8 @@ impl MemoryRegion {
                 };
                 address_space.unmap_range::<Size4KiB>(
                     Page::range_inclusive(
-                        Page::containing_address(r.segment.start),
-                        Page::containing_address(r.segment.start + last.into_u64()),
+                        Page::containing_address(r.start()),
+                        Page::containing_address(r.start() + last.into_u64()),
                     ),
                     |_| {},
                 );
@@ -331,15 +330,16 @@ impl PrivateRegionState {
 
 #[derive(Debug)]
 pub struct PrivateMemoryRegion {
-    segment: OwnedSegment<'static>,
-    /// The first accessible address. Equals `segment.start` except for
-    /// guarded regions, where `segment` also reserves the surrounding guard
-    /// pages.
+    /// Held only to release the virtual reservation with the region.
+    _segment: OwnedSegment<'static>,
+    /// The first accessible address. Equals the reservation's start except
+    /// for guarded regions, where the reservation also covers the
+    /// surrounding guard pages.
     start: VirtAddr,
     /// The accessible size in bytes starting at `start`. It is not
-    /// necessarily page aligned. `segment.len` can exceed it, because the
-    /// segment is page aligned and for guarded regions also reserves the
-    /// surrounding guard pages.
+    /// necessarily page aligned. The reservation can exceed it, because it
+    /// is page aligned and for guarded regions also covers the surrounding
+    /// guard pages.
     size: usize,
     /// Serializes all backing mutations, all flags changes, and all fault
     /// resolution for this region.
@@ -350,7 +350,7 @@ impl PrivateMemoryRegion {
     pub fn new(segment: OwnedSegment<'static>, size: usize, flags: PageTableFlags) -> Self {
         Self {
             start: segment.start,
-            segment,
+            _segment: segment,
             size,
             state: Mutex::new(PrivateRegionState {
                 flags,
@@ -378,7 +378,7 @@ impl PrivateMemoryRegion {
 
         let region = Self {
             start,
-            segment,
+            _segment: segment,
             size,
             state: Mutex::new(PrivateRegionState {
                 flags,
@@ -455,10 +455,6 @@ impl PrivateMemoryRegion {
             remap(*page, Arc::strong_count(backing) > 1)?;
         }
         Ok(())
-    }
-
-    pub fn segment(&self) -> &Segment {
-        &self.segment
     }
 
     pub fn start(&self) -> VirtAddr {
@@ -597,6 +593,10 @@ impl FileBackedMemoryRegion {
         }
     }
 
+    pub fn start(&self) -> VirtAddr {
+        self.region.start()
+    }
+
     fn handle_fault(
         &self,
         address_space: &AddressSpace,
@@ -659,6 +659,10 @@ impl SharedMemoryRegion {
             frames,
             _node: node,
         }
+    }
+
+    pub fn start(&self) -> VirtAddr {
+        self.segment.start
     }
 
     fn handle_fault(

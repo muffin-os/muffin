@@ -6,7 +6,7 @@ use minilib::{
 
 use crate::check;
 
-const HELLO: &[u8] = b"muffin says hi\n";
+pub(crate) const HELLO: &[u8] = b"muffin says hi\n";
 
 const UNOPENED_FD: i32 = 4095;
 
