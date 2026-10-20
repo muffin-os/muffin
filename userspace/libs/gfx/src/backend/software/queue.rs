@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use super::{ATTRIBUTE_BYTES, DrawCmd, SoftBackend, SoftRecorder};
+use super::{ATTRIBUTE_BYTES, DrawCmd, SoftBackend, SoftPipeline, SoftRecorder};
 use crate::api::GfxQueue;
 use crate::error::Result;
 
@@ -78,8 +78,13 @@ impl<'fb> SoftQueue<'fb> {
     }
 
     fn rasterize(&mut self, cmd: &DrawCmd) {
-        let vertex_stride = cmd.vertex_stride;
-        if vertex_stride == 0 || cmd.output_count < 2 {
+        let SoftPipeline {
+            vertex_fn,
+            fragment_fn,
+            vertex_stride,
+            output_count,
+        } = cmd.pipeline;
+        if vertex_stride == 0 || output_count < 2 {
             return;
         }
 
@@ -96,7 +101,6 @@ impl<'fb> SoftQueue<'fb> {
         } = self;
 
         let vert_count = cmd.vertices as usize;
-        let output_count = cmd.output_count;
         let interp_count = output_count - 2;
         let outputs = scratch(vertex_outputs, vert_count * output_count);
         let input = scratch(vertex_input, vertex_stride / ATTRIBUTE_BYTES);
@@ -113,7 +117,7 @@ impl<'fb> SoftQueue<'fb> {
             {
                 *dst = f32::from_ne_bytes(*chunk);
             }
-            (cmd.vertex_fn)(
+            vertex_fn(
                 input,
                 &mut outputs[i * output_count..(i + 1) * output_count],
             );
@@ -221,11 +225,10 @@ impl<'fb> SoftQueue<'fb> {
                 // Keep this loop free of iterator adapters. Each one is an
                 // out-of-line call per component per pixel in an unoptimised
                 // build, which dominates the frame.
-                let frag = cmd.fragment_fn;
                 let pixels = row.len();
                 let mut i = 0usize;
                 while i < pixels {
-                    row[i] = frag(interpolants);
+                    row[i] = fragment_fn(interpolants);
                     let mut k = 0usize;
                     while k < interp_count {
                         interpolants[k] += deltas[k];

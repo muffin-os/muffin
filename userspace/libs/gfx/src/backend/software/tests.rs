@@ -58,8 +58,6 @@ fn simple_pipeline(
         .compile_pipeline(&PipelineDesc {
             vertex_shader: &vert,
             pixel_shader: &frag,
-            blend: false,
-            depth: false,
             vertex_stride,
         })
         .unwrap()
@@ -164,8 +162,6 @@ fn wrong_shader_kind_is_rejected() {
     let result = backend.compile_pipeline(&PipelineDesc {
         vertex_shader: &vert,
         pixel_shader: &vert,
-        blend: false,
-        depth: false,
         vertex_stride: 2 * ATTRIBUTE_BYTES,
     });
     assert!(result.is_err());
@@ -217,8 +213,6 @@ fn interpolants_vary_across_triangle() {
         .compile_pipeline(&PipelineDesc {
             vertex_shader: &vert,
             pixel_shader: &frag,
-            blend: false,
-            depth: false,
             vertex_stride: 3 * ATTRIBUTE_BYTES,
         })
         .unwrap();
@@ -289,8 +283,6 @@ fn gouraud_triangle_blends_per_vertex_colors() {
         .compile_pipeline(&PipelineDesc {
             vertex_shader: &vert,
             pixel_shader: &frag,
-            blend: false,
-            depth: false,
             vertex_stride: 5 * ATTRIBUTE_BYTES,
         })
         .unwrap();
@@ -367,4 +359,63 @@ fn draw_respects_stride_padding() {
         };
         assert_eq!(px, expected, "pixel at index {i} mismatch");
     }
+}
+
+fn blue_frag(_: &[f32]) -> u32 {
+    0xFF00_00FF
+}
+
+#[test]
+fn each_draw_uses_the_pipeline_bound_at_draw_time() {
+    // Two triangles on a 2×2 target, one covering row 0 and the other row 1,
+    // so every pixel is written by exactly one draw.
+    let top = encode_verts(&[-2.0, 2.0, 2.0, 2.0, 0.0, 0.0]);
+    let bottom = encode_verts(&[-2.0, 0.0, 2.0, 0.0, 0.0, -2.0]);
+
+    let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let white = simple_pipeline(&mut backend, 2 * ATTRIBUTE_BYTES);
+    let vert = backend
+        .compile_shader(&SoftShaderDef::Vertex {
+            func: passthrough_vert,
+            output_count: 2,
+        })
+        .unwrap();
+    let frag = backend
+        .compile_shader(&SoftShaderDef::Fragment(blue_frag))
+        .unwrap();
+    let blue = backend
+        .compile_pipeline(&PipelineDesc {
+            vertex_shader: &vert,
+            pixel_shader: &frag,
+            vertex_stride: 2 * ATTRIBUTE_BYTES,
+        })
+        .unwrap();
+    let mut top_buf = backend
+        .alloc_buffer(&BufferDesc {
+            size: top.len(),
+            is_dynamic: false,
+        })
+        .unwrap();
+    top_buf.data.copy_from_slice(&top);
+    let mut bottom_buf = backend
+        .alloc_buffer(&BufferDesc {
+            size: bottom.len(),
+            is_dynamic: false,
+        })
+        .unwrap();
+    bottom_buf.data.copy_from_slice(&bottom);
+
+    let mut target = [0u32; 4];
+    let mut q = SoftQueue::new(&mut target, 2, 2, 2);
+    q.submit(|rec| {
+        rec.bind_pipeline(&white);
+        rec.bind_vertex_buffer(&top_buf);
+        rec.draw(3);
+        rec.bind_pipeline(&blue);
+        rec.bind_vertex_buffer(&bottom_buf);
+        rec.draw(3);
+    })
+    .unwrap();
+
+    assert_eq!(target, [0xFFFF_FFFF, 0xFFFF_FFFF, 0xFF00_00FF, 0xFF00_00FF]);
 }

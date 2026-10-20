@@ -32,10 +32,6 @@ pub struct PipelineDesc<'a, S> {
     pub vertex_shader: &'a S,
     /// Compiled fragment/pixel shader for this pipeline.
     pub pixel_shader: &'a S,
-    /// Whether alpha blending is enabled.
-    pub blend: bool,
-    /// Whether depth testing and writing are enabled.
-    pub depth: bool,
     /// Bytes between the start of consecutive vertices in the vertex buffer.
     pub vertex_stride: usize,
 }

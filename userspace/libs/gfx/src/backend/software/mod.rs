@@ -10,7 +10,7 @@ pub mod recorder;
 
 pub use adapter::SoftAdapter;
 pub use allocator::{SoftAllocator, SoftBuffer, SoftTexture};
-pub use compiler::{SoftCompiler, SoftPipeline, SoftShader, SoftShaderDef};
+pub use compiler::{SoftCompiler, SoftPipeline, SoftShaderDef};
 pub use fence::SoftFence;
 use kernel_abi::gfx::{BufferDesc, TextureDesc};
 pub use queue::SoftQueue;
@@ -42,16 +42,16 @@ impl GfxAllocator for SoftBackend {
 
 impl GfxCompiler for SoftBackend {
     type Pipeline = SoftPipeline;
-    type Shader = SoftShader;
+    type Shader = SoftShaderDef;
     type ShaderSource = SoftShaderDef;
 
-    fn compile_shader(&mut self, source: &SoftShaderDef) -> Result<SoftShader> {
+    fn compile_shader(&mut self, source: &SoftShaderDef) -> Result<SoftShaderDef> {
         self.1.compile_shader(source)
     }
 
     fn compile_pipeline<'a>(
         &mut self,
-        desc: &PipelineDesc<'a, SoftShader>,
+        desc: &PipelineDesc<'a, SoftShaderDef>,
     ) -> Result<SoftPipeline> {
         self.1.compile_pipeline(desc)
     }

@@ -118,8 +118,6 @@ fn main() -> i32 {
     let pso = or_fail_gfx(backend.compile_pipeline(&PipelineDesc {
         vertex_shader: &vert,
         pixel_shader: &frag,
-        blend: false,
-        depth: false,
         vertex_stride: 5 * ATTRIBUTE_BYTES,
     }));
     report("compile_pipeline", t, now_us());
