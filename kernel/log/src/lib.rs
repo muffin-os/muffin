@@ -4,10 +4,9 @@
 //! subscriber.
 //!
 //! Filter directives are comma separated `target=level` pairs or bare
-//! levels. Parsing is no-alloc and stores everything in fixed size arrays so
-//! it works before a heap exists. The subscriber (installed via [`init`]) is
-//! statically sized as well and renders through an [`Environment`] provided
-//! by the kernel.
+//! levels. Neither parsing nor the subscriber (installed via [`init`])
+//! allocates. The subscriber renders through an [`Environment`] provided by
+//! the caller.
 
 use tracing::Level;
 use tracing::level_filters::LevelFilter;
@@ -15,8 +14,10 @@ use tracing::level_filters::LevelFilter;
 mod subscriber;
 pub use subscriber::{Environment, SpanStack, init};
 
-const MAX_DIRECTIVES: usize = 16;
-const BUF_SIZE: usize = 256;
+/// Directives past this many are dropped by [`Filter::parse`].
+pub const MAX_DIRECTIVES: usize = 16;
+/// Input past this many bytes is dropped by [`Filter::parse`].
+pub const BUF_SIZE: usize = 256;
 
 /// A directive is a target prefix mapped to a level.
 ///
@@ -28,7 +29,7 @@ struct Directive {
     level: LevelFilter,
 }
 
-/// An env_logger style filter parsed once into a fixed buffer, no allocation.
+/// An env_logger style filter.
 pub struct Filter {
     buf: [u8; BUF_SIZE],
     directives: [Directive; MAX_DIRECTIVES],
@@ -37,6 +38,9 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Keeps only the first [`BUF_SIZE`] bytes of `input` and the first
+    /// [`MAX_DIRECTIVES`] directives. A directive cut by the byte limit is
+    /// parsed as whatever is left of it.
     pub fn parse(input: &str) -> Self {
         let mut buf = [0u8; BUF_SIZE];
         let len = input.len().min(BUF_SIZE);
@@ -88,7 +92,7 @@ impl Filter {
         best.is_some_and(|allowed| allowed >= *level)
     }
 
-    /// The highest level across all directives, used as the global max level hint.
+    /// The highest level across all directives.
     pub fn max(&self) -> LevelFilter {
         self.max
     }
