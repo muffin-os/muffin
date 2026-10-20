@@ -155,98 +155,93 @@ where
     }
 
     pub fn allocate_block(&mut self) -> Result<Option<BlockAddress>, Error> {
-        let blocks_per_group = self.superblock.blocks_per_group();
-        self.allocate_resource(blocks_per_group, Self::try_reserve_block_in_group)
+        self.allocate(Resource::Block)
             .map(|block| block.and_then(BlockAddress::new))
     }
 
     pub fn allocate_inode(&mut self) -> Result<Option<InodeAddress>, Error> {
-        let inodes_per_group = self.superblock.inodes_per_group();
-        self.allocate_resource(inodes_per_group, Self::try_reserve_inode_in_group)
+        self.allocate(Resource::Inode)
             .map(|inode| inode.and_then(InodeAddress::new))
     }
 
-    fn allocate_resource<F>(
-        &mut self,
-        resource_per_group: u32,
-        try_reserve_in_group: F,
-    ) -> Result<Option<u32>, Error>
-    where
-        F: Fn(&mut Self, usize) -> Result<Option<usize>, Error>,
-    {
+    fn allocate(&mut self, resource: Resource) -> Result<Option<u32>, Error> {
         let block_size = self.superblock.block_size();
-        let num_groups = self.bgdt.len();
         let bgdt_offset = self.bgdt_offset();
+        // bitmap bit 0 is inode 1 resp. block s_first_data_block
+        let (per_group, first_number) = match resource {
+            Resource::Block => (
+                self.superblock.blocks_per_group(),
+                self.superblock.first_data_block(),
+            ),
+            Resource::Inode => (self.superblock.inodes_per_group(), 1),
+        };
 
-        for group_index in 0..num_groups {
-            let first_free_resource_index = try_reserve_in_group(self, group_index)?;
-            if first_free_resource_index.is_none() {
+        for group_index in 0..self.bgdt.len() {
+            let descriptor = &self.bgdt[group_index];
+            let bitmap_block = match resource {
+                Resource::Block => descriptor.block_usage_bitmap_block(),
+                Resource::Inode => descriptor.inode_usage_bitmap_block(),
+            };
+            let bitmap_block = BlockAddress::new(bitmap_block)
+                .expect("bgdt does not have valid block address for bitmap block");
+            let Some(bit) = self.reserve_first_free_bit(bitmap_block)? else {
                 continue;
-            }
-            let first_free_resource_index = first_free_resource_index.unwrap();
+            };
 
             let descriptor = &mut self.bgdt[group_index];
-            *descriptor.num_unallocated_blocks_mut() -= 1;
+            match resource {
+                Resource::Block => {
+                    *descriptor.num_unallocated_blocks_mut() -= 1;
+                    *self.superblock.num_unallocated_blocks_mut() -= 1;
+                }
+                Resource::Inode => {
+                    *descriptor.num_unallocated_inodes_mut() -= 1;
+                    *self.superblock.num_unallocated_inodes_mut() -= 1;
+                }
+            }
 
-            // read the block group descriptor table
             let mut bgdt_data = vec![0_u8; block_size as usize];
             self.block_device
                 .read_at(bgdt_offset, &mut bgdt_data)
                 .map_err(|_| Error::UnableToReadBlockGroupDescriptorTable)?;
-            // merge the changed descriptor back into the table
             let bgd_offset = group_index * BGD_SIZE;
             let bgd_end = bgd_offset + BGD_SIZE;
             let bgd_data = Into::<[u8; BGD_SIZE]>::into(&*descriptor);
             bgdt_data[bgd_offset..bgd_end].copy_from_slice(&bgd_data);
-            // write the block group descriptor table back
             self.block_device
                 .write_at(bgdt_offset, &bgdt_data)
                 .map_err(|_| Error::UnableToWriteBlockGroupDescriptorTable)?;
 
-            *self.superblock.num_unallocated_blocks_mut() -= 1;
             let superblock_data = Into::<SuperblockArray>::into(&self.superblock);
             self.block_device
                 .write_at(SUPERBLOCK_OFFSET, superblock_data.as_slice())
                 .map_err(|_| Error::UnableToWriteSuperblock)?;
 
-            let global_resource_num =
-                group_index as u32 * resource_per_group + first_free_resource_index as u32;
-            return Ok(Some(global_resource_num));
+            return Ok(Some(group_index as u32 * per_group + bit + first_number));
         }
 
         Ok(None)
     }
 
-    fn try_reserve_block_in_group(&mut self, group_index: usize) -> Result<Option<usize>, Error> {
-        let bitmap_block = self.bgdt[group_index].block_usage_bitmap_block();
-        let bitmap_block_address = BlockAddress::new(bitmap_block)
-            .expect("bgdt does not have valid block address for bitmap block");
-        self.try_reserve_in_group_with_bitmap(bitmap_block_address)
-    }
+    fn reserve_first_free_bit(&mut self, bitmap_block: BlockAddress) -> Result<Option<u32>, Error> {
+        let mut bitmap = vec![0_u8; self.superblock.block_size() as usize];
+        self.read_block(bitmap_block, &mut bitmap)?;
 
-    fn try_reserve_inode_in_group(&mut self, group_index: usize) -> Result<Option<usize>, Error> {
-        let bitmap_block = self.bgdt[group_index].inode_usage_bitmap_block();
-        let bitmap_block_address = BlockAddress::new(bitmap_block)
-            .expect("bgdt does not have valid block address for bitmap block");
-        self.try_reserve_in_group_with_bitmap(bitmap_block_address)
-    }
-
-    fn try_reserve_in_group_with_bitmap(
-        &mut self,
-        bitmap_block: BlockAddress,
-    ) -> Result<Option<usize>, Error> {
-        let mut inode_bitmap = vec![0_u8; self.superblock.block_size() as usize];
-        self.read_block(bitmap_block, &mut inode_bitmap)?;
-
-        for (i, byte) in inode_bitmap.iter_mut().enumerate() {
-            for bit_index in 0..8 {
-                if *byte & (1_u8 << bit_index) == 0 {
-                    *byte |= 1 << bit_index;
-                    return Ok(Some(i * 8 + bit_index));
-                }
+        for (i, byte) in bitmap.iter_mut().enumerate() {
+            if *byte == u8::MAX {
+                continue;
             }
+            let bit_index = byte.trailing_ones();
+            *byte |= 1 << bit_index;
+            self.write_block(bitmap_block, &bitmap)?;
+            return Ok(Some(i as u32 * 8 + bit_index));
         }
-        self.write_block(bitmap_block, &inode_bitmap)?;
         Ok(None)
     }
+}
+
+#[derive(Clone, Copy)]
+enum Resource {
+    Block,
+    Inode,
 }

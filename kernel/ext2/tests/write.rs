@@ -92,3 +92,33 @@ fn test_create_file_collision(sector_size: usize) {
     let result = fs.create_regular_file(&mut root, file_name);
     assert_eq!(result.unwrap_err(), Error::EntryExists);
 }
+
+generate_tests!(
+    test_allocate_skips_used_slots:
+    512 - test_allocate_skips_used_slots_standard,
+    1 - test_allocate_skips_used_slots_tiny,
+    32 - test_allocate_skips_used_slots_small,
+    32768 - test_allocate_skips_used_slots_large,
+    1048576 - test_allocate_skips_used_slots_huge,
+);
+
+fn test_allocate_skips_used_slots(sector_size: usize) {
+    let mut fs = cow_fs!("kernel/ext2/tests/filesystems/empty.img", sector_size);
+    // empty.img (dumpe2fs): inodes 1-11 used, 11 is lost+found; blocks 1-53 used
+    let free_inodes = fs.superblock().num_unallocated_inodes();
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+
+    let first = fs.allocate_inode().unwrap().unwrap();
+    let second = fs.allocate_inode().unwrap().unwrap();
+    assert_eq!(first.get(), 12);
+    assert_eq!(second.get(), 13);
+    assert_eq!(fs.superblock().num_unallocated_inodes(), free_inodes - 2);
+    assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks);
+
+    let first = fs.allocate_block().unwrap().unwrap();
+    let second = fs.allocate_block().unwrap().unwrap();
+    assert_eq!(first.get(), 54);
+    assert_eq!(second.get(), 55);
+    assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks - 2);
+    assert_eq!(fs.superblock().num_unallocated_inodes(), free_inodes - 2);
+}

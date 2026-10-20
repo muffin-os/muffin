@@ -39,6 +39,10 @@ impl BlockGroupDescriptor {
         self.num_unallocated_inodes
     }
 
+    pub fn num_unallocated_inodes_mut(&mut self) -> &mut u16 {
+        &mut self.num_unallocated_inodes
+    }
+
     pub fn num_directories(&self) -> u16 {
         self.num_directories
     }

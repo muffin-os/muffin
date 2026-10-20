@@ -46,7 +46,7 @@ bytefield! {
         num_superuser_reserved_blocks: u32 = 8,
         num_unallocated_blocks: u32 = 12,
         num_unallocated_inodes: u32 = 16,
-        superblock_block_number: u32 = 20,
+        first_data_block: u32 = 20,
         log2_block_size: u32 = 24,
         log2_fragment_size: u32 = 28,
         blocks_per_group: u32 = 32,
@@ -113,8 +113,8 @@ impl Superblock {
         &mut self.num_unallocated_inodes
     }
 
-    pub fn superblock_block_number(&self) -> u32 {
-        self.superblock_block_number
+    pub fn first_data_block(&self) -> u32 {
+        self.first_data_block
     }
 
     pub fn block_size(&self) -> u32 {
@@ -386,7 +386,7 @@ mod tests {
                 num_superuser_reserved_blocks: 51,
                 num_unallocated_blocks: 970,
                 num_unallocated_inodes: 117,
-                superblock_block_number: 1,
+                first_data_block: 1,
                 log2_block_size: 0,
                 log2_fragment_size: 0,
                 blocks_per_group: 8192,
