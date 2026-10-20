@@ -51,11 +51,11 @@ fn main() -> i32 {
     }
 
     println!("execve-test: before exec");
-    let _ = execve(
+    let errno = execve(
         "/bin/exec-target",
         &["exec-target", "alpha", "beta"],
         &["KEY=value"],
     );
-    println!("execve-test: FAIL exec returned");
+    println!("execve-test: FAIL exec returned {errno}");
     1
 }
