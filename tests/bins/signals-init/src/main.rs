@@ -179,8 +179,8 @@ fn role_a() {
 }
 
 fn role_b() -> ! {
-    // The ping handler is already armed by `_start`. pid 1 is created before
-    // pid 2, so the driver always exists to receive this announcement.
+    // `main` armed the ping handler before the role was known. pid 1 is created
+    // before pid 2, so the driver always exists to receive this announcement.
     let _ = kill(1, ACK);
 
     // Spin in user mode so ticks can deliver the ping handler.
