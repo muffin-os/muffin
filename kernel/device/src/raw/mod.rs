@@ -47,8 +47,8 @@ where
     Id: DeviceId + Ord + 'static,
 {
     /// # Errors
-    /// Returns an error if the device is already registered, returning the
-    /// device that could not be registered.
+    /// Returns [`RegisterDeviceError::AlreadyRegistered`] if a device with
+    /// the same id is registered. The rejected `device` is dropped.
     pub fn register_device<D>(&mut self, device: Arc<RwLock<D>>) -> Result<(), RegisterDeviceError>
     where
         D: RawDevice<Id>,
