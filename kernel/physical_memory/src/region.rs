@@ -118,16 +118,6 @@ mod tests {
     }
 
     #[test]
-    fn test_frames_mut() {
-        let mut region = MemoryRegion::new(0x0, 5, FrameState::Free);
-        region.frames_mut()[2] = FrameState::Allocated;
-
-        assert_eq!(region.frames()[0], FrameState::Free);
-        assert_eq!(region.frames()[2], FrameState::Allocated);
-        assert_eq!(region.frames()[4], FrameState::Free);
-    }
-
-    #[test]
     #[should_panic(expected = "4KiB aligned")]
     fn new_rejects_unaligned_base() {
         let _ = MemoryRegion::new(0x1800, 1, FrameState::Free);

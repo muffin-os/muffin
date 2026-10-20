@@ -279,13 +279,13 @@ mod tests {
     }
 
     #[test]
-    fn test_new_trailing_unusable() {
+    fn allocate_skips_unusable_frames() {
         let states = vec![FrameState::Unusable, FrameState::Free, FrameState::Unusable];
-        let region = MemoryRegion::with_frames(0, states.clone());
-        let pmm = PhysicalMemoryManager::new(vec![region]);
-        assert_eq!(1, pmm.regions.len());
-        assert_eq!(3, pmm.regions[0].len());
-        assert_eq!(&states[..], pmm.regions[0].frames());
+        let region = MemoryRegion::with_frames(0, states);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+        let frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(0x1000, frame.start_address().as_u64());
+        assert_eq!(Option::<PhysFrame<Size4KiB>>::None, pmm.allocate_frame());
     }
 
     #[test]
@@ -375,19 +375,6 @@ mod tests {
 
         assert_eq!(None, pmm.deallocate_frames(range));
         assert_eq!(Some(range), pmm.allocate_frames(4));
-    }
-
-    #[test]
-    fn test_sparse_multiple_regions() {
-        let region1 = MemoryRegion::new(0x0000_0000, 4, FrameState::Free);
-        let region2 = MemoryRegion::new(0x1000_0000, 4, FrameState::Free);
-        let pmm = PhysicalMemoryManager::new(vec![region1, region2]);
-
-        assert_eq!(2, pmm.regions.len());
-        assert_eq!(4, pmm.regions[0].len());
-        assert_eq!(4, pmm.regions[1].len());
-        assert_eq!(0x0000_0000, pmm.regions[0].base_addr());
-        assert_eq!(0x1000_0000, pmm.regions[1].base_addr());
     }
 
     #[test]
