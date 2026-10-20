@@ -29,7 +29,6 @@ impl<'a> Iterator for Filenames<'a> {
             return None;
         }
 
-        // Find next non-separator character
         self.chars.find(|(_, c)| c != &FILEPATH_SEPARATOR)?;
         self.index_front = self.chars.offset() - 1;
 

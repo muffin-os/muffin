@@ -81,23 +81,19 @@ impl Path {
 
     #[must_use]
     pub fn parent(&self) -> Option<&Path> {
-        // Handle empty path
         if self.inner.is_empty() {
             return None;
         }
 
         let mut chars = self.char_indices();
 
-        // Find the last non-separator character
         let last_non_sep = chars.rfind(|&(_, c)| c != FILEPATH_SEPARATOR)?;
 
         let last_non_sep_pos = last_non_sep.0;
 
-        // Find the last separator before the last component
         let sep_pos = self.inner[..last_non_sep_pos + 1].rfind(FILEPATH_SEPARATOR);
 
         if let Some(sep) = sep_pos {
-            // Find the last non-separator before this separator
             let parent_end = self.inner[..sep]
                 .rfind(|c| c != FILEPATH_SEPARATOR)
                 .map(|pos| pos + 1);
@@ -109,9 +105,7 @@ impl Path {
                 None
             }
         } else {
-            // No separator found - single component relative path
-            // Dot paths like "." and ".." are their own parent
-            // But regular paths like "foo" have no parent
+            // "." and ".." are their own parent. A plain name has none.
             if &self.inner == "." || &self.inner == ".." {
                 Some(self)
             } else {
