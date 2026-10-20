@@ -29,7 +29,7 @@ pub trait BlockDevice {
     /// index. The buffer must be exactly as big as the value returned
     /// by [`BlockDevice::sector_size`], otherwise an implementation may
     /// panic.
-    /// Reads that are out of the bounds of this device must not panic, but return
+    /// Writes that are out of the bounds of this device must not panic, but return
     /// an appropriate error.
     fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error>;
 

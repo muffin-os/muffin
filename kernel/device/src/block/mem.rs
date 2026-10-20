@@ -40,8 +40,8 @@ where
         debug_assert_eq!(self.sector_size(), buf.len());
         let start_offset = sector_index * self.sector_size();
         let end_offset = start_offset + self.sector_size();
-        let data = self.data.as_ref();
-        buf.copy_from_slice(&data[start_offset..end_offset]);
+        let data = self.data.as_ref().get(start_offset..end_offset).ok_or(())?;
+        buf.copy_from_slice(data);
         Ok(buf.len())
     }
 
@@ -49,8 +49,12 @@ where
         debug_assert_eq!(self.sector_size(), buf.len());
         let start_offset = sector_index * self.sector_size();
         let end_offset = start_offset + self.sector_size();
-        let data = self.data.as_mut();
-        data[start_offset..end_offset].copy_from_slice(buf);
+        let data = self
+            .data
+            .as_mut()
+            .get_mut(start_offset..end_offset)
+            .ok_or(())?;
+        data.copy_from_slice(buf);
         Ok(buf.len())
     }
 }
@@ -66,6 +70,19 @@ mod tests {
     fn sector_count_counts_sectors_not_bytes() {
         let device = MemoryBlockDevice::try_new(2, vec![0_u8; 16]).unwrap();
         assert_eq!(8, device.sector_count());
+    }
+
+    #[test]
+    fn read_sector_past_end_is_an_error() {
+        let device = MemoryBlockDevice::try_new(2, vec![0_u8; 16]).unwrap();
+        let mut buf = [0_u8; 2];
+        assert_eq!(Err(()), device.read_sector(8, &mut buf));
+    }
+
+    #[test]
+    fn write_sector_past_end_is_an_error() {
+        let mut device = MemoryBlockDevice::try_new(2, vec![0_u8; 16]).unwrap();
+        assert_eq!(Err(()), device.write_sector(8, &[1, 2]));
     }
 
     #[test]
