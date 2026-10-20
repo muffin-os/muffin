@@ -142,4 +142,12 @@ pub fn run() {
     let dir = check::unwrap_or_fail("fd/open_dir", open("/data/dir"));
     check::require("fd/open_dir_next_free", dir == fd + 1);
     check::expect_err("fd/read_dir", read(dir, &mut one), EINVAL);
+    check::expect_ok("fd/fstat_dir", fstat(dir, &mut stat), ());
+    check::require("fd/fstat_dir_size", stat.size == 1024);
+
+    let via_dotdot = check::unwrap_or_fail("fd/open_dotdot", open("/data/dir/../hello.txt"));
+    check::expect_ok("fd/fstat_dotdot", fstat(via_dotdot, &mut stat), ());
+    check::require("fd/fstat_dotdot_size", stat.size == 15);
+
+    check::expect_err("fd/open_through_file", open("/data/hello.txt/x"), ENOENT);
 }

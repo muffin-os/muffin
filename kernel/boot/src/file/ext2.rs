@@ -6,7 +6,7 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_device::block::BlockDevice;
-use kernel_ext2::{Ext2Fs, Inode, InodeAddress, Type};
+use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile, Type};
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
 use kernel_vfs::{
@@ -62,7 +62,7 @@ where
             .ok_or(OpenError::NotFound)?;
 
         let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
-        let inode = VirtualExt2Inode::try_new(found_num, found).unwrap();
+        let inode = VirtualExt2Inode::try_new(found_num, found).ok_or(OpenError::NotFound)?;
 
         self.handles
             .insert(handle, Arc::new((path.to_owned(), RwLock::new(inode))));
@@ -107,13 +107,7 @@ where
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
         let inode = &self.handles.get(&handle).ok_or(FsError::InvalidHandle)?.1;
 
-        let guard = inode.read();
-        match &guard.inner {
-            Inner::RegularFile(file) => {
-                stat.size = file.len();
-            }
-            _ => todo!(),
-        }
+        stat.size = inode.read().inner.as_ref().len();
         Ok(())
     }
 
@@ -126,7 +120,7 @@ impl<T> VirtualExt2Fs<T>
 where
     T: BlockDevice + Send + Sync,
 {
-    fn find_inode(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, kernel_ext2::Error> {
+    fn find_inode(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, Error> {
         let root_inode = self.ext2fs.read_root_inode()?;
         self.find_inode_from(path, root_inode.into_inner())
     }
@@ -135,36 +129,18 @@ where
         &self,
         path: &Path,
         starting_point: (InodeAddress, Inode),
-    ) -> Result<Option<(InodeAddress, Inode)>, kernel_ext2::Error> {
-        let components = path.filenames();
-
+    ) -> Result<Option<(InodeAddress, Inode)>, Error> {
         let (mut current_num, mut current) = starting_point;
-        for component in components {
-            match component {
-                "/" => {
-                    todo!("absolute path")
-                }
-                "." => {} // do nothing,
-                ".." => {
-                    todo!("parent dir");
-                }
-                v => {
-                    let x = current.typ();
-                    if x != Type::Directory {
-                        todo!("symlink support")
-                    }
-                    // x is a directory
-                    let found_entry = self
-                        .list_dir(&current)?
-                        .into_iter()
-                        .find(|entry| entry.name() == Some(v));
-                    if let Some(found_entry) = found_entry {
-                        (current_num, current) = self.resolve_dir_entry(found_entry)?;
-                    } else {
-                        return Ok(None);
-                    }
-                }
-            }
+        for component in path.filenames() {
+            // "." and ".." are ordinary ext2 directory entries, so one lookup covers them
+            let Some(entry) = self
+                .list_dir(&current)?
+                .into_iter()
+                .find(|entry| entry.name() == Some(component))
+            else {
+                return Ok(None);
+            };
+            (current_num, current) = self.resolve_dir_entry(entry)?;
         }
 
         Ok(Some((current_num, current)))
@@ -194,8 +170,8 @@ impl VirtualExt2Inode {
 }
 
 enum Inner {
-    RegularFile(kernel_ext2::RegularFile),
-    Directory(kernel_ext2::Directory),
+    RegularFile(RegularFile),
+    Directory(Directory),
 }
 
 impl AsRef<Inode> for Inner {
