@@ -377,7 +377,7 @@ impl PhysicalBumpAllocator {
         self.regions
             .iter()
             .filter(|region| region.entry_type == EntryType::USABLE)
-            .map(|region| region.base..region.length)
+            .map(|region| region.base..region.base + region.length)
             .flat_map(|r| r.step_by(usize::try_from(Size4KiB::SIZE).expect("usize overflow")))
             .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
     }
