@@ -142,7 +142,7 @@ mod tests {
 
     use crate::path::{AbsolutePath, ROOT};
     use crate::testing::TestFs;
-    use crate::{CloseError, Stat, Vfs};
+    use crate::{CloseError, Vfs};
 
     #[test]
     fn test_drop() {
@@ -150,7 +150,6 @@ mod tests {
         fs.insert_file(
             AbsolutePath::try_new("/foo/bar.txt").unwrap(),
             vec![0_u8; 1],
-            Stat::default(),
         );
 
         let mut vfs = Vfs::new();
@@ -180,7 +179,6 @@ mod tests {
         fs.insert_file(
             AbsolutePath::try_new("/foo/bar.txt").unwrap(),
             vec![0_u8; 1],
-            Stat::default(),
         );
 
         let mut vfs = Vfs::new();

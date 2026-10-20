@@ -14,15 +14,13 @@ use crate::{CloseError, FsError, FsyncError, OpenError, ReadError, Stat, StatErr
 pub struct TestFs {
     handle_counter: AtomicU64,
     files: BTreeMap<AbsoluteOwnedPath, RwLock<Vec<u8>>>,
-    stats: BTreeMap<AbsoluteOwnedPath, Stat>,
     open_files: BTreeMap<FsHandle, AbsoluteOwnedPath>,
 }
 
 impl TestFs {
-    pub fn insert_file(&mut self, path: impl AsRef<AbsolutePath>, data: Vec<u8>, stat: Stat) {
-        let path = path.as_ref().to_owned();
-        self.files.insert(path.clone(), RwLock::new(data));
-        self.stats.insert(path, stat);
+    pub fn insert_file(&mut self, path: impl AsRef<AbsolutePath>, data: Vec<u8>) {
+        self.files
+            .insert(path.as_ref().to_owned(), RwLock::new(data));
     }
 }
 
@@ -86,8 +84,10 @@ impl FileSystem for TestFs {
         Ok(buf.len())
     }
 
-    fn stat(&mut self, _handle: FsHandle, _stat: &mut Stat) -> Result<(), StatError> {
-        todo!()
+    fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
+        let path = self.open_files.get(&handle).ok_or(FsError::InvalidHandle)?;
+        stat.size = self.files[path].read().len();
+        Ok(())
     }
 
     fn fsync(&mut self, _handle: FsHandle) -> Result<(), FsyncError> {

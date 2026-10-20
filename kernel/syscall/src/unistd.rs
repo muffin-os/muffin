@@ -172,6 +172,20 @@ mod tests {
     }
 
     #[test]
+    fn sys_write_data_reads_back_from_the_same_position() {
+        let (cx, fd) = lseek_fixture();
+
+        assert_eq!(Ok(3), sys_write(&cx, fd.clone(), b"abc"));
+        assert_eq!(Ok(3), cx.position(fd.clone()));
+
+        cx.set_position(fd.clone(), 0)
+            .expect("fixture file must accept a position");
+        let mut buf = [0_u8; 3];
+        assert_eq!(Ok(3), sys_read(&cx, fd, &mut buf));
+        assert_eq!(b"abc", &buf);
+    }
+
+    #[test]
     fn sys_lseek_computes_offsets_from_whence() {
         let (cx, fd) = lseek_fixture();
 

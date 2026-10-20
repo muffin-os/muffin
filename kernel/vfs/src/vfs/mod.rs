@@ -130,7 +130,6 @@ mod tests {
         fs.insert_file(
             AbsolutePath::try_new("/foo/bar.txt").unwrap(),
             (0_u8..=u8::MAX).collect::<Vec<u8>>(),
-            Stat::default(),
         );
 
         let mut vfs = Vfs::new();
@@ -163,7 +162,6 @@ mod tests {
         fs.insert_file(
             AbsolutePath::try_new("/foo/bar.txt").unwrap(),
             vec![0x00; 8],
-            Stat::default(),
         );
 
         let mut vfs = Vfs::new();
@@ -177,12 +175,30 @@ mod tests {
     }
 
     #[test]
+    fn test_stat_reports_file_size() {
+        let mut fs = TestFs::default();
+        fs.insert_file(
+            AbsolutePath::try_new("/foo/bar.txt").unwrap(),
+            vec![0x00; 8],
+        );
+
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, fs).unwrap();
+        let node = vfs
+            .open(AbsolutePath::try_new("/foo/bar.txt").unwrap())
+            .unwrap();
+
+        let mut stat = Stat::default();
+        assert_eq!(Ok(()), node.stat(&mut stat));
+        assert_eq!(8, stat.size);
+    }
+
+    #[test]
     fn test_mount() {
         let mut fs = TestFs::default();
         fs.insert_file(
             AbsolutePath::try_new("/foo/bar.txt").unwrap(),
             vec![0x00; 1],
-            Stat::default(),
         );
 
         let mut vfs = Vfs::new();
@@ -193,7 +209,7 @@ mod tests {
     #[test]
     fn test_open_mount_point_opens_fs_root() {
         let mut fs = TestFs::default();
-        fs.insert_file(ROOT, vec![0x00; 1], Stat::default());
+        fs.insert_file(ROOT, vec![0x00; 1]);
 
         let mut vfs = Vfs::new();
         vfs.mount(ROOT, TestFs::default()).unwrap();
@@ -206,11 +222,7 @@ mod tests {
     #[test]
     fn test_open_ignores_repeated_separators() {
         let mut fs = TestFs::default();
-        fs.insert_file(
-            AbsolutePath::try_new("/x").unwrap(),
-            vec![0x00; 1],
-            Stat::default(),
-        );
+        fs.insert_file(AbsolutePath::try_new("/x").unwrap(), vec![0x00; 1]);
 
         let mut vfs = Vfs::new();
         vfs.mount(ROOT, TestFs::default()).unwrap();
@@ -240,17 +252,9 @@ mod tests {
     #[test]
     fn test_open_strips_mount_prefix() {
         let mut root_fs = TestFs::default();
-        root_fs.insert_file(
-            AbsolutePath::try_new("/dev/x").unwrap(),
-            vec![0xAA; 1],
-            Stat::default(),
-        );
+        root_fs.insert_file(AbsolutePath::try_new("/dev/x").unwrap(), vec![0xAA; 1]);
         let mut dev_fs = TestFs::default();
-        dev_fs.insert_file(
-            AbsolutePath::try_new("/x").unwrap(),
-            vec![0xBB; 1],
-            Stat::default(),
-        );
+        dev_fs.insert_file(AbsolutePath::try_new("/x").unwrap(), vec![0xBB; 1]);
 
         let mut vfs = Vfs::new();
         vfs.mount(ROOT, root_fs).unwrap();
@@ -271,11 +275,7 @@ mod tests {
     #[test]
     fn test_unmount() {
         let mut fs = TestFs::default();
-        fs.insert_file(
-            AbsolutePath::try_new("/x").unwrap(),
-            vec![0x00; 1],
-            Stat::default(),
-        );
+        fs.insert_file(AbsolutePath::try_new("/x").unwrap(), vec![0x00; 1]);
         let dev = AbsolutePath::try_new("/dev").unwrap();
 
         let mut vfs = Vfs::new();
@@ -294,11 +294,7 @@ mod tests {
     #[test]
     fn test_open_missing_file() {
         let mut fs = TestFs::default();
-        fs.insert_file(
-            AbsolutePath::try_new("/x").unwrap(),
-            vec![0x00; 1],
-            Stat::default(),
-        );
+        fs.insert_file(AbsolutePath::try_new("/x").unwrap(), vec![0x00; 1]);
 
         let mut vfs = Vfs::new();
         vfs.mount(ROOT, fs).unwrap();

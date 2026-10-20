@@ -212,12 +212,13 @@ pub mod testing {
 
             let file = guard.open_fds.get(&fd).ok_or(EBADF)?;
             let mut data = file.data.write();
-            let file_len = data.len();
-            let need_max_len = fd.position.load(Relaxed) + buf.len();
-            if need_max_len > file_len {
-                data.resize(need_max_len, 0);
+            let position = fd.position.load(Relaxed);
+            let end = position + buf.len();
+            if end > data.len() {
+                data.resize(end, 0);
             }
-            let _ = fd.position.fetch_add(buf.len(), Relaxed);
+            data[position..end].copy_from_slice(buf);
+            fd.position.store(end, Relaxed);
             Ok(buf.len())
         }
 
