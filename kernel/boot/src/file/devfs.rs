@@ -25,7 +25,7 @@ pub fn init() {
             })
             .expect("should be able to register serial file");
 
-        // TODO: implement proper STDIO
+        // shortcut: stdin reads EOF and stdout/stderr go to the serial port, until a terminal device exists
         guard
             .register_file(AbsolutePath::try_new("/stdin").unwrap(), || Ok(Null))
             .expect("should be able to register stdin");
