@@ -4,7 +4,8 @@
 use core::time::Duration;
 
 use minilib::{
-    SaFlags, SigAction, SigHandler, SigSet, Signal, getpid, nanosleep, println, shutdown, sigaction,
+    SaFlags, SigAction, SigHandler, SigSet, Signal, exit, getpid, nanosleep, println, shutdown,
+    sigaction,
 };
 
 fn victim() -> ! {
@@ -16,7 +17,10 @@ fn victim() -> ! {
         flags: SaFlags::default(),
         restorer: 0,
     };
-    let _ = sigaction(Signal::Terminate, Some(&action), None);
+    if let Err(e) = sigaction(Signal::Terminate, Some(&action), None) {
+        println!("term-ignorer: FAIL sigaction {e}");
+        exit(1);
+    }
 
     println!("term-ignorer: ignoring sigterm");
 

@@ -189,9 +189,15 @@ fn forged_sigreturn() {
 fn role_b() {
     println!("B: start");
 
-    let _ = install_handler(Signal::Segfault, b_segv_handler);
+    if let Err(e) = install_handler(Signal::Segfault, b_segv_handler) {
+        println!("B: FAIL install_handler {e}");
+        return;
+    }
     let segv = Signal::Segfault.bit();
-    let _ = sigprocmask(SigMaskHow::Block, Some(&segv), None);
+    if let Err(e) = sigprocmask(SigMaskHow::Block, Some(&segv), None) {
+        println!("B: FAIL sigprocmask {e}");
+        return;
+    }
 
     println!("B: blocked fault next");
     let null = core::ptr::null::<u8>();
