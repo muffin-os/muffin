@@ -12,13 +12,14 @@ static RAW_DEVICES: RwLock<RawDeviceRegistry<KernelDeviceId>> =
 pub struct RawDevices;
 
 impl RawDevices {
-    #[expect(clippy::missing_errors_doc)] // TODO: add documentation
+    /// # Errors
+    /// Returns `AlreadyRegistered` if a device with the same id is registered.
     pub fn register_raw_device<D>(device: Arc<RwLock<D>>) -> Result<(), RegisterDeviceError>
     where
         D: RawDevice<KernelDeviceId> + 'static,
     {
         RAW_DEVICES.write().register_device(device)?;
-        // TODO: create a vfs entry for this device
+        // TODO(tpdenk): expose raw devices in devfs the way register_block_device does
         Ok(())
     }
 }
