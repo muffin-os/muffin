@@ -329,7 +329,7 @@ mod tests {
     fn test_allocate_deallocate_2mib() {
         let region = MemoryRegion::new(0, 1024, FrameState::Free); // 4MiB
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
-        let small_frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap(); // force alignment
+        let small_frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
         let frame1: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
         assert_eq!(512 * 4096, frame1.start_address().as_u64());
@@ -347,7 +347,7 @@ mod tests {
     fn test_allocate_deallocate_1gib() {
         let region = MemoryRegion::new(0, 512 * 512 * 2, FrameState::Free); // 2GiB
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
-        let small_frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap(); // force alignment
+        let small_frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
         let frame1: PhysFrame<Size1GiB> = pmm.allocate_frame().unwrap();
         assert_eq!(1024 * 1024 * 1024, frame1.start_address().as_u64());
@@ -385,7 +385,6 @@ mod tests {
 
     #[test]
     fn test_sparse_multiple_regions() {
-        // Create manager with two separate regions
         let region1 = MemoryRegion::new(0x0000_0000, 4, FrameState::Free);
         let region2 = MemoryRegion::new(0x1000_0000, 4, FrameState::Free);
         let pmm = PhysicalMemoryManager::new(vec![region1, region2]);
@@ -399,19 +398,16 @@ mod tests {
 
     #[test]
     fn test_sparse_allocate_deallocate() {
-        // Create sparse manager with gaps between regions
         let region1 = MemoryRegion::new(0x0000_0000, 4, FrameState::Free);
         let region2 = MemoryRegion::new(0x1000_0000, 4, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
 
-        // Allocate from first region
         let frame1: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x0000, frame1.start_address().as_u64());
 
         let frame2: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x1000, frame2.start_address().as_u64());
 
-        // Deallocate and reallocate
         assert_eq!(Some(frame1), pmm.deallocate_frame(frame1));
         let frame3: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(frame1.start_address(), frame3.start_address());
@@ -419,85 +415,65 @@ mod tests {
 
     #[test]
     fn test_sparse_with_preallocated_frames() {
-        // Create a region with some frames already allocated
         let mut region = MemoryRegion::new(0x0000_0000, 8, FrameState::Free);
-        // Pre-allocate frames 1, 3, 5
         region.frames_mut()[1] = FrameState::Allocated;
         region.frames_mut()[3] = FrameState::Allocated;
         region.frames_mut()[5] = FrameState::Allocated;
 
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
-        // First free should be frame 0
         let frame1: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x0000, frame1.start_address().as_u64());
 
-        // Next should be frame 2 (frame 1 is allocated)
         let frame2: PhysFrame<Size4KiB> = PhysicalFrameAllocator::allocate_frame(&mut pmm).unwrap();
         assert_eq!(0x2000, frame2.start_address().as_u64());
     }
 
     #[test]
     fn test_first_free_maintained_on_allocate() {
-        // Test that allocate() correctly updates first_free
         let region = MemoryRegion::new(0, 10, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
-        // Initially, first_free should point to frame 0
         assert_eq!(pmm.first_free.unwrap().region_idx, 0);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
 
-        // Allocate frame 0
         let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // first_free should now point to frame 1
         assert_eq!(pmm.first_free.unwrap().region_idx, 0);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
 
-        // Allocate frame 1
         let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // first_free should now point to frame 2
         assert_eq!(pmm.first_free.unwrap().region_idx, 0);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 2);
     }
 
     #[test]
     fn test_first_free_maintained_on_deallocate() {
-        // Test that deallocate() correctly updates first_free when deallocating before current first_free
         let region = MemoryRegion::new(0, 10, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
-        // Allocate several frames
         let frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         let frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         let frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // first_free should be at frame 3 now
         assert_eq!(pmm.first_free.unwrap().frame_idx, 3);
 
-        // Deallocate frame2 (which is before first_free)
         pmm.deallocate_frame(frame2).unwrap();
 
-        // first_free should now point to frame2
         assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
 
-        // Deallocate frame1 (which is before current first_free)
         pmm.deallocate_frame(frame1).unwrap();
 
-        // first_free should now point to frame1
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
 
-        // Deallocate frame3 (which is after first_free)
         pmm.deallocate_frame(frame3).unwrap();
 
-        // first_free should still point to frame1
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
     }
 
     #[test]
     fn test_first_free_all_frames_allocated() {
-        // Test that first_free becomes None when all frames are allocated
         let region = MemoryRegion::new(0, 3, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
@@ -505,115 +481,83 @@ mod tests {
         let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // All frames allocated, first_free should be None
         assert!(pmm.first_free.is_none());
 
-        // Try to allocate - should fail
         let result: Option<PhysFrame<Size4KiB>> = PhysicalFrameAllocator::allocate_frame(&mut pmm);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_first_free_across_regions() {
-        // Test that first_free correctly transitions between regions
         let region1 = MemoryRegion::new(0x0000_0000, 2, FrameState::Free);
         let region2 = MemoryRegion::new(0x1000_0000, 2, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
 
-        // first_free should be in region 0, frame 0
         assert_eq!(pmm.first_free.unwrap().region_idx, 0);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
 
-        // Allocate all frames from region 0
         let _frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         let _frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // first_free should now be in region 1, frame 0
         assert_eq!(pmm.first_free.unwrap().region_idx, 1);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
 
-        // Allocate from region 1
         let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // first_free should be in region 1, frame 1
         assert_eq!(pmm.first_free.unwrap().region_idx, 1);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
     }
 
     #[test]
     fn test_first_free_deallocate_to_earlier_region() {
-        // Test that deallocating in an earlier region updates first_free
         let region1 = MemoryRegion::new(0x0000_0000, 2, FrameState::Free);
         let region2 = MemoryRegion::new(0x1000_0000, 2, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region1, region2]);
 
-        // Allocate all frames from region 0
         let frame1: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         let frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // Allocate from region 1
         let _frame3: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
 
-        // first_free should be in region 1
         assert_eq!(pmm.first_free.unwrap().region_idx, 1);
 
-        // Deallocate a frame from region 0
         pmm.deallocate_frame(frame1).unwrap();
 
-        // first_free should now be in region 0
         assert_eq!(pmm.first_free.unwrap().region_idx, 0);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
 
-        // Deallocate another frame from region 0 (after the current first_free)
         pmm.deallocate_frame(frame2).unwrap();
 
-        // first_free should still be at region 0, frame 0
         assert_eq!(pmm.first_free.unwrap().region_idx, 0);
         assert_eq!(pmm.first_free.unwrap().frame_idx, 0);
     }
 
     #[test]
     fn test_allocate_2mib_with_misaligned_first_free() {
-        // Test that allocating a 2MiB frame works even when first_free points to
-        // a 4KiB frame that is not 2MiB aligned. This tests that the allocator
-        // correctly skips to the next aligned position.
-
-        // Create a region with 1024 frames (4MiB total)
         let region = MemoryRegion::new(0, 1024, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
-        // Allocate one 4KiB frame to make first_free not 2MiB aligned
         let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0, small_frame.start_address().as_u64());
 
-        // first_free should now be at index 1, which is NOT 2MiB aligned
         assert_eq!(pmm.first_free.unwrap().frame_idx, 1);
 
-        // Try to allocate a 2MiB frame - this should succeed by finding the next
-        // 2MiB aligned position (at frame index 512, address 0x200000)
         let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
 
-        // The 2MiB frame should start at the next 2MiB aligned address (0x200000)
         assert_eq!(512 * 4096, large_frame.start_address().as_u64());
 
-        // Verify we can still allocate from the gap (frames 1-511)
         let small_frame2: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         assert_eq!(4096, small_frame2.start_address().as_u64());
     }
 
     #[test]
     fn test_allocate_2mib_from_misaligned_region() {
-        // Test allocating 2MiB frames from a region whose base address is NOT 2MiB aligned
-        // Region starts at 4KiB (0x1000), so first 2MiB-aligned address is at 0x200000
-        let region = MemoryRegion::new(0x1000, 1024, FrameState::Free); // Starts at 4KiB
+        let region = MemoryRegion::new(0x1000, 1024, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
-        // Try to allocate a 2MiB frame - should start at first 2MiB aligned address (0x200000)
-        // That's frame index 511 in the region (0x200000 - 0x1000 = 0x1FF000 = 511 * 4KiB)
         let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0x200000, large_frame.start_address().as_u64());
 
-        // Verify frames before the 2MiB frame are still available
         let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0x1000, small_frame.start_address().as_u64());
     }
@@ -621,32 +565,25 @@ mod tests {
     #[cfg(not(miri))] // this takes a while
     #[test]
     fn test_allocate_1gib_from_misaligned_region() {
-        // Test allocating 1GiB frames from a region whose base address is NOT 1GiB aligned
-        // Region starts at 2MiB (0x200000), so first 1GiB-aligned address is at 0x40000000
-        // We need enough frames: (0x40000000 - 0x200000) / 4096 + (1GiB / 4096) frames
-        let frames_before_aligned = (0x40000000 - 0x200000) / 4096; // 261632 frames
-        let frames_for_1gib = (1024 * 1024 * 1024) / 4096; // 262144 frames
+        let frames_before_aligned = (0x40000000 - 0x200000) / 4096;
+        let frames_for_1gib = (1024 * 1024 * 1024) / 4096;
         let total_frames = frames_before_aligned + frames_for_1gib;
 
         let region = MemoryRegion::new(0x200000, total_frames as usize, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
-        // Try to allocate a 1GiB frame - should start at first 1GiB aligned address (0x40000000)
         let large_frame: PhysFrame<Size1GiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0x40000000, large_frame.start_address().as_u64());
 
-        // Verify frames before the 1GiB frame are still available
         let small_frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0x200000, small_frame.start_address().as_u64());
     }
 
     #[test]
     fn test_allocate_2mib_from_perfectly_aligned_region() {
-        // Test that allocation still works correctly when region IS properly aligned
-        let region = MemoryRegion::new(0x200000, 1024, FrameState::Free); // Starts at 2MiB
+        let region = MemoryRegion::new(0x200000, 1024, FrameState::Free);
         let mut pmm = PhysicalMemoryManager::new(vec![region]);
 
-        // Should allocate immediately at the start since it's already aligned
         let large_frame: PhysFrame<Size2MiB> = pmm.allocate_frame().unwrap();
         assert_eq!(0x200000, large_frame.start_address().as_u64());
     }
