@@ -373,11 +373,8 @@ fn dispatch_sys_lseek(fd: usize, offset: usize, whence: usize) -> Result<usize, 
     sys_lseek(&cx, fd, offset as i64, whence)
 }
 
-/// POSIX clock_gettime backed by the HPET main counter
-///
-/// hpet() panics only before HPET init, but syscalls only run long after init, so it cannot panic here
+/// POSIX clock_gettime backed by the HPET main counter.
 fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno> {
-    // elapsed_ns converts main counter ticks to ns since boot using the HPET period
     let ns = u128::from(hpet().read().elapsed_ns());
 
     let secs_since_boot = ns / 1_000_000_000;
@@ -399,8 +396,7 @@ fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno>
     Ok(0)
 }
 
-/// POSIX nanosleep backed by the HPET main counter and the timer tick sweep,
-/// so wake precision is one LAPIC tick.
+/// POSIX nanosleep. Wake precision is one LAPIC tick.
 fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
     let ts = read_user::<Timespec>(req)?;
     if ts.tv_sec < 0 || !(0..1_000_000_000).contains(&ts.tv_nsec) {
