@@ -30,13 +30,12 @@ fn sleep_ms(ms: u64) -> Result<(), Errno> {
     nanosleep(&req, None)
 }
 
-/// Spinning keeps the victim in user mode, so the only delivery opportunity
-/// is a timer tick with a Ring 3 frame. A blocking wait would shift delivery
-/// to the syscall return path and this test would silently stop covering
-/// tick delivery.
 fn victim() -> i32 {
     let _ = install_handler(Signal::Terminate, term_handler);
 
+    // Spinning keeps the victim in user mode, so only a timer tick with a ring 3
+    // frame can deliver the handler. Sleeping would move delivery to the syscall
+    // return path.
     loop {
         busy_delay_n(PUMP_SPIN);
         if TERMINATED.load(Ordering::SeqCst) {
@@ -45,10 +44,9 @@ fn victim() -> i32 {
     }
 }
 
-/// The settle delay must outlast handler installation, so the kernel's SIGTERM
-/// broadcast can never beat the victim's sigaction and kill it by default
-/// action instead.
 fn driver() -> ! {
+    // Outlasts the victim's sigaction, so the shutdown's SIGTERM broadcast never
+    // finds the default action.
     let _ = sleep_ms(2_000);
     minilib::shutdown()
 }

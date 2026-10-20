@@ -51,9 +51,9 @@ fn victim() {
     }
 }
 
-/// The settle delay must outlast the victim's whole happy path, so the kill
-/// can only arrive while the victim sits inside the 10s sleep.
 fn driver() {
+    // Outlasts the victim's whole happy path, so the kill can only land inside
+    // its 10s sleep.
     let _ = sleep_ms(2_000);
     let _ = kill(1, Signal::Urgent);
 }

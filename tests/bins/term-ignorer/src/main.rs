@@ -32,9 +32,9 @@ fn victim() -> ! {
     }
 }
 
-/// The settle delay must outlast the victim installing the ignore disposition,
-/// otherwise the sweep could find a process still using the default action.
 fn driver() -> ! {
+    // Outlasts the victim's sigaction, so the shutdown's SIGTERM broadcast never
+    // finds the default action.
     let _ = sleep_ms(2_000);
     shutdown()
 }

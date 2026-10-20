@@ -20,21 +20,19 @@ fn sleep_ms(ms: u64) -> Result<(), Errno> {
     nanosleep(&req, None)
 }
 
-/// Sleeping keeps the victim inside the kernel, so a user-mode timer tick can
-/// never deliver the handler. A spinning wait here would silently stop
-/// covering the syscall return path.
 fn victim() -> i32 {
     let _ = install_handler(Signal::Terminate, term_handler);
+    // Sleeping keeps the victim inside the kernel, so only the syscall return
+    // path can deliver the handler. Spinning would move delivery to the tick.
     while !TERMINATED.load(Ordering::SeqCst) {
         let _ = sleep_ms(10_000);
     }
     0
 }
 
-/// The settle delay must outlast handler installation, so the kernel's SIGTERM
-/// broadcast can never beat the victim's sigaction and kill it by the default
-/// action.
 fn driver() -> ! {
+    // Outlasts the victim's sigaction, so the shutdown's SIGTERM broadcast never
+    // finds the default action.
     let _ = sleep_ms(2_000);
     minilib::shutdown()
 }
