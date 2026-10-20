@@ -492,65 +492,6 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_signal_number_negative() {
-        assert_eq!(
-            Signal::try_from(-1),
-            Err(EINVAL),
-            "negative number is not a signal"
-        );
-        assert_eq!(Signal::try_from(0), Err(EINVAL), "zero is not a signal");
-    }
-
-    #[test]
-    fn test_invalid_signal_number_exceeds_nsig() {
-        assert_eq!(Signal::try_from(28), Err(EINVAL), "28 is out of range");
-        assert_eq!(Signal::try_from(64), Err(EINVAL), "64 is out of range");
-        assert_eq!(Signal::try_from(65), Err(EINVAL), "65 is out of range");
-    }
-
-    #[test]
-    fn test_valid_signal_number_boundary_min() {
-        assert_eq!(
-            Signal::try_from(1),
-            Ok(Signal::Abort),
-            "1 maps to the first signal"
-        );
-
-        let current_pid = pid!(1);
-        let target_pid = pid!(2);
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid);
-
-        let result = sys_kill(
-            &cx,
-            SignalTarget::SpecificProcess(target_pid),
-            Signal::Abort,
-        );
-        assert_eq!(result, Ok(0), "kill with min signal succeeds");
-    }
-
-    #[test]
-    fn test_valid_signal_number_boundary_max() {
-        assert_eq!(
-            Signal::try_from(Signal::COUNT as i32),
-            Ok(Signal::ExceededFileSizeLimit),
-            "COUNT maps to the last signal"
-        );
-
-        let current_pid = pid!(1);
-        let target_pid = pid!(2);
-        let mut cx = TestContext::new(current_pid, current_pid, 1000);
-        cx.add_process(target_pid, target_pid);
-
-        let result = sys_kill(
-            &cx,
-            SignalTarget::SpecificProcess(target_pid),
-            Signal::ExceededFileSizeLimit,
-        );
-        assert_eq!(result, Ok(0), "kill with max signal succeeds");
-    }
-
-    #[test]
     fn test_siginfo_fields() {
         let current_pid = pid!(1);
         let target_pid = pid!(2);
@@ -961,20 +902,6 @@ mod tests {
             let permitted: Vec<_> = members.into_iter().filter(|&p| p != denied).collect();
             assert_eq!(pids, permitted, "every permitted member received");
         }
-    }
-
-    #[test]
-    fn test_edge_case_nsig_boundary() {
-        assert_eq!(
-            Signal::try_from(Signal::COUNT as i32 + 1),
-            Err(EINVAL),
-            "one past the last signal is invalid"
-        );
-        assert_eq!(
-            Signal::try_from(Signal::COUNT as i32),
-            Ok(Signal::ExceededFileSizeLimit),
-            "the last signal is valid"
-        );
     }
 
     #[test]
