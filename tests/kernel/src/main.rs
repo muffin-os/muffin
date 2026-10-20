@@ -17,13 +17,15 @@ use kernel::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use kernel::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use kernel::mcore::mtask::task::Task;
 use kernel::mem::address_space::AddressSpace;
+use kernel::mem::heap::Heap;
 use kernel::mem::phys::PhysicalMemory;
 use kernel::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use kernel_ext2::Ext2Fs;
 use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
+use kernel_virtual_memory::Segment;
 use tracing::info;
-use x86_64::structures::paging::{Page, PageTableFlags, Size4KiB};
+use x86_64::structures::paging::{Page, PageSize, PageTableFlags, Size4KiB};
 
 /// Boots the real kernel, mounts the root ext2 filesystem, then spawns one
 /// process per line of the `/spawn` manifest baked into the disk image. Each
@@ -96,6 +98,22 @@ unsafe extern "C" fn main() -> ! {
         kernel::serial_println!(
             "test-kernel: map-range rollback still_mapped={}",
             still_mapped
+        );
+    }
+
+    // The heap's end bounds are kernel-internal, so this probe reports whether
+    // a page past the heap end is mapped and whether the heap's last page is
+    // reserved in the higher-half manager.
+    if AbsolutePath::try_new("/heap-bounds").is_ok_and(|marker| vfs().write().open(marker).is_ok())
+    {
+        let end = Heap::bottom() + Heap::size() as u64;
+        let past_end_mapped = AddressSpace::kernel().translate(end).is_some();
+        let last_page = Segment::new(end - Size4KiB::SIZE, Size4KiB::SIZE);
+        let last_page_reserved = VirtualMemoryHigherHalf.mark_as_reserved(last_page).is_err();
+        kernel::serial_println!(
+            "test-kernel: heap bounds past_end_mapped={} last_page_reserved={}",
+            past_end_mapped,
+            last_page_reserved
         );
     }
 

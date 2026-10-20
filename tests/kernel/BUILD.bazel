@@ -15,6 +15,7 @@ rust_binary(
         kernel_crate_label("device"),
         kernel_crate_label("ext2"),
         kernel_crate_label("vfs"),
+        kernel_crate_label("virtual_memory"),
         crate_label("spin"),
         crate_label("tracing"),
         crate_label("x86_64"),

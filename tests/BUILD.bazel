@@ -74,6 +74,15 @@ ext2_image(
 )
 
 ext2_image(
+    name = "heap_bounds_disk",
+    contents = {
+        "heap-bounds": "1\n",
+        "spawn": "/bin/exit-code\n",
+    },
+    files = {"//tests/bins:exit_code": "bin/exit-code"},
+)
+
+ext2_image(
     name = "kstack_overflow_disk",
     contents = {
         "kernel-stack-overflow": "1\n",
@@ -222,6 +231,7 @@ ext2_image(
         "fb_mmap",
         "file_read",
         "floats",
+        "heap_bounds",
         "kstack_overflow",
         "map_range_rollback",
         "mmap",

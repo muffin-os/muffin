@@ -5,6 +5,7 @@ use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering::Relaxed;
 
 use conquer_once::spin::OnceCell;
+use kernel_virtual_memory::Segment;
 use tracing::info;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::page::PageRangeInclusive;
@@ -12,6 +13,7 @@ use x86_64::structures::paging::{Page, PageTableFlags, Size2MiB, Size4KiB};
 
 use crate::mem::address_space::{AddressSpace, virt_addr_from_page_table_indices};
 use crate::mem::phys::PhysicalMemory;
+use crate::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 
 static HEAP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HEAP_START: VirtAddr = virt_addr_from_page_table_indices([257, 0, 0, 0], 0);
@@ -165,11 +167,18 @@ pub(in crate::mem) fn init_stage2() {
     let initial_heap_size = heap_sizes.initial();
     let total_heap_size = heap_sizes.total();
 
-    let new_start = HEAP_START + initial_heap_size as u64;
+    let extension = Segment::new(
+        HEAP_START + initial_heap_size as u64,
+        (total_heap_size - initial_heap_size) as u64,
+    );
+    let _ = VirtualMemoryHigherHalf
+        .mark_as_reserved(extension)
+        .expect("heap extension should not be reserved yet")
+        .leak();
 
     let page_range = PageRangeInclusive::<Size2MiB> {
-        start: Page::containing_address(new_start),
-        end: Page::containing_address(new_start + (total_heap_size - initial_heap_size) as u64),
+        start: Page::containing_address(extension.start),
+        end: Page::containing_address(extension.last()),
     };
 
     let address_space = AddressSpace::kernel();
