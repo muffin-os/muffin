@@ -37,7 +37,7 @@ pub struct Ext2Fs<T> {
 }
 
 const SUPERBLOCK_OFFSET: usize = 1024;
-const BGD_SIZE: usize = 32; // 32 bytes per block group descriptor
+const BGD_SIZE: usize = 32;
 
 impl<T> Ext2Fs<T>
 where
@@ -109,7 +109,9 @@ where
     }
 
     pub fn read_inode(&self, addr: InodeAddress) -> Result<(InodeAddress, Inode), Error> {
-        // FIXME: reading the inode will create multiple copies that alias the data in the block device, there needs to be some kind of cache that centralizes the inodes (and their data)
+        // shortcut: every call returns a fresh copy, so two live copies of one
+        // inode overwrite each other's writes. Centralize inodes in a cache
+        // before anything holds two handles to the same file.
         let inodes_per_group = self.superblock.inodes_per_group();
         let block_group_index = (addr.get() - 1) / inodes_per_group;
         let block_group = &self.bgdt[block_group_index as usize];
