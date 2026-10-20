@@ -117,10 +117,6 @@ impl PhysicalMemoryManager {
             };
 
             let region = &self.regions[region_idx];
-            if search_start >= region.len() {
-                continue;
-            }
-
             let Some(start_addr) = region.frame_address(search_start) else {
                 continue;
             };
