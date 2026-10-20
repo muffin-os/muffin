@@ -27,11 +27,7 @@ impl TryFrom<usize> for ConfigKey<u8> {
     type Error = usize;
 
     fn try_from(value: usize) -> Result<Self, Self::Error> {
-        if value > u8::MAX as usize {
-            Err(value)
-        } else {
-            Ok(ConfigKey::new(value as u8))
-        }
+        u8::try_from(value).map(ConfigKey::new).map_err(|_| value)
     }
 }
 
@@ -43,11 +39,7 @@ impl TryFrom<usize> for ConfigKey<u16> {
             return Err(value);
         }
 
-        if value > u16::MAX as usize {
-            Err(value)
-        } else {
-            Ok(ConfigKey::new(value as u8))
-        }
+        u8::try_from(value).map(ConfigKey::new).map_err(|_| value)
     }
 }
 
@@ -59,11 +51,7 @@ impl TryFrom<usize> for ConfigKey<u32> {
             return Err(value);
         }
 
-        if value > u32::MAX as usize {
-            Err(value)
-        } else {
-            Ok(ConfigKey::new(value as u8))
-        }
+        u8::try_from(value).map(ConfigKey::new).map_err(|_| value)
     }
 }
 
@@ -157,3 +145,27 @@ const _: () = {
     const fn _assert_configs<T: ConfigurationAccess>() {}
     _assert_configs::<Box<dyn ConfigurationAccess>>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_from_rejects_offsets_above_u8() {
+        assert_eq!(ConfigKey::<u16>::try_from(0x104), Err(0x104));
+        assert_eq!(ConfigKey::<u32>::try_from(0x104), Err(0x104));
+    }
+
+    #[test]
+    fn try_from_rejects_misaligned_offsets() {
+        assert_eq!(ConfigKey::<u16>::try_from(0x11), Err(0x11));
+        assert_eq!(ConfigKey::<u32>::try_from(0x12), Err(0x12));
+    }
+
+    #[test]
+    fn try_from_accepts_aligned_offsets() {
+        assert_eq!(ConfigKey::<u8>::try_from(0xFF), Ok(ConfigKey::new(0xFF)));
+        assert_eq!(ConfigKey::<u16>::try_from(0xFE), Ok(ConfigKey::new(0xFE)));
+        assert_eq!(ConfigKey::<u32>::try_from(0xFC), Ok(ConfigKey::new(0xFC)));
+    }
+}
