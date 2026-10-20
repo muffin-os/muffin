@@ -1,6 +1,4 @@
 //! Terminal ACPI power-off.
-//!
-//! Separate crate to make sure this doesn't allocate.
 
 #![no_std]
 #![feature(never_type)]
@@ -14,10 +12,10 @@ pub struct Pm1Ports {
     pub b: Option<u16>,
 }
 
-/// SLP_EN bit of the PM1 control register (ACPI spec "PM1 Control Registers
-/// Fixed Hardware Feature Control Bits"). SLP_TYP (bits 10..=12) stays 0
-/// because QEMU's \_S5 sleep type is 0 and reading the real value needs an
-/// AML interpreter, which the kernel does not have.
+// SLP_EN bit of the PM1 control register (ACPI spec "PM1 Control Registers
+// Fixed Hardware Feature Control Bits").
+// shortcut: SLP_TYP (bits 10..=12) is left 0, which is QEMU's \_S5 value,
+// until the kernel has an AML interpreter to read the real one from the DSDT.
 const SLP_EN: u16 = 1 << 13;
 
 /// The hardware ignored the SLP_EN write, so the machine is still running.
