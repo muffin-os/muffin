@@ -63,7 +63,6 @@ pub struct KernelMapping {
 }
 
 impl KernelMapping {
-    /// Convert this mapping into a MemoryRegion handle that can be tracked by the process.
     pub fn into_region_handle(self) -> KernelMemoryRegionHandle {
         let addr = self
             .addr
