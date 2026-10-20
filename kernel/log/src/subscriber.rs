@@ -28,7 +28,6 @@ const SPAN_STACK_DEPTH: usize = 16;
 
 static FILTER: OnceCell<Filter> = OnceCell::uninit();
 
-/// All live span data. See [`SpanPool`].
 static SPAN_POOL: Mutex<SpanPool> = Mutex::new(SpanPool::new());
 
 /// The services a [`SpanSubscriber`] needs from its surroundings.
@@ -75,7 +74,6 @@ fn filter() -> &'static Filter {
     FILTER.try_get().expect("log filter is not initialized")
 }
 
-/// Runs `f` against the span pool inside a critical section.
 fn with_spans<E: Environment, R>(f: impl FnOnce(&mut SpanPool) -> R) -> R {
     E::critical(|| f(&mut SPAN_POOL.lock()))
 }
@@ -385,7 +383,6 @@ impl<E: Environment> Subscriber for SpanSubscriber<E> {
     }
 }
 
-/// Writes only the `message` field into `out`.
 struct MessageVisitor<'a, W: Write + ?Sized> {
     out: &'a mut W,
 }
@@ -404,7 +401,7 @@ impl<W: Write + ?Sized> Visit for MessageVisitor<'_, W> {
     }
 }
 
-/// Writes every field except `message` into `out` as a dim `key=value` pair.
+// Skips `message`, which MessageVisitor renders.
 struct FieldVisitor<'a, W: Write + ?Sized> {
     out: &'a mut W,
 }
