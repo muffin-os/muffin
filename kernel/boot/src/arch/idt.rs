@@ -24,14 +24,10 @@ use crate::syscall::dispatch_syscall;
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum InterruptIndex {
-    /// 32
     Timer = 0x20,
-    /// 48
     Halt = 0x30,
-    /// 49
     LapicErr = 0x31,
     Syscall = 0x80,
-    /// 255
     Spurious = 0xff,
 }
 
