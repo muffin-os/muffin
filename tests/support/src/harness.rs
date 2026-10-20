@@ -17,7 +17,7 @@
 //! leading log prefix (timestamp, level, target) by anchoring on a substring
 //! inside the payload rather than matching from the start.
 
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -195,7 +195,8 @@ impl KernelTest {
                 None => deadline - now,
             };
             match rx.recv_timeout(timeout) {
-                Ok(line) => {
+                Ok(Err(e)) => fail(&transcript, &mut child, format!("serial read failed: {e}")),
+                Ok(Ok(line)) => {
                     if line.contains("kernel panicked") {
                         transcript.push(line.clone());
                         fail(
@@ -289,7 +290,8 @@ impl KernelTest {
                 );
             }
             match rx.recv_timeout(deadline - now) {
-                Ok(line) => {
+                Ok(Err(e)) => fail(&transcript, &mut child, format!("serial read failed: {e}")),
+                Ok(Ok(line)) => {
                     if line.contains("kernel panicked") {
                         transcript.push(line.clone());
                         fail(
@@ -324,24 +326,31 @@ impl KernelTest {
 }
 
 /// Takes the child's stdout and streams serial lines over a channel until
-/// QEMU closes the pipe.
-fn spawn_serial_reader(child: &mut Child) -> (mpsc::Receiver<String>, thread::JoinHandle<()>) {
+/// QEMU closes the pipe or a read fails, which is sent as the last item.
+fn spawn_serial_reader(
+    child: &mut Child,
+) -> (mpsc::Receiver<io::Result<String>>, thread::JoinHandle<()>) {
     let stdout = child.stdout.take().expect("child stdout was not captured");
-    let (tx, rx) = mpsc::channel::<String>();
-    let reader = thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(line) => {
-                    if tx.send(line).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || read_serial_lines(stdout, &tx));
     (rx, reader)
+}
+
+fn read_serial_lines(from: impl Read, tx: &mpsc::Sender<io::Result<String>>) {
+    // Lines are split on raw bytes and decoded lossily, so one stray byte
+    // cannot drop the rest of the transcript the way `lines()` would.
+    for line in BufReader::new(from).split(b'\n') {
+        let line = line.map(|mut bytes| {
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        });
+        let failed = line.is_err();
+        if tx.send(line).is_err() || failed {
+            break;
+        }
+    }
 }
 
 /// Stages a runfiles image at `dest`, writable, and returns `dest`.
@@ -555,6 +564,15 @@ fn anchor_after<'a>(line: &'a str, anchor: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_utf8_byte_does_not_truncate_the_transcript() {
+        let (tx, rx) = mpsc::channel();
+        read_serial_lines(io::Cursor::new(b"ok\n\xffbad\r\nafter\n".to_vec()), &tx);
+        drop(tx);
+        let lines: Vec<String> = rx.iter().map(Result::unwrap).collect();
+        assert_eq!(lines, ["ok", "\u{fffd}bad", "after"]);
+    }
 
     #[test]
     fn parse_outcome_reads_exit_and_signal() {

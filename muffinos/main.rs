@@ -207,14 +207,17 @@ fn forward_kernel_output(mut from: impl std::io::Read, mut to: impl std::io::Wri
     let mut forwarding = false;
 
     loop {
-        let n = match from.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => n,
+        let n = match from
+            .read(&mut chunk)
+            .expect("unable to read qemu serial output")
+        {
+            0 => break,
+            n => n,
         };
         if forwarding {
             to.write_all(&chunk[..n])
                 .expect("unable to write serial output");
-            let _ = to.flush();
+            to.flush().expect("unable to write serial output");
             continue;
         }
 
@@ -226,20 +229,21 @@ fn forward_kernel_output(mut from: impl std::io::Read, mut to: impl std::io::Wri
             forwarding = true;
             to.write_all(&pending[start..])
                 .expect("unable to write serial output");
-            let _ = to.flush();
+            to.flush().expect("unable to write serial output");
             pending = vec![];
         } else if pending.len() > GATE_LIMIT {
             forwarding = true;
             to.write_all(&pending)
                 .expect("unable to write serial output");
-            let _ = to.flush();
+            to.flush().expect("unable to write serial output");
             pending = vec![];
         }
     }
 
     if !forwarding {
         // The kernel never came up. Show what the firmware had to say.
-        let _ = to.write_all(&pending);
-        let _ = to.flush();
+        to.write_all(&pending)
+            .expect("unable to write serial output");
+        to.flush().expect("unable to write serial output");
     }
 }
