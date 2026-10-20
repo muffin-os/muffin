@@ -1,16 +1,9 @@
 //! A fully static, alloc-free tracing subscriber.
 //!
-//! The logging path must never allocate: in the kernel it runs in contexts
-//! where the heap is unavailable (AP bring-up logs before the address-space
-//! switch, so only statics from the kernel image are mapped) and in contexts
-//! where an allocation can deadlock (an interrupt handler logging while the
-//! interrupted flow holds the heap lock). Everything below is therefore
-//! statically sized, and overflow degrades to truncation or untracked spans,
-//! never to a fault.
-//!
-//! For the same reason [`SpanSubscriber`] must stay zero-sized: the
-//! [`Dispatch`](tracing::Dispatch) holding it lives on the heap, and a ZST is
-//! never read through that pointer.
+//! Nothing on the logging path allocates, so it works before a heap exists
+//! and from contexts where taking the heap lock could deadlock. Everything
+//! is statically sized, and overflow degrades to truncation or untracked
+//! spans, never to a fault.
 
 use core::fmt::{Debug, Write};
 use core::marker::PhantomData;
@@ -40,31 +33,29 @@ static SPAN_POOL: Mutex<SpanPool> = Mutex::new(SpanPool::new());
 
 /// The services a [`SpanSubscriber`] needs from its surroundings.
 ///
-/// All functions are associated so the subscriber stays zero-sized. Every
-/// implementation must be callable from any context the environment can log
-/// from, including interrupt handlers.
+/// Every implementation must be callable from any context the environment
+/// can log from, including interrupt handlers.
 pub trait Environment: 'static {
     /// Nanoseconds on a monotonic clock, or 0 while none is available yet.
     fn now_ns() -> u64;
 
-    /// Runs `f` with this flow unpreemptible (in the kernel: interrupts
-    /// disabled), so a log call from an interrupt handler cannot deadlock
+    /// Runs `f` with nothing on this flow able to preempt it and log in
+    /// between, so a log call from an interrupt handler cannot deadlock
     /// against a subscriber lock held by the interrupted code.
     fn critical<R>(f: impl FnOnce() -> R) -> R;
 
     /// Runs `f` on the output sink, exclusively for one whole record.
     fn with_sink(f: impl FnOnce(&mut dyn Write));
 
-    /// Writes the flow label of a record prefix (in the kernel:
-    /// `cpu0 pid0` or `boot`).
+    /// Writes the flow label of a record prefix, for example `cpu0 pid0`.
     fn write_flow_label(out: &mut dyn Write);
 
     /// Runs `f` against the current flow's entered-span stack. Returns `None`
     /// when the environment has no per-flow storage, in which case the flow
     /// reports no current span.
     ///
-    /// `f` must not log, because the implementation holds a lock the log path
-    /// would retake.
+    /// The subscriber never logs from inside `f`, so the implementation may
+    /// hold its own locks around the call.
     fn with_span_stack<R>(f: impl FnOnce(&mut SpanStack) -> R) -> Option<R>;
 }
 
