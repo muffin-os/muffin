@@ -1,8 +1,5 @@
 //! Symbolized stack backtrace for the panic report.
 //!
-//! Neither `.symtab` nor the debug sections carry `SHF_ALLOC`, so the loader never
-//! maps them and the process maps its own executable read only to reach them.
-//!
 //! DWARF gives a source position and covers inlined functions. An optimized build
 //! ships none, leaving `.symtab` to name the enclosing function alone.
 
@@ -103,18 +100,13 @@ extern "C" fn collect(ctx: &UnwindContext<'_>, arg: *mut c_void) -> UnwindReason
 }
 
 /// Maps the running executable read only, once per process.
-///
-/// The mapping is lazy, so it commits a frame only for the pages the ELF and
-/// DWARF parse touch. This runs on the panic path, where committing a
-/// multi-megabyte image in physical frames can itself fail.
-///
-/// The result is cached because there is no munmap syscall and `catch_unwind`
-/// lets a process print several backtraces, each of which would otherwise
-/// strand another mapping of the whole image.
 fn map_own_image() -> Option<&'static [u8]> {
     static IMAGE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
     static LEN: AtomicUsize = AtomicUsize::new(0);
 
+    // There is no munmap syscall and `catch_unwind` lets a process print several
+    // backtraces, each of which would otherwise strand another mapping of the
+    // whole image.
     let cached = IMAGE.load(Acquire);
     if !cached.is_null() {
         // SAFETY: the pointer was published after its length, and no munmap
@@ -135,6 +127,10 @@ fn map_own_image() -> Option<&'static [u8]> {
     }
     let len = stat.size as usize;
 
+    // `.symtab` and the debug sections carry no `SHF_ALLOC`, so the loader never
+    // maps them. Mapping the file instead of reading it commits a frame only for
+    // the pages the parse touches, which matters on the panic path where
+    // committing a multi-megabyte image can itself fail.
     let ptr = crate::mmap(0, len, ProtFlags::READ, MapFlags::PRIVATE, fd as usize, 0).ok()?;
 
     LEN.store(len, Relaxed);
