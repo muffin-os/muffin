@@ -27,33 +27,21 @@ struct HeapSizes {
 }
 
 impl HeapSizes {
-    /// Calculate heap sizes based on available physical memory.
-    ///
-    /// We use a conservative multiplier to ensure we have enough heap for other data structures:
-    /// - Initial heap: RAM / 1024 (minimum 2 MiB, maximum 128 MiB to keep stage1 fast)
-    ///   Must be 2MiB-aligned (for stage2 to start at a 2MiB boundary)
-    /// - Total heap: RAM / 256 (minimum initial + 2 MiB, maximum 512 MiB)
-    ///   The extension (total - initial) must also be 2MiB-aligned
+    /// Both sizes are multiples of 2 MiB, because stage 2 maps the heap
+    /// extension with 2 MiB pages.
     fn from_physical_memory(usable_ram_bytes: usize) -> Self {
-        const MIB_2: usize = 2 * 1024 * 1024;
+        const MIB: usize = 1024 * 1024;
+        const MIB_2: usize = 2 * MIB;
 
-        // Calculate initial heap size: RAM / 1024
-        // This gives us ~0.1% of RAM, which is more than enough for Vec<FrameState>
+        // About 0.1% of RAM, which is more than enough for Vec<FrameState>.
         let initial = {
-            let calculated = usable_ram_bytes / 1024;
-            // Clamp between 2 MiB and 128 MiB
-            let clamped = calculated.clamp(2 * 1024 * 1024, 128 * 1024 * 1024);
-            // Round up to next 2MiB boundary (required for stage2 to start at 2MiB boundary)
+            let clamped = (usable_ram_bytes / 1024).clamp(MIB_2, 128 * MIB);
             clamped.div_ceil(MIB_2) * MIB_2
         };
 
-        // Calculate total heap size: RAM / 256
-        // This gives us ~0.4% of RAM for all kernel heap needs
+        // About 0.4% of RAM for all kernel heap needs.
         let total = {
-            let calculated = usable_ram_bytes / 256;
-            // Clamp between (initial + 2 MiB) and 512 MiB
-            let clamped = calculated.clamp(initial + MIB_2, 512 * 1024 * 1024);
-            // Round up to next 2MiB boundary
+            let clamped = (usable_ram_bytes / 256).clamp(initial + MIB_2, 512 * MIB);
             clamped.div_ceil(MIB_2) * MIB_2
         };
 
@@ -134,7 +122,6 @@ unsafe impl GlobalAlloc for KernelAllocator {
 pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory_bytes: usize) {
     assert!(PhysicalMemory::is_initialized());
 
-    // Calculate and store heap sizes based on available RAM
     let heap_sizes = HeapSizes::from_physical_memory(usable_physical_memory_bytes);
     info!(
         "heap sizes: initial={} MiB, total={} MiB (for {} MiB RAM)",
