@@ -4,9 +4,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use minilib::{
-    EFAULT, EINVAL, ESRCH, SYS_KILL, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN,
-    SaFlags, SigAction, SigMaskHow, SigSet, Signal, getpid, handler_action, install_handler, kill,
-    println, sigaction, sigprocmask, syscall0, syscall1, syscall2, syscall3,
+    SYS_KILL, SYS_SIGRETURN, SaFlags, SigMaskHow, Signal, getpid, handler_action, install_handler,
+    kill, println, sigaction, sigprocmask, syscall0,
 };
 
 // Same spin as `PUMP_SPIN` in signals-init, which documents it.
@@ -110,69 +109,8 @@ extern "C" fn b_segv_handler(_signo: Signal) {
 fn role_a() {
     println!("A: start");
 
-    if unsafe { syscall2(SYS_KILL, Role::A.pid() as usize, 0) } == 0 {
-        println!("A: sig0 self ok");
-    }
-
-    if unsafe { syscall2(SYS_KILL, 999, 0) } as isize == -isize::from(ESRCH) {
-        println!("A: sig0 esrch ok");
-    }
-
-    if unsafe { syscall2(SYS_KILL, Role::A.pid() as usize, Signal::COUNT + 1) } as isize
-        == -isize::from(EINVAL)
-    {
-        println!("A: kill einval ok");
-    }
-
-    if unsafe { syscall3(SYS_SIGPROCMASK, 99, 0, 0) } as isize == -isize::from(EINVAL) {
-        println!("A: how einval ok");
-    }
-
-    let protected = handler_action(noop_handler, SaFlags::default());
-    let kill_rc = sigaction(Signal::Kill, Some(&protected), None);
-    let stop_rc = sigaction(Signal::Stop, Some(&protected), None);
-    if kill_rc == Err(EINVAL) && stop_rc == Err(EINVAL) {
-        println!("A: protected einval ok");
-    }
-
-    let no_restorer = SigAction {
-        restorer: 0,
-        ..handler_action(noop_handler, SaFlags::default())
-    };
-    if sigaction(Signal::Usr1, Some(&no_restorer), None) == Err(EINVAL) {
-        println!("A: restorer einval ok");
-    }
-
-    // Safety: both pointers are deliberately invalid, and the kernel rejecting
-    // them before any access is what the check asserts.
-    let unmapped =
-        unsafe { syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 0x43, 0) } as isize;
-    let upper =
-        unsafe { syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, 1 << 63, 0) } as isize;
-    if unmapped == -isize::from(EFAULT) && upper == -isize::from(EFAULT) {
-        println!("A: efault new ok");
-    }
-
-    if unsafe { syscall1(SYS_SIGPENDING, 0) } as isize == -isize::from(EINVAL) {
-        println!("A: sigpending einval ok");
-    }
-
-    let _ = sigprocmask(SigMaskHow::Block, Some(&SigSet::ALL), None);
-    let mut current = SigSet::EMPTY;
-    let _ = sigprocmask(SigMaskHow::Block, None, Some(&mut current));
-    let unblockable = Signal::Kill.bit().union(Signal::Stop.bit());
-    if current.intersection(unblockable).is_empty() && current.contains(Signal::Terminate) {
-        println!("A: unblockable ok");
-    }
-    let _ = sigprocmask(SigMaskHow::SetMask, Some(&SigSet::EMPTY), None);
-
     let urgent = handler_action(urgent_handler, SaFlags::RESETHAND);
     let _ = sigaction(Signal::Urgent, Some(&urgent), None);
-    let mut installed = SigAction::default();
-    let _ = sigaction(Signal::Urgent, None, Some(&mut installed));
-    if installed.handler.addr() == urgent_handler as *const () as usize {
-        println!("A: query ok");
-    }
 
     let _ = kill(Role::A.pid(), Signal::Urgent);
     if wait_runs(&URGENT_RUNS, 1, DELIVER_BUDGET) {

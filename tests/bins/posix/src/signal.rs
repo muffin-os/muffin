@@ -7,6 +7,10 @@ use minilib::{
 use crate::check;
 
 const KERNEL_PTR: usize = 0xFFFF_8000_0000_0000;
+/// Lower-half address no process image ever covers.
+const UNMAPPED_PTR: usize = 0x43;
+/// Neither a user nor a kernel address.
+const NONCANONICAL_PTR: usize = 1 << 63;
 const BAD_SIGNO: usize = 99;
 const BAD_HOW: usize = 99;
 const MISSING_PID: usize = 999_999;
@@ -71,6 +75,11 @@ pub fn run() {
         ret(unsafe { syscall2(SYS_KILL, pid as usize, BAD_SIGNO) }),
         EINVAL,
     );
+    check::expect_err(
+        "signal/kill_signo_past_count",
+        ret(unsafe { syscall2(SYS_KILL, pid as usize, Signal::COUNT + 1) }),
+        EINVAL,
+    );
 
     let installed = handler_action(usr1_handler, SaFlags::default());
     check::expect_ok(
@@ -128,11 +137,35 @@ pub fn run() {
         ret(unsafe { syscall3(SYS_SIGACTION, BAD_SIGNO, 0, 0) }),
         EINVAL,
     );
-    // Safety: the pointer is deliberately invalid, and the kernel rejecting it
-    // before any access is what the check asserts.
+    // Safety: both pointers are deliberately invalid, and the kernel rejecting
+    // them before any access is what the checks assert.
     check::expect_err(
         "signal/sigaction_new_efault",
         ret(unsafe { syscall3(SYS_SIGACTION, Signal::Usr2.number() as usize, KERNEL_PTR, 0) }),
+        EFAULT,
+    );
+    check::expect_err(
+        "signal/sigaction_new_efault_unmapped",
+        ret(unsafe {
+            syscall3(
+                SYS_SIGACTION,
+                Signal::Usr2.number() as usize,
+                UNMAPPED_PTR,
+                0,
+            )
+        }),
+        EFAULT,
+    );
+    check::expect_err(
+        "signal/sigaction_new_efault_noncanonical",
+        ret(unsafe {
+            syscall3(
+                SYS_SIGACTION,
+                Signal::Usr2.number() as usize,
+                NONCANONICAL_PTR,
+                0,
+            )
+        }),
         EFAULT,
     );
 
@@ -169,6 +202,22 @@ pub fn run() {
     );
     check::expect_ok(
         "signal/mask_restore",
+        sigprocmask(SigMaskHow::SetMask, Some(&baseline_mask), None),
+        (),
+    );
+    check::expect_ok(
+        "signal/mask_block_all",
+        sigprocmask(SigMaskHow::Block, Some(&all), None),
+        (),
+    );
+    check::require(
+        "signal/mask_block_all_kill_stop_unblockable",
+        mask("signal/mask_block_all_readback")
+            .intersection(Signal::Kill.bit().union(Signal::Stop.bit()))
+            .is_empty(),
+    );
+    check::expect_ok(
+        "signal/mask_restore_after_block_all",
         sigprocmask(SigMaskHow::SetMask, Some(&baseline_mask), None),
         (),
     );

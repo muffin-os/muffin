@@ -1,8 +1,10 @@
 //! End-to-end signal edge-case test.
 //!
 //! Six instances of `/bin/init` take a role each by pid. Role A prints one
-//! `ok` marker per hostile syscall path it survives, in `MARKERS` order, and
-//! then forges a `sigreturn` that must kill it on SIGSEGV. Roles B to F each
+//! `ok` marker per handler flag semantics check (RESETHAND, deferral, NODEFER
+//! nesting), in `MARKERS` order, and then forges a `sigreturn` that must kill
+//! it on SIGSEGV. Plain errno checks on the signal syscalls live in the
+//! `posix` suite. Roles B to F each
 //! announce a fault the kernel must answer by killing them, B to D and F on
 //! SIGSEGV and E on SIGILL, without the kernel going down. The run completes
 //! once all six report an outcome, and no role may reach its `UNREACHABLE`
@@ -11,18 +13,8 @@
 use test_support::KernelTest;
 
 /// Ordered markers, each expected at or after the previous one.
-const MARKERS: [&str; 17] = [
+const MARKERS: [&str; 7] = [
     "A: start",
-    "A: sig0 self ok",
-    "A: sig0 esrch ok",
-    "A: kill einval ok",
-    "A: how einval ok",
-    "A: protected einval ok",
-    "A: restorer einval ok",
-    "A: efault new ok",
-    "A: sigpending einval ok",
-    "A: unblockable ok",
-    "A: query ok",
     "A: resethand ok",
     "A: defer ok",
     "A: redeliver ok",
