@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use super::{DrawCmd, SoftBackend, SoftRecorder};
+use super::{ATTRIBUTE_BYTES, DrawCmd, SoftBackend, SoftRecorder};
 use crate::api::GfxQueue;
 use crate::error::Result;
 
@@ -99,7 +99,7 @@ impl<'fb> SoftQueue<'fb> {
         let output_count = cmd.output_count;
         let interp_count = output_count - 2;
         let outputs = scratch(vertex_outputs, vert_count * output_count);
-        let input = scratch(vertex_input, vertex_stride / 4);
+        let input = scratch(vertex_input, vertex_stride / ATTRIBUTE_BYTES);
         let mut filled = 0usize;
         for i in 0..vert_count {
             let start = i * vertex_stride;
@@ -109,7 +109,7 @@ impl<'fb> SoftQueue<'fb> {
             }
             for (dst, chunk) in input
                 .iter_mut()
-                .zip(cmd.raw_data[start..end].as_chunks::<4>().0)
+                .zip(cmd.raw_data[start..end].as_chunks::<ATTRIBUTE_BYTES>().0)
             {
                 *dst = f32::from_ne_bytes(*chunk);
             }

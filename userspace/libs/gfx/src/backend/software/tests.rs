@@ -6,7 +6,8 @@ use crate::api::{
     Adapter, CommandRecorder, GfxAllocator, GfxCompiler, GfxFence, GfxQueue, PipelineDesc,
 };
 use crate::backend::software::{
-    SoftAdapter, SoftAllocator, SoftBackend, SoftCompiler, SoftFence, SoftQueue, SoftShaderDef,
+    ATTRIBUTE_BYTES, SoftAdapter, SoftAllocator, SoftBackend, SoftCompiler, SoftFence, SoftQueue,
+    SoftShaderDef,
 };
 
 fn passthrough_vert(input: &[f32], output: &mut [f32]) {
@@ -18,7 +19,7 @@ fn white_frag(_: &[f32]) -> u32 {
     0xFFFF_FFFF
 }
 
-// Vertex layout for Gouraud shading: (x, y, r, g, b) — 5 floats = 20 bytes.
+// Vertex layout (x, y, r, g, b).
 fn color_vert(input: &[f32], output: &mut [f32]) {
     output[0] = input[0]; // NDC x
     output[1] = input[1]; // NDC y
@@ -126,8 +127,7 @@ fn triangle_writes_correct_pixels() {
     let bytes = encode_verts(&[-0.5, 0.5, 0.5, 0.5, -0.5, -0.5]);
 
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
-    // Each vertex is 2 floats = 8 bytes.
-    let pso = simple_pipeline(&mut backend, 8);
+    let pso = simple_pipeline(&mut backend, 2 * ATTRIBUTE_BYTES);
     let mut buf = backend
         .alloc_buffer(&BufferDesc {
             size: bytes.len(),
@@ -166,14 +166,12 @@ fn wrong_shader_kind_is_rejected() {
         pixel_shader: &vert,
         blend: false,
         depth: false,
-        vertex_stride: 8,
+        vertex_stride: 2 * ATTRIBUTE_BYTES,
     });
     assert!(result.is_err());
 }
 
-// ── interpolation test ───────────────────────────────────────────────────────
-
-// Vertex layout for the interpolation test: (x, y, intensity) — 3 floats = 12 bytes.
+// Vertex layout (x, y, intensity).
 fn intensity_vert(input: &[f32], output: &mut [f32]) {
     output[0] = input[0]; // NDC x
     output[1] = input[1]; // NDC y
@@ -221,7 +219,7 @@ fn interpolants_vary_across_triangle() {
             pixel_shader: &frag,
             blend: false,
             depth: false,
-            vertex_stride: 12, // 3 floats × 4 bytes
+            vertex_stride: 3 * ATTRIBUTE_BYTES,
         })
         .unwrap();
 
@@ -260,9 +258,6 @@ fn gouraud_triangle_blends_per_vertex_colors() {
     // Each vertex carries its own RGB colour; the rasterizer interpolates all
     // three channels across the triangle (Gouraud shading).
     //
-    // Vertex layout: (x, y, r, g, b) — 5 floats × 4 bytes = 20 bytes/vertex.
-    // output_count = 5: two for NDC position + three colour interpolants.
-    //
     // NDC → screen  (x' = (x+1)·4,  y' = (1−y)·4)  for an 8×8 framebuffer:
     //   v0 ( 0.00,  0.75) RED   → screen (4, 1)
     //   v1 (−0.75, −0.75) GREEN → screen (1, 7)
@@ -296,7 +291,7 @@ fn gouraud_triangle_blends_per_vertex_colors() {
             pixel_shader: &frag,
             blend: false,
             depth: false,
-            vertex_stride: 20,
+            vertex_stride: 5 * ATTRIBUTE_BYTES,
         })
         .unwrap();
 

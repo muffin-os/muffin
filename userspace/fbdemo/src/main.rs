@@ -6,7 +6,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
-use gfx::backend::software::{SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftShaderDef};
+use gfx::backend::software::{
+    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftShaderDef,
+};
 use kernel_abi::gfx::BufferDesc;
 use minilib::{
     CLOCK_MONOTONIC, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Timespec, clock_gettime,
@@ -36,7 +38,7 @@ fn or_fail_gfx<T, E>(result: Result<T, E>) -> T {
     }
 }
 
-// vertex layout: (x, y, r, g, b) — 5 floats × 4 bytes = 20 bytes/vertex
+// Vertex layout (x, y, r, g, b).
 fn color_vert(input: &[f32], output: &mut [f32]) {
     output[0] = input[0];
     output[1] = input[1];
@@ -119,7 +121,7 @@ fn main() -> i32 {
         pixel_shader: &frag,
         blend: false,
         depth: false,
-        vertex_stride: 20,
+        vertex_stride: 5 * ATTRIBUTE_BYTES,
     }));
     report("compile_pipeline", t, now_us());
 
@@ -134,7 +136,7 @@ fn main() -> i32 {
 
     let t = now_us();
     let mut vbuf = or_fail_gfx(backend.alloc_buffer(&BufferDesc {
-        size: 60,
+        size: bytes.len(),
         is_dynamic: false,
     }));
     vbuf.data.copy_from_slice(&bytes);

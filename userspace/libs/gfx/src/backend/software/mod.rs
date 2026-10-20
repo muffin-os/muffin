@@ -19,6 +19,11 @@ pub use recorder::{DrawCmd, SoftRecorder};
 use crate::api::{GfxAllocator, GfxBackend, GfxCompiler, PipelineDesc};
 use crate::error::Result;
 
+/// Size of one vertex attribute. The software backend reads a vertex as packed
+/// `f32`s, so a layout of `n` attributes has a `vertex_stride` of
+/// `n * ATTRIBUTE_BYTES`.
+pub const ATTRIBUTE_BYTES: usize = size_of::<f32>();
+
 /// Software backend combining [`SoftAllocator`] and [`SoftCompiler`].
 pub struct SoftBackend(pub SoftAllocator, pub SoftCompiler);
 
