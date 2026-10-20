@@ -120,13 +120,12 @@ mod tests {
 
     #[test]
     fn test_read_at_zero_sized() {
-        let data = vec![1_u8, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8];
-        let device = MemoryBlockDevice::try_new(2, data).unwrap();
+        let device = MemoryBlockDevice::try_new(2, vec![1_u8; 16]).unwrap();
 
-        let mut buf = [0_u8; 0];
-        device.read_at(3, &mut buf).unwrap();
-        let expected = [0_u8; 0];
-        assert_eq!(expected, buf);
+        // An empty read never touches the device, so even an offset past the
+        // end succeeds.
+        assert_eq!(Ok(0), device.read_at(3, &mut []));
+        assert_eq!(Ok(0), device.read_at(100, &mut []));
     }
 
     #[test]
