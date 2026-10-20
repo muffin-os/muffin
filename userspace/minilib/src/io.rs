@@ -8,10 +8,15 @@ pub struct Stdout;
 pub struct Stderr;
 
 // The write syscall rejects a zero-length buffer, and formatters emit empty
-// pieces freely. Passing one on would log a kernel error mid-report.
+// pieces freely, so empty input writes nothing.
+// A short write is retried on the rest so a FAIL marker is never clipped.
 fn emit(fd: c_int, s: &str) -> core::fmt::Result {
-    if !s.is_empty() {
-        let _ = crate::write(fd, s.as_bytes());
+    let mut rest = s.as_bytes();
+    while !rest.is_empty() {
+        match crate::write(fd, rest) {
+            Ok(n) if n > 0 => rest = &rest[n..],
+            _ => return Err(core::fmt::Error),
+        }
     }
     Ok(())
 }
