@@ -166,7 +166,6 @@ pub struct Process {
     task_accounting: Mutex<TaskAccounting>,
     /// Mirror of `task_accounting.reap.is_some()`, so the timer tick pays one
     /// Acquire load instead of a lock when no exec is in progress.
-    // FIXME: find a better solution than mirroring data
     reap_active: AtomicBool,
 
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
@@ -519,8 +518,6 @@ impl Drop for Process {
                 *child.ppid.write() = my_ppid;
             }
         }
-
-        // TODO: deallocate all physical frames that are not part of a shared mapping
     }
 }
 
