@@ -162,8 +162,8 @@ fn resolve_block_index_out_of_range() {
 #[test]
 fn resolve_indirect_ptr_out_of_range() {
     let fs = open_read_fs();
-    let (direct_limit, indirect_limit, _) = fs.indirect_pointer_limits();
-    let pointers_per_block = indirect_limit - direct_limit;
+    let limits = fs.indirect_pointer_limits();
+    let pointers_per_block = limits.indirect_end - limits.direct_end;
 
     let res = fs.resolve_indirect_ptr(BlockAddress::new(1), pointers_per_block);
     assert_eq!(

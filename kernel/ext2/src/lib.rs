@@ -9,6 +9,7 @@ pub use dir::*;
 pub use error::*;
 pub use inode::*;
 use kernel_device::block::BlockDevice;
+pub use read::IndirectPointerLimits;
 use spin::Mutex;
 pub use superblock::*;
 

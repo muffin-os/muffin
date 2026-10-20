@@ -10,6 +10,14 @@ const SZ: usize = size_of::<BlockAddress>();
 // let a sequential scan keep every table it is about to need again.
 const INDIRECT_CACHE_CAPACITY: usize = 4;
 
+/// Exclusive upper bound of the file block index each pointer tier covers.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct IndirectPointerLimits {
+    pub direct_end: u32,
+    pub indirect_end: u32,
+    pub double_indirect_end: u32,
+}
+
 /// Most recently used indirect block tables, newest first.
 pub(crate) struct IndirectCache {
     entries: Vec<(BlockAddress, Vec<Option<BlockAddress>>)>,
@@ -125,12 +133,15 @@ where
         Ok(total_read)
     }
 
-    pub fn indirect_pointer_limits(&self) -> (u32, u32, u32) {
+    pub fn indirect_pointer_limits(&self) -> IndirectPointerLimits {
         let pointers_per_block = self.superblock.pointers_per_block();
-        let direct_limit = 12;
-        let indirect_limit = direct_limit + pointers_per_block;
-        let double_indirect_limit = indirect_limit + pointers_per_block * pointers_per_block;
-        (direct_limit, indirect_limit, double_indirect_limit)
+        let direct_end = 12;
+        let indirect_end = direct_end + pointers_per_block;
+        IndirectPointerLimits {
+            direct_end,
+            indirect_end,
+            double_indirect_end: indirect_end + pointers_per_block * pointers_per_block,
+        }
     }
 
     pub fn is_block_allocated(&self, inode: &Inode, block_index: u32) -> Result<bool, Error> {
@@ -143,27 +154,31 @@ where
         inode: &Inode,
         block_index: u32,
     ) -> Result<Option<BlockAddress>, Error> {
-        let (direct_limit, indirect_limit, double_indirect_limit) = self.indirect_pointer_limits();
+        let IndirectPointerLimits {
+            direct_end,
+            indirect_end,
+            double_indirect_end,
+        } = self.indirect_pointer_limits();
 
-        Ok(if block_index < direct_limit {
+        Ok(if block_index < direct_end {
             inode.direct_ptrs().nth(block_index as usize).flatten()
-        } else if block_index < indirect_limit {
-            self.resolve_indirect_ptr(inode.single_indirect_ptr(), block_index - direct_limit)?
-        } else if block_index < double_indirect_limit {
+        } else if block_index < indirect_end {
+            self.resolve_indirect_ptr(inode.single_indirect_ptr(), block_index - direct_end)?
+        } else if block_index < double_indirect_end {
             self.resolve_double_indirect_ptr(
                 inode.double_indirect_ptr(),
-                block_index - indirect_limit,
+                block_index - indirect_end,
             )?
         } else {
             let pointers_per_block = u64::from(self.superblock.pointers_per_block());
-            let triple_indirect_limit = u64::from(double_indirect_limit)
+            let triple_indirect_end = u64::from(double_indirect_end)
                 + pointers_per_block * pointers_per_block * pointers_per_block;
-            if u64::from(block_index) >= triple_indirect_limit {
+            if u64::from(block_index) >= triple_indirect_end {
                 return Err(Error::InvalidBlockIndex(block_index));
             }
             self.resolve_triple_indirect_ptr(
                 inode.triple_indirect_ptr(),
-                block_index - double_indirect_limit,
+                block_index - double_indirect_end,
             )?
         })
     }

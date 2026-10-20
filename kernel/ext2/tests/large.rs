@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use kernel_device::block::{BlockDevice, MemoryBlockDevice};
-use kernel_ext2::{Ext2Fs, RegularFile};
+use kernel_ext2::{Ext2Fs, IndirectPointerLimits, RegularFile};
 
 mod common;
 
@@ -193,7 +193,11 @@ fn indirect_limits_follow_the_1k_block_size() {
     let fs = cow_fs!("kernel/ext2/tests/filesystems/large.img", 512);
     assert_eq!(1024, fs.superblock().block_size());
     assert_eq!(
-        (12, 12 + 256, 12 + 256 + 256 * 256),
+        IndirectPointerLimits {
+            direct_end: 12,
+            indirect_end: 12 + 256,
+            double_indirect_end: 12 + 256 + 256 * 256,
+        },
         fs.indirect_pointer_limits()
     );
 }
