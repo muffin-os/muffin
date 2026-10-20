@@ -1,5 +1,4 @@
 use alloc::sync::Arc;
-use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
@@ -128,28 +127,6 @@ impl OwnedSegment<'_> {
             vmm: InnerVmm::Rc(vmm),
             inner,
         }
-    }
-}
-
-impl PartialEq<Self> for OwnedSegment<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        let my_vmm = self.vmm.read();
-        let other_vmm = other.vmm.read();
-        *my_vmm == *other_vmm
-    }
-}
-
-impl Eq for OwnedSegment<'_> {}
-
-impl PartialOrd<Self> for OwnedSegment<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for OwnedSegment<'_> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.inner.cmp(&other.inner)
     }
 }
 
