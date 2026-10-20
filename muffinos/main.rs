@@ -59,7 +59,6 @@ fn main() {
         let debug_dir = std::env::var_os("BUILD_WORKSPACE_DIRECTORY")
             .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
 
-        // create an lldb debug file to make debugging easy
         let content = format!(
             r"target create {KERNEL_BINARY}
 gdb-remote localhost:1234
@@ -70,7 +69,6 @@ continue"
         std::fs::write(debug_dir.join("debug.lldb"), content)
             .expect("unable to create lldb debug file");
 
-        // create a gdb debug file to make debugging easy
         let content = format!(
             r"file {KERNEL_BINARY}
         target remote localhost:1234
