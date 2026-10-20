@@ -49,7 +49,6 @@ impl PhysicalMemoryManager {
         }
     }
 
-    /// Find the region and local index for a given physical address
     fn find_frame_location(regions: &[MemoryRegion], addr: u64) -> Option<RegionFrameIndex> {
         for (region_idx, region) in regions.iter().enumerate() {
             if let Some(frame_idx) = region.frame_index(addr) {
@@ -62,7 +61,6 @@ impl PhysicalMemoryManager {
         None
     }
 
-    /// Internal helper to find the first free frame across all regions
     fn find_first_free_internal(regions: &[MemoryRegion]) -> Option<RegionFrameIndex> {
         for (region_idx, region) in regions.iter().enumerate() {
             if let Some(frame_idx) = region.frames().iter().position(|&s| s == FrameState::Free) {
@@ -75,14 +73,7 @@ impl PhysicalMemoryManager {
         None
     }
 
-    /// Get the current first free frame position
-    fn first_free(&self) -> Option<RegionFrameIndex> {
-        self.first_free
-    }
-
-    /// Update the first_free pointer starting from a given position
     fn update_first_free(&mut self, start_region: usize, start_index: usize) {
-        // Check if there are more free frames in the current region
         if let Some(region) = self.regions.get(start_region)
             && start_index < region.len()
             && let Some(idx) = region.frames()[start_index..]
@@ -96,7 +87,6 @@ impl PhysicalMemoryManager {
             return;
         }
 
-        // Search subsequent regions
         for (region_idx, region) in self.regions.iter().enumerate().skip(start_region + 1) {
             if let Some(frame_idx) = region.frames().iter().position(|&s| s == FrameState::Free) {
                 self.first_free = Some(RegionFrameIndex {
@@ -107,7 +97,6 @@ impl PhysicalMemoryManager {
             }
         }
 
-        // No free frames found
         self.first_free = None;
     }
 
@@ -118,9 +107,8 @@ impl PhysicalMemoryManager {
         let small_frames_per_frame = (S::SIZE / Size4KiB::SIZE) as usize;
         let small_frame_count = n * small_frames_per_frame;
 
-        let ff = self.first_free()?;
+        let ff = self.first_free?;
 
-        // Search for contiguous free frames within regions
         for region_idx in ff.region_idx..self.regions.len() {
             let search_start = if region_idx == ff.region_idx {
                 ff.frame_idx
@@ -153,10 +141,8 @@ impl PhysicalMemoryManager {
                 }
             };
 
-            // Search for contiguous free frames
             let mut current_start = aligned_search_start;
             while current_start + small_frame_count <= region.len() {
-                // Check if we have enough contiguous free frames
                 let all_free = region.frames()[current_start..current_start + small_frame_count]
                     .iter()
                     .all(|&state| state == FrameState::Free);
@@ -165,28 +151,21 @@ impl PhysicalMemoryManager {
                     let frame_start_idx = current_start;
                     let frame_end_idx = current_start + small_frame_count - 1;
 
-                    // Get the physical addresses before mutating
                     let start_addr = self.regions[region_idx]
                         .frame_address(frame_start_idx)
                         .expect("frame_address(frame_start_idx) should succeed: frame exists and is free");
-                    // For PhysFrameRangeInclusive, end points to the start of the last page in the range
-                    // Since frame_start_idx is already aligned, it's the start of the first page
-                    // The last page starts at: first_page_start + (n-1) * frames_per_page
                     let last_page_start_idx = frame_start_idx + (n - 1) * small_frames_per_frame;
                     let end_addr = self.regions[region_idx]
                         .frame_address(last_page_start_idx)
                         .expect("frame_address(last_page_start_idx) should succeed: frame exists and is free");
 
-                    // Mark frames as allocated
                     self.regions[region_idx].frames_mut()[frame_start_idx..=frame_end_idx]
                         .fill(FrameState::Allocated);
 
-                    // Update first_free pointers
                     if region_idx == ff.region_idx && frame_start_idx <= ff.frame_idx {
                         self.update_first_free(region_idx, frame_end_idx + 1);
                     }
 
-                    // Convert to physical frames
                     return Some(PhysFrameRangeInclusive {
                         start: PhysFrame::from_start_address(PhysAddr::new(start_addr))
                             .expect("start address must be aligned to page size"),
@@ -195,7 +174,6 @@ impl PhysicalMemoryManager {
                     });
                 }
 
-                // Move to next aligned position
                 current_start += small_frames_per_frame;
             }
         }
