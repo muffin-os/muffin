@@ -125,7 +125,7 @@ const _: () = assert!(1280 == size_of::<Inner>());
 #[repr(C)]
 #[derive(Debug, VolatileFieldAccess)]
 pub struct HpetTimer {
-    raw: [u64; 4], // TODO: implement once we use this
+    raw: [u64; 4],
 }
 
 const _: () = assert!(32 == size_of::<HpetTimer>());
