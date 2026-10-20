@@ -76,12 +76,22 @@ fn working_directory() {
     check::expect_err(
         "process/getcwd_null_buf",
         ret(syscall2(SYS_GETCWD, 0, buf.len())),
-        EINVAL,
+        EFAULT,
+    );
+    check::expect_err(
+        "process/getcwd_unmapped_buf",
+        ret(syscall2(SYS_GETCWD, 0x1000, buf.len())),
+        EFAULT,
+    );
+    check::expect_err(
+        "process/getcwd_noncanonical_buf",
+        ret(syscall2(SYS_GETCWD, 0x0001_0000_0000_0000, buf.len())),
+        EFAULT,
     );
     check::expect_err(
         "process/getcwd_kernel_buf",
         ret(syscall2(SYS_GETCWD, KERNEL_ADDR, buf.len())),
-        EINVAL,
+        EFAULT,
     );
 }
 

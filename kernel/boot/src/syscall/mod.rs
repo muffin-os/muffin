@@ -270,7 +270,9 @@ fn make_user_range_resident(ptr: usize, len: usize, access: UserAccess) -> Resul
 fn dispatch_sys_getcwd(path: usize, size: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
-    let path = unsafe { UserspaceMutPtr::try_from_usize(path)? };
+    let path = unsafe { UserspaceMutPtr::try_from_usize(path) }.map_err(|_| EFAULT)?;
+    path.validate_range(size).map_err(|_| EFAULT)?;
+    make_user_range_resident(path.addr(), size, UserAccess::Write)?;
     sys_getcwd(&cx, path, size)
 }
 
