@@ -22,7 +22,7 @@ fn main() -> i32 {
         return 1;
     }
 
-    let len = info.pitch as usize * info.height as usize;
+    let len = info.len_bytes();
     let Ok(ptr) = mmap(
         0,
         len,

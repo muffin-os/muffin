@@ -92,7 +92,7 @@ fn main() -> i32 {
         return 1;
     }
 
-    let len = info.pitch as usize * info.height as usize;
+    let len = info.len_bytes();
     let t = now();
     let mapped = mmap(
         0,
@@ -143,10 +143,16 @@ fn main() -> i32 {
     vbuf.data.copy_from_slice(&bytes);
     report("alloc_buffer", t, now());
 
-    let stride = info.pitch as usize / 4;
+    // The software queue writes one u32 per pixel, so any other depth would
+    // scribble over neighbouring pixels.
+    let pixel_bytes = size_of::<u32>();
+    let stride = info.pitch as usize / pixel_bytes;
     let width = info.width as usize;
     let height = info.height as usize;
-    if height == 0 || width * 4 > info.pitch as usize {
+    if info.bpp as usize != 8 * pixel_bytes
+        || height == 0
+        || width * pixel_bytes > info.pitch as usize
+    {
         println!("fbdemo: FAIL geometry");
         return 1;
     }

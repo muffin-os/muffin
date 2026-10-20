@@ -51,6 +51,13 @@ pub struct FbScreenInfo {
 impl FbScreenInfo {
     pub const SIZE: usize = size_of::<Self>();
 
+    /// Returns the size in bytes of the whole framebuffer, scanline padding
+    /// included.
+    #[must_use]
+    pub const fn len_bytes(self) -> usize {
+        self.pitch as usize * self.height as usize
+    }
+
     #[must_use]
     pub fn to_bytes(self) -> [u8; Self::SIZE] {
         let mut bytes = [0u8; Self::SIZE];
@@ -107,6 +114,32 @@ mod tests {
             FbScreenInfo::from_bytes(&info.to_bytes()),
             info,
             "screen info should survive a to_bytes/from_bytes round-trip"
+        );
+    }
+
+    #[test]
+    fn fb_screen_info_len_bytes_follows_pitch_not_pixel_size() {
+        let padded_16bpp = FbScreenInfo {
+            width: 100,
+            height: 10,
+            pitch: 512,
+            bpp: 16,
+        };
+        let tight_32bpp = FbScreenInfo {
+            width: 100,
+            height: 10,
+            pitch: 400,
+            bpp: 32,
+        };
+        assert_eq!(
+            padded_16bpp.len_bytes(),
+            5120,
+            "a padded scanline counts its padding, not width * bytes per pixel"
+        );
+        assert_eq!(
+            tight_32bpp.len_bytes(),
+            4000,
+            "a tight scanline is exactly width * bytes per pixel"
         );
     }
 }
