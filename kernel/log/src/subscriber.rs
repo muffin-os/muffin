@@ -244,13 +244,16 @@ impl SpanPool {
 }
 
 /// A [`Subscriber`] rendering events and span close records through an
-/// [`Environment`]. Zero-sized by construction, see the module docs.
+/// [`Environment`].
 struct SpanSubscriber<E: Environment> {
     _env: PhantomData<fn() -> E>,
 }
 
 impl<E: Environment> SpanSubscriber<E> {
     fn new() -> Self {
+        // The `Dispatch` holding the subscriber lives on the heap, and a ZST
+        // is never read through that pointer.
+        const { assert!(size_of::<Self>() == 0) };
         Self { _env: PhantomData }
     }
 }
