@@ -5,11 +5,11 @@ use kernel_abi::{SigAction, SigSet, Signal};
 use kernel_syscall::UserspaceMutPtr;
 use kernel_syscall::signal::Disposition;
 use tracing::info;
-use x86_64::VirtAddr;
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrame;
+use x86_64::{PrivilegeLevel, VirtAddr};
 
 use crate::arch::gdt::Selectors;
 use crate::arch::idt::SyscallRegisters;
@@ -164,10 +164,11 @@ fn request_stop_park(task: &Task, signals: &mut Signals) {
     }
 }
 
-/// Act on pending signals for the current task. Callers must have interrupts
-/// off and a Ring 3 frame. A contended signals lock delivers nothing, the
-/// signal stays pending until the next delivery attempt.
+/// Act on pending signals for the current task. A contended signals lock
+/// delivers nothing, the signal stays pending until the next delivery attempt.
 pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
+    debug_assert!(!interrupts::are_enabled());
+    debug_assert_eq!(frame.code_segment.rpl(), PrivilegeLevel::Ring3);
     let task = Task::current();
     let process = task.process();
     let Some(mut guard) = process.try_signals_write() else {
