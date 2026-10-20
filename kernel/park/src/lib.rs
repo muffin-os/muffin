@@ -838,10 +838,6 @@ mod tests {
         assert_round_trip_does_not_allocate(park_ticket, unpark_ticket, 9, "the head segment");
     }
 
-    /// Holding whole segments worth of tickets puts the slot under test in a
-    /// segment that was appended at run time rather than in the inline head,
-    /// which is the case that would regress if a ticket ever went back to
-    /// carrying an index that the park has to resolve.
     #[test]
     fn park_does_not_allocate_in_appended_segment() {
         const LABELS: [&str; 2] = ["the first appended segment", "the second appended segment"];
