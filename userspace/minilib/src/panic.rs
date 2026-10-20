@@ -25,20 +25,19 @@ unsafe extern "C" {
     static __ehdr_start: u8;
 }
 
-/// Answers the unwinder's FDE lookups by parsing the process's own program headers.
+/// Answers the unwinder's FDE lookups from the process's own program headers.
 ///
-/// The loader maps every `PT_LOAD` of a static `ET_EXEC` and the first spans file
-/// offset 0, so the header and the program header table stay readable at
-/// `__ehdr_start` for the process lifetime. A binary without `PT_GNU_EH_FRAME`
-/// cannot unwind, and the `None` surfaces that as an escaped panic rather than a
-/// corrupt walk.
+/// Yields `None` for a binary without `PT_GNU_EH_FRAME`, which surfaces as an
+/// escaped panic rather than a corrupt walk.
 struct PhdrFinder;
 
 unsafe impl EhFrameFinder for PhdrFinder {
     fn find(&self, _pc: usize) -> Option<FrameInfo> {
-        // SAFETY: the reads stay inside the ELF header and the program header table
-        // it declares, both mapped read only. The offsets are ELF64 constants, and
-        // reading unaligned assumes nothing about the mapping's layout.
+        // SAFETY: the loader maps every `PT_LOAD` of a static `ET_EXEC` and the
+        // first spans file offset 0, so the ELF header and the program header
+        // table it declares stay readable at `__ehdr_start` for the process
+        // lifetime. The reads stay inside them. The offsets are ELF64 constants,
+        // and reading unaligned assumes nothing about the mapping's layout.
         unsafe {
             let base = &raw const __ehdr_start;
             let e_phoff = base.add(E_PHOFF).cast::<u64>().read_unaligned() as usize;
@@ -59,7 +58,9 @@ unsafe impl EhFrameFinder for PhdrFinder {
 
 static FINDER: PhdrFinder = PhdrFinder;
 
-/// Depth of the panic currently being raised, zero while no panic is in flight.
+// Depth of the panic currently being raised, zero while no panic is in flight.
+// Process global, which matches per-task depth only because userspace has no
+// threads.
 static PANIC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Runs `f` and catches a panic raised anywhere inside it.
@@ -67,42 +68,37 @@ static PANIC_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// The `Err` payload holds the formatted message as an [`alloc::string::String`],
 /// matching std, so a caller recovers it with `downcast_ref::<String>()`.
 ///
-/// Catching disarms the nested-panic guard, so this is the only sound catch path.
-/// Reaching the unwinder directly leaves the guard armed and the next panic exits.
+/// This is the only sound catch path. Catching through the unwinder directly
+/// makes the next panic exit without a report.
 pub fn catch_unwind<R>(f: impl FnOnce() -> R) -> Result<R, Box<dyn Any + Send>> {
     let result = unwinding::panic::catch_unwind(f);
     if result.is_err() {
+        // Disarms the nested-panic guard in `panic`.
         PANIC_COUNT.store(0, Ordering::Relaxed);
     }
     result
 }
 
 /// Reports the panic on stderr with a backtrace, then unwinds so destructors run.
-///
-/// Raising an exception allocates, and so does symbolizing the backtrace. A heap
-/// that cannot serve either panics again, and `PANIC_COUNT` bounds that recursion
-/// at one level, which also covers a panic escaping a `Drop` mid-unwind. Those
-/// processes end without completing destructors, with the report already out.
-///
-/// The order is load bearing. Nothing walks the stack before the finder is
-/// installed, and the walk must finish before `begin_panic` unwinds those frames.
-///
-/// `begin_panic` returns only when nothing caught the exception or an FDE was
-/// missing, so falling through exits 101, std's code for a panic.
-///
-/// `PANIC_COUNT` is process global, which matches per-task depth only because
-/// userspace has no threads.
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Raising an exception allocates, and so does symbolizing the backtrace. A
+    // heap that cannot serve either panics again, and this bounds that recursion
+    // at one level, which also covers a panic escaping a `Drop` mid-unwind. Those
+    // processes end without completing destructors, with the report already out.
     if PANIC_COUNT.fetch_add(1, Ordering::Relaxed) > 0 {
         crate::exit(101);
     }
     let _ = writeln!(crate::Stderr, "{info}");
     // There is no init hook, so the first panic installs the finder. It stays for
-    // the process lifetime and the repeat call reports exactly that.
+    // the process lifetime and the repeat call reports exactly that. The walk
+    // below needs the finder, and must finish before `begin_panic` unwinds the
+    // frames it walks.
     let _ = set_custom_eh_frame_finder(&FINDER);
     crate::backtrace::print(&mut crate::Stderr);
     unwinding::panic::begin_panic(Box::new(info.message().to_string()));
+    // Reached only when nothing caught the exception or an FDE was missing. 101
+    // is std's exit code for a panic.
     crate::exit(101)
 }
