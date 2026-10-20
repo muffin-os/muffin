@@ -172,8 +172,7 @@ impl KernelTest {
         let (rx, reader) = spawn_serial_reader(&mut child);
 
         let mut transcript: Vec<String> = vec![];
-        let mut pending: Vec<PendingProcess> = vec![];
-        let mut all_announced = false;
+        let mut tracker = SpawnTracker::default();
         let deadline = Instant::now() + self.deadline;
         let mut complete_at: Option<Instant> = None;
         let mut child_exited_early = false;
@@ -205,28 +204,16 @@ impl KernelTest {
                             format!("kernel panicked during the run: {line:?}"),
                         );
                     }
-                    if let Some((path, pid)) = parse_spawned(&line) {
-                        pending.push(PendingProcess {
-                            path,
-                            pid,
-                            outcome: None,
-                        });
-                    } else if parse_spawn_complete(&line).is_some() {
-                        all_announced = true;
-                    } else if let Some((pid, outcome)) = parse_outcome(&line)
-                        && let Some(proc) = pending.iter_mut().find(|p| p.pid == pid)
-                    {
-                        proc.outcome = Some(outcome);
+                    if let Err(message) = tracker.observe(&line) {
+                        transcript.push(line);
+                        fail(&transcript, &mut child, message);
                     }
                     transcript.push(line);
 
                     // Completion requires every announced process to have
                     // terminated, so the transcript is guaranteed to carry all
                     // outcomes before we stop reading.
-                    if complete_at.is_none()
-                        && all_announced
-                        && pending.iter().all(|p| p.outcome.is_some())
-                    {
+                    if complete_at.is_none() && tracker.complete() {
                         complete_at = Some(Instant::now());
                     }
                 }
@@ -260,7 +247,8 @@ impl KernelTest {
             );
         }
 
-        let processes = pending
+        let processes = tracker
+            .pending
             .into_iter()
             .map(|p| SpawnedProcess {
                 path: p.path,
@@ -383,6 +371,58 @@ struct PendingProcess {
     outcome: Option<Outcome>,
 }
 
+/// Spawn bookkeeping for one boot, fed every serial line in order.
+#[derive(Default)]
+struct SpawnTracker {
+    pending: Vec<PendingProcess>,
+    all_announced: bool,
+}
+
+impl SpawnTracker {
+    /// Records `line` if it is one of the wire-contract lines, ignoring every
+    /// other line. A contract line that does not parse, a spawn count that
+    /// disagrees with the announcements, or an outcome for an unannounced pid
+    /// is an error.
+    fn observe(&mut self, line: &str) -> Result<(), String> {
+        if let Some(rest) = anchor_after(line, "test-kernel: spawned ") {
+            let (path, pid) =
+                parse_spawned(rest).ok_or_else(|| format!("garbled spawned line {line:?}"))?;
+            self.pending.push(PendingProcess {
+                path,
+                pid,
+                outcome: None,
+            });
+        } else if let Some(rest) = anchor_after(line, "test-kernel: spawn complete count=") {
+            let count: usize = rest
+                .trim()
+                .parse()
+                .map_err(|_| format!("garbled spawn complete line {line:?}"))?;
+            if count != self.pending.len() {
+                return Err(format!(
+                    "spawn complete count={count} but {} processes were announced",
+                    self.pending.len()
+                ));
+            }
+            self.all_announced = true;
+        } else if let Some(rest) = anchor_after(line, "test-kernel: outcome pid=") {
+            let (pid, outcome) =
+                parse_outcome(rest).ok_or_else(|| format!("garbled outcome line {line:?}"))?;
+            let proc = self
+                .pending
+                .iter_mut()
+                .find(|p| p.pid == pid)
+                .ok_or_else(|| format!("outcome for a pid never announced {line:?}"))?;
+            proc.outcome = Some(outcome);
+        }
+        Ok(())
+    }
+
+    /// True once every announced process has an outcome.
+    fn complete(&self) -> bool {
+        self.all_announced && self.pending.iter().all(|p| p.outcome.is_some())
+    }
+}
+
 /// How a spawned process ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -488,26 +528,16 @@ fn fail(transcript: &[String], child: &mut Child, message: String) -> ! {
     panic!("{message}");
 }
 
-/// Parses `test-kernel: spawned {path} pid={N}` into `(path, pid)`.
-fn parse_spawned(line: &str) -> Option<(String, u64)> {
-    let rest = anchor_after(line, "test-kernel: spawned ")?;
-    let (path, pid) = rest.rsplit_once(" pid=")?;
+/// Parses the `{path} pid={N}` payload of a spawned line into `(path, pid)`.
+fn parse_spawned(payload: &str) -> Option<(String, u64)> {
+    let (path, pid) = payload.rsplit_once(" pid=")?;
     Some((path.trim().to_owned(), pid.trim().parse().ok()?))
 }
 
-/// Parses `test-kernel: spawn complete count={N}` into `N`.
-fn parse_spawn_complete(line: &str) -> Option<u64> {
-    anchor_after(line, "test-kernel: spawn complete count=")?
-        .trim()
-        .parse()
-        .ok()
-}
-
-/// Parses `test-kernel: outcome pid={N} exit={code}` and
-/// `test-kernel: outcome pid={N} signal={NAME}` into the pid and its outcome.
-fn parse_outcome(line: &str) -> Option<(u64, Outcome)> {
-    let rest = anchor_after(line, "test-kernel: outcome pid=")?;
-    let (pid, rest) = rest.trim().split_once(' ')?;
+/// Parses the `{N} exit={code}` or `{N} signal={NAME}` payload of an outcome
+/// line into the pid and its outcome.
+fn parse_outcome(payload: &str) -> Option<(u64, Outcome)> {
+    let (pid, rest) = payload.trim().split_once(' ')?;
     let outcome = match rest.split_once('=')? {
         ("exit", code) => Outcome::Exited(code.parse().ok()?),
         ("signal", name) => Outcome::Signaled(name.to_owned()),
@@ -528,15 +558,66 @@ mod tests {
 
     #[test]
     fn parse_outcome_reads_exit_and_signal() {
+        assert_eq!(parse_outcome("3 exit=42"), Some((3, Outcome::Exited(42))));
         assert_eq!(
-            parse_outcome("[INFO] test-kernel: outcome pid=3 exit=42"),
-            Some((3, Outcome::Exited(42)))
-        );
-        assert_eq!(
-            parse_outcome("test-kernel: outcome pid=1 signal=SIGSEGV"),
+            parse_outcome("1 signal=SIGSEGV"),
             Some((1, Outcome::Signaled("SIGSEGV".to_owned())))
         );
-        assert_eq!(parse_outcome("test-kernel: outcome pid=1 exit=x"), None);
+        assert_eq!(parse_outcome("1 exit=x"), None);
+    }
+
+    fn observe_all(lines: &[&str]) -> Result<SpawnTracker, String> {
+        let mut tracker = SpawnTracker::default();
+        for line in lines {
+            tracker.observe(line)?;
+        }
+        Ok(tracker)
+    }
+
+    #[test]
+    fn garbled_outcome_line_is_an_error() {
+        let result = observe_all(&[
+            "test-kernel: spawned /bin/init pid=1",
+            "test-kernel: spawn complete count=1",
+            "test-kernel: outcome pid=1 exit=4\u{fffd}",
+        ]);
+        assert!(result.is_err(), "garbled outcome was accepted");
+    }
+
+    #[test]
+    fn spawn_complete_count_must_match_the_spawned_lines() {
+        let result = observe_all(&[
+            "test-kernel: spawned /bin/init pid=1",
+            "test-kernel: spawn complete count=2",
+        ]);
+        assert!(result.is_err(), "count mismatch was accepted");
+    }
+
+    #[test]
+    fn outcome_for_an_unknown_pid_is_an_error() {
+        let result = observe_all(&[
+            "test-kernel: spawned /bin/init pid=1",
+            "test-kernel: spawn complete count=1",
+            "test-kernel: outcome pid=7 exit=0",
+        ]);
+        assert!(result.is_err(), "outcome for an unspawned pid was accepted");
+    }
+
+    #[test]
+    fn completes_once_every_spawned_process_has_an_outcome() {
+        let mut tracker = observe_all(&[
+            "test-kernel: spawned /bin/a pid=1",
+            "[INFO] test-kernel: spawned /bin/b pid=2",
+            "test-kernel: spawn complete count=2",
+            "test-kernel: outcome pid=2 signal=SIGSEGV",
+        ])
+        .unwrap();
+        assert!(!tracker.complete());
+        tracker
+            .observe("test-kernel: outcome pid=1 exit=0")
+            .unwrap();
+        assert!(tracker.complete());
+        assert_eq!(tracker.pending[0].outcome, Some(Outcome::Exited(0)));
     }
 
     fn signaled_report() -> RunReport {
