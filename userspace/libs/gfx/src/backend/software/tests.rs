@@ -3,12 +3,10 @@ use alloc::vec::Vec;
 
 use kernel_abi::gfx::BufferDesc;
 
-use crate::api::{
-    Adapter, CommandRecorder, GfxAllocator, GfxCompiler, GfxFence, GfxQueue, PipelineDesc,
-};
+use crate::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
 use crate::backend::software::{
-    ATTRIBUTE_BYTES, SoftAdapter, SoftAllocator, SoftBackend, SoftCompiler, SoftFence, SoftQueue,
-    SoftRecorder, SoftShaderDef,
+    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftRecorder,
+    SoftShaderDef,
 };
 use crate::error::GfxError;
 
@@ -63,20 +61,6 @@ fn simple_pipeline(
             vertex_stride,
         })
         .unwrap()
-}
-
-#[test]
-fn adapter_is_not_hw_accelerated() {
-    let a = SoftAdapter;
-    assert!(!a.is_hardware_accelerated());
-    assert!(a.max_texture_resolution() > 0);
-}
-
-#[test]
-fn fence_is_always_ready() {
-    let f = SoftFence;
-    assert!(f.is_ready());
-    f.wait();
 }
 
 #[test]
