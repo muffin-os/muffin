@@ -23,6 +23,8 @@ impl AbsoluteOwnedPath {
         }
     }
 
+    /// # Safety
+    /// `inner` must start with [`crate::path::FILEPATH_SEPARATOR`].
     pub(crate) unsafe fn new_unchecked(inner: OwnedPath) -> Self {
         Self { inner }
     }

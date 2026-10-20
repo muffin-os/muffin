@@ -26,12 +26,15 @@ impl AbsolutePath {
         path.try_into()
     }
 
+    /// # Safety
+    /// `path` must start with [`crate::path::FILEPATH_SEPARATOR`].
     pub(crate) unsafe fn new_unchecked(path: &Path) -> &Self {
         unsafe { &*(ptr::from_ref::<Path>(path) as *const AbsolutePath) }
     }
 
     #[must_use]
     pub fn parent(&self) -> Option<&AbsolutePath> {
+        // Safety: the parent keeps the leading separator of an absolute path.
         self.inner
             .parent()
             .map(|v| unsafe { AbsolutePath::new_unchecked(v) })
