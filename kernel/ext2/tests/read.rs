@@ -123,7 +123,7 @@ fn do_test_read_file(sector_size: usize) {
             .expect("read_from_file failed");
         assert_eq!(14, read_bytes);
         assert_eq!(b"Hello, World!\n", &hello_txt_data[0..14]);
-        assert_eq!([0xFC_u8; 5], hello_txt_data[15..20]);
+        assert_eq!([0xFC_u8; 6], hello_txt_data[14..20]);
     }
     {
         let mut hello_txt_data = [0_u8; 5];
