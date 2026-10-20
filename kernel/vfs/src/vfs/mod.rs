@@ -95,9 +95,13 @@ impl Vfs {
         let relative_path = if mount_path == ROOT {
             path
         } else {
-            path.strip_prefix(&***mount_path).unwrap()
+            let rest = path.strip_prefix(&***mount_path).unwrap();
+            if rest.is_empty() {
+                ROOT
+            } else {
+                AbsolutePath::try_new(rest).unwrap()
+            }
         };
-        let relative_path = unsafe { AbsolutePath::new_unchecked((&relative_path).as_ref()) };
         let mut guard = fs.write();
         guard
             .open(relative_path)
@@ -173,5 +177,18 @@ mod tests {
         let mut vfs = Vfs::new();
         vfs.mount(ROOT, fs).unwrap();
         assert!(vfs.mount(ROOT, TestFs::default()).is_err());
+    }
+
+    #[test]
+    fn test_open_mount_point_opens_fs_root() {
+        let mut fs = TestFs::default();
+        fs.insert_file(ROOT, vec![0x00; 1], Stat::default());
+
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, TestFs::default()).unwrap();
+        vfs.mount(AbsolutePath::try_new("/dev").unwrap(), fs)
+            .unwrap();
+
+        assert!(vfs.open(AbsolutePath::try_new("/dev").unwrap()).is_ok());
     }
 }

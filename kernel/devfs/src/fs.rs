@@ -148,9 +148,7 @@ impl DevFs {
 impl FileSystem for DevFs {
     fn open(&mut self, path: &AbsolutePath) -> Result<FsHandle, OpenError> {
         let node = self.resolve_node(path)?;
-        let file_node = node
-            .file()
-            .expect("should be regular file, opening directories is not yet supported");
+        let file_node = node.file().ok_or(OpenError::NotFound)?;
         let file = file_node.open_fn()()?;
         let handle = Self::new_fs_handle();
         self.open_files.insert(handle, file);
@@ -219,6 +217,12 @@ mod tests {
         let path = AbsolutePath::try_new("/nonexistent").unwrap();
         let result = devfs.open(path);
         assert_eq!(result, Err(OpenError::NotFound));
+    }
+
+    #[test]
+    fn test_open_directory_is_not_found() {
+        let mut devfs = DevFs::new();
+        assert_eq!(devfs.open(ROOT), Err(OpenError::NotFound));
     }
 
     #[derive(Debug, Eq, PartialEq)]
