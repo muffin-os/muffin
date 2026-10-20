@@ -65,13 +65,17 @@ where
         let offset = offset as u32;
 
         let start_block = offset / block_size;
-        let end_block = (offset + buf.len() as u32 - 1) / block_size;
+        let last_block = (offset + buf.len() as u32 - 1) / block_size;
         let relative_offset = (offset % block_size) as usize;
-        let block_count = (end_block - start_block + 1) as usize;
+        let block_count = (last_block - start_block + 1) as usize;
 
         let mut data: Vec<u8> = vec![0_u8; block_count * block_size as usize];
-        let res =
-            self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?;
+        let res = self.read_blocks_from_inode(
+            file,
+            start_block as usize,
+            last_block as usize,
+            &mut data,
+        )?;
         let total_read = res.min(file_size - offset as usize).min(buf.len());
         buf[..total_read].copy_from_slice(&data[relative_offset..relative_offset + total_read]);
 
@@ -82,18 +86,18 @@ where
         &self,
         inode: &Inode,
         start_block: usize,
-        end_block: usize,
+        last_block: usize,
         buf: &mut [u8],
     ) -> Result<usize, Error> {
         let block_size = self.superblock.block_size() as usize;
         assert_eq!(
             buf.len(),
-            (end_block - start_block + 1) * block_size,
+            (last_block - start_block + 1) * block_size,
             "buf.len() must be equal to the number of blocks you want to read"
         );
 
-        let mut pointers = Vec::with_capacity(end_block - start_block + 1);
-        for block in start_block..=end_block {
+        let mut pointers = Vec::with_capacity(last_block - start_block + 1);
+        for block in start_block..=last_block {
             pointers.push(self.resolve_block_index(inode, block as u32)?);
         }
 

@@ -18,22 +18,27 @@ where
         let offset = offset as u32;
 
         let start_block = offset / block_size;
-        let end_block = (offset + buf.len() as u32 - 1) / block_size;
+        let last_block = (offset + buf.len() as u32 - 1) / block_size;
         let relative_offset = (offset % block_size) as usize;
-        let block_count = (end_block - start_block + 1) as usize;
+        let block_count = (last_block - start_block + 1) as usize;
 
         // Pad with the on-disk bytes so every chunk is a full block that can be
         // written back as is.
         let data = {
             let mut data = vec![0_u8; block_count * block_size as usize];
-            self.read_blocks_from_inode(file, start_block as usize, end_block as usize, &mut data)?;
+            self.read_blocks_from_inode(
+                file,
+                start_block as usize,
+                last_block as usize,
+                &mut data,
+            )?;
             data[relative_offset..relative_offset + buf.len()].copy_from_slice(buf);
             data
         };
 
         let mut num_new_allocated_blocks = 0;
         let mut chunks = data.chunks_exact(block_size as usize);
-        for ((_, block), chunk) in (start_block..=end_block).enumerate().zip(&mut chunks) {
+        for ((_, block), chunk) in (start_block..=last_block).enumerate().zip(&mut chunks) {
             let block_address =
                 if let Some(block_address) = self.resolve_block_index(file, block)? {
                     block_address
