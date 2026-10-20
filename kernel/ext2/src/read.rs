@@ -6,11 +6,11 @@ use kernel_device::block::BlockDevice;
 use crate::{BlockAddress, Error, Ext2Fs, Inode, RegularFile};
 
 const SZ: usize = size_of::<BlockAddress>();
+// A triple indirect resolution touches three distinct tables, so four slots
+// let a sequential scan keep every table it is about to need again.
 const INDIRECT_CACHE_CAPACITY: usize = 4;
 
-/// Four entries cover a triple indirect resolution, which touches three
-/// distinct blocks, so a sequential scan never evicts a block it is about
-/// to need again.
+/// Most recently used indirect block tables, newest first.
 pub(crate) struct IndirectCache {
     entries: Vec<(BlockAddress, Vec<Option<BlockAddress>>)>,
 }
