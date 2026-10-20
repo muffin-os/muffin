@@ -2,8 +2,9 @@
 //! 16 byte aligned, followed by the argv pointer array, a NULL, the envp
 //! pointer array, a NULL, and the NUL terminated string bytes above.
 
+use core::ptr::null_mut;
 use core::slice;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::exit;
 
@@ -30,9 +31,9 @@ macro_rules! entry {
     };
 }
 
-static ARGV: AtomicUsize = AtomicUsize::new(0);
+static ARGV: AtomicPtr<*const u8> = AtomicPtr::new(null_mut());
 static ARGC: AtomicUsize = AtomicUsize::new(0);
-static ENVP: AtomicUsize = AtomicUsize::new(0);
+static ENVP: AtomicPtr<*const u8> = AtomicPtr::new(null_mut());
 static ENVC: AtomicUsize = AtomicUsize::new(0);
 
 /// # Safety
@@ -55,17 +56,17 @@ pub unsafe extern "C" fn __muffin_start_inner(sp: *const usize) -> ! {
 /// `sp` must point at the `argc` word of the process entry stack.
 unsafe fn rt_init(sp: *const usize) {
     let argc = unsafe { *sp };
-    let argv = unsafe { sp.add(1) };
+    let argv = unsafe { sp.add(1) }.cast_mut().cast::<*const u8>();
     let envp = unsafe { argv.add(argc + 1) };
 
     let mut envc = 0;
-    while unsafe { *envp.add(envc) } != 0 {
+    while !unsafe { *envp.add(envc) }.is_null() {
         envc += 1;
     }
 
-    ARGV.store(argv as usize, Ordering::Relaxed);
+    ARGV.store(argv, Ordering::Relaxed);
     ARGC.store(argc, Ordering::Relaxed);
-    ENVP.store(envp as usize, Ordering::Relaxed);
+    ENVP.store(envp, Ordering::Relaxed);
     ENVC.store(envc, Ordering::Relaxed);
 }
 
@@ -79,8 +80,11 @@ pub fn env() -> impl Iterator<Item = &'static [u8]> {
     strings(&ENVP, &ENVC)
 }
 
-fn strings(base: &AtomicUsize, count: &AtomicUsize) -> impl Iterator<Item = &'static [u8]> {
-    let base = base.load(Ordering::Relaxed) as *const *const u8;
+fn strings(
+    base: &AtomicPtr<*const u8>,
+    count: &AtomicUsize,
+) -> impl Iterator<Item = &'static [u8]> {
+    let base = base.load(Ordering::Relaxed);
     // Safety: the strings live on the initial stack, which is never reclaimed, so
     // they outlive every caller.
     (0..count.load(Ordering::Relaxed)).map(move |i| unsafe { bytes_of(*base.add(i)) })
