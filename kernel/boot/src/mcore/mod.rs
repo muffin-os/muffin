@@ -3,7 +3,7 @@ use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::Ordering::{Acquire, Release};
 
-use tracing::{instrument, trace, Level};
+use tracing::{Level, instrument, trace};
 use x86_64::instructions::segmentation::{CS, DS, SS};
 use x86_64::instructions::tables::load_tss;
 use x86_64::instructions::{hlt, interrupts};
