@@ -6,8 +6,7 @@ use core::sync::atomic::{Ordering, fence};
 use core::{mem, slice};
 
 use kernel_vfs::node::VfsNode;
-use kernel_virtual_memory::{Segment, VirtualMemoryManager};
-use spin::RwLock;
+use kernel_virtual_memory::Segment;
 use spin::mutex::Mutex;
 use thiserror::Error;
 use tracing::trace;
@@ -116,32 +115,12 @@ impl MemoryRegions {
             region.unmap_from(address_space);
         }
     }
-
-    /// Clones every region into a new set for a forked child, see
-    /// [`PrivateMemoryRegion::clone_for_fork`] for the CoW protocol. The
-    /// per-region state locks must be taken with interrupts enabled. A
-    /// pager on another CPU holds them across file page-ins whose storage
-    /// IRQ may be routed to this CPU.
-    pub fn clone_for_fork(
-        &self,
-        address_space: &AddressSpace,
-        child_vmm: &Arc<RwLock<VirtualMemoryManager>>,
-    ) -> Result<MemoryRegions, CloneRegionError> {
-        let regions = interrupts::without_interrupts(|| self.regions.lock().clone());
-        let mut cloned = Vec::with_capacity(regions.len());
-        for region in &regions {
-            cloned.push(Arc::new(region.clone_for_fork(address_space, child_vmm)?));
-        }
-        Ok(MemoryRegions {
-            regions: Mutex::new(cloned),
-        })
-    }
 }
 
 #[derive(Debug)]
 pub enum MemoryRegion {
-    /// A private mapping (anonymous or CoW-shared after fork). Pages are
-    /// mapped in lazily by the page fault handler upon access.
+    /// A private mapping. Pages are mapped in lazily by the page fault
+    /// handler upon access.
     ///
     /// - [`PrivateMemoryRegion`]
     Private(PrivateMemoryRegion),
@@ -243,22 +222,6 @@ impl MemoryRegion {
             MemoryRegion::Shared(_) => Err(SetProtectionError::UnsupportedRegion),
         }
     }
-
-    pub fn clone_for_fork(
-        &self,
-        address_space: &AddressSpace,
-        child_vmm: &Arc<RwLock<VirtualMemoryManager>>,
-    ) -> Result<MemoryRegion, CloneRegionError> {
-        Ok(match self {
-            MemoryRegion::Private(r) => {
-                MemoryRegion::Private(r.clone_for_fork(address_space, child_vmm)?)
-            }
-            MemoryRegion::FileBacked(r) => {
-                MemoryRegion::FileBacked(r.clone_for_fork(address_space, child_vmm)?)
-            }
-            MemoryRegion::Shared(r) => MemoryRegion::Shared(r.clone_for_fork(child_vmm)?),
-        })
-    }
 }
 
 #[derive(Debug, Error)]
@@ -278,14 +241,6 @@ pub enum SetProtectionError {
     #[error("region does not support protection changes")]
     UnsupportedRegion,
     #[error("failed to remap a mapped page")]
-    RemapFailed,
-}
-
-#[derive(Debug, Error)]
-pub enum CloneRegionError {
-    #[error("virtual range already reserved in child address space")]
-    AlreadyReserved,
-    #[error("failed to write-protect a parent page")]
     RemapFailed,
 }
 
@@ -318,9 +273,9 @@ fn with_frame_mapped<R>(
 #[derive(Debug)]
 struct PrivateRegionState {
     /// The flags a privately owned page is mapped with. While a frame is
-    /// shared (fork), pages are mapped with these flags minus WRITABLE.
+    /// shared, pages are mapped with these flags minus WRITABLE.
     flags: PageTableFlags,
-    /// Single-page frames from demand paging and CoW breaks.
+    /// Single-page frames from demand paging and copy-on-write breaks.
     pages: BTreeMap<Page<Size4KiB>, Arc<OwnedPhysicalMemory>>,
     /// Whole contiguous eager allocations, keyed by their first page.
     /// Immutable, never split or merged.
@@ -503,68 +458,6 @@ impl PrivateMemoryRegion {
         Ok(())
     }
 
-    /// Clones this region for a forked child. The recursive mapper only
-    /// works for the loaded CR3, so the child's page tables cannot be
-    /// populated here. The child maps its pages lazily through the fault
-    /// handler. Both backing maps are `Arc`-cloned and every writable
-    /// parent page is write-protected, so the first write on either side
-    /// faults into the CoW break.
-    ///
-    /// FIXME. THERE IS NO IPI TLB SHOOTDOWN YET. Write protection flushes
-    /// only the executing CPU's TLB, so another CPU running a task of the
-    /// parent can keep writing through a stale writable entry until it
-    /// faults or reloads CR3. That breaks CoW isolation whenever a parent
-    /// task is live on another CPU during fork. No user page is mapped
-    /// GLOBAL, so migration's CR3 reload flushes them and single-threaded
-    /// parents are unaffected. Implement a TLB shootdown IPI before fork
-    /// of multi-threaded processes ships.
-    ///
-    /// A fork caller must NOT CoW-clone a task's FX area region. The
-    /// scheduler's `_fxsave` into a write-protected page would fault with
-    /// interrupts disabled. Fork must give the child a fresh FX area.
-    pub fn clone_for_fork(
-        &self,
-        address_space: &AddressSpace,
-        child_vmm: &Arc<RwLock<VirtualMemoryManager>>,
-    ) -> Result<Self, CloneRegionError> {
-        // The full segment is reserved so the child keeps the guard pages.
-        let child_segment = child_vmm
-            .mark_as_reserved(Segment::new(self.segment.start, self.segment.len))
-            .map_err(|_| CloneRegionError::AlreadyReserved)?;
-
-        let state = self.state.lock();
-        if state.flags.contains(PageTableFlags::WRITABLE) {
-            // PageNotMapped is tolerated because a region that was itself
-            // cloned and never touched here has backings without mappings.
-            let write_protect = |page: Page<Size4KiB>| match address_space
-                .remap::<Size4KiB, _>(page, |f| f - PageTableFlags::WRITABLE)
-            {
-                Ok(()) | Err(FlagUpdateError::PageNotMapped) => Ok(()),
-                Err(_) => Err(CloneRegionError::RemapFailed),
-            };
-            // A page shadowed by both maps is remapped twice, harmless.
-            for (first, backing) in &state.ranges {
-                for i in 0..(backing.end - backing.start + 1) {
-                    write_protect(*first + i)?;
-                }
-            }
-            for page in state.pages.keys() {
-                write_protect(*page)?;
-            }
-        }
-
-        Ok(Self {
-            start: self.start,
-            segment: child_segment,
-            size: self.size,
-            state: Mutex::new(PrivateRegionState {
-                flags: state.flags,
-                pages: state.pages.clone(),
-                ranges: state.ranges.clone(),
-            }),
-        })
-    }
-
     pub fn segment(&self) -> &Segment {
         &self.segment
     }
@@ -705,19 +598,6 @@ impl FileBackedMemoryRegion {
         }
     }
 
-    pub fn clone_for_fork(
-        &self,
-        address_space: &AddressSpace,
-        child_vmm: &Arc<RwLock<VirtualMemoryManager>>,
-    ) -> Result<Self, CloneRegionError> {
-        Ok(Self {
-            region: self.region.clone_for_fork(address_space, child_vmm)?,
-            node: self.node.clone(),
-            file_offset: self.file_offset,
-            file_len: self.file_len,
-        })
-    }
-
     fn handle_fault(
         &self,
         address_space: &AddressSpace,
@@ -780,21 +660,6 @@ impl SharedMemoryRegion {
             frames,
             _node: node,
         }
-    }
-
-    pub fn clone_for_fork(
-        &self,
-        child_vmm: &Arc<RwLock<VirtualMemoryManager>>,
-    ) -> Result<Self, CloneRegionError> {
-        let segment = child_vmm
-            .mark_as_reserved(Segment::new(self.segment.start, self.segment.len))
-            .map_err(|_| CloneRegionError::AlreadyReserved)?;
-        Ok(Self {
-            segment,
-            size: self.size,
-            frames: self.frames,
-            _node: self._node.clone(),
-        })
     }
 
     fn handle_fault(
