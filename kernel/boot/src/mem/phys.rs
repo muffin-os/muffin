@@ -171,9 +171,9 @@ impl PhysicalMemory {
 
     /// Deallocates all frames in the range, returning them to the free pool.
     ///
-    /// Iterates through the range deallocating each frame individually. If a panic occurs
-    /// during iteration (e.g., double-free detected in debug build), remaining frames are
-    /// not deallocated.
+    /// Iterates through the range deallocating each frame individually. In debug builds a
+    /// double-free panics at the offending frame and leaves the rest allocated. In release
+    /// builds the offending frame is skipped and the rest are still deallocated.
     ///
     /// Acquires the allocator's spinlock, so do not call with interrupts disabled.
     ///
@@ -296,8 +296,8 @@ pub trait FrameAllocator<S: PageSize> {
     ///
     /// # Panics
     /// If built with `debug_assertions`, this function panics if any frame in
-    /// the range is already deallocated or not allocated yet.
-    /// Deallocation of remaining frames will not be attempted.
+    /// the range is already deallocated or not allocated yet. Otherwise such
+    /// frames are skipped and the rest of the range is still deallocated.
     fn deallocate_frames(&mut self, range: PhysFrameRangeInclusive<S>) {
         for frame in range {
             self.deallocate_frame(frame);

@@ -221,17 +221,17 @@ pub trait PhysicalFrameAllocator<S: PageSize> {
 
     fn deallocate_frame(&mut self, frame: PhysFrame<S>) -> Option<PhysFrame<S>>;
 
+    /// Returns `None` if any frame in the range was not allocated. The other
+    /// frames are still freed.
     fn deallocate_frames(
         &mut self,
         range: PhysFrameRangeInclusive<S>,
     ) -> Option<PhysFrameRangeInclusive<S>> {
-        let mut res: Option<PhysFrameRangeInclusive<S>> = None;
+        let mut all_freed = true;
         for frame in range {
-            let frame = self.deallocate_frame(frame)?;
-            let start = if let Some(r) = res { r.start } else { frame };
-            res = Some(PhysFrameRangeInclusive { start, end: frame });
+            all_freed &= self.deallocate_frame(frame).is_some();
         }
-        res
+        all_freed.then_some(range)
     }
 }
 
@@ -243,10 +243,13 @@ impl PhysicalFrameAllocator<Size4KiB> for PhysicalMemoryManager {
     fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>) -> Option<PhysFrame<Size4KiB>> {
         let addr = frame.start_address().as_u64();
 
-        // Find which region contains this frame
-        let loc = Self::find_frame_location(&self.regions, addr)?;
+        let loc = Self::find_frame_location(&self.regions, addr);
+        debug_assert!(loc.is_some(), "deallocating unmanaged frame {frame:?}");
+        let loc = loc?;
 
-        if self.regions[loc.region_idx].frames()[loc.frame_idx] == FrameState::Allocated {
+        let state = self.regions[loc.region_idx].frames()[loc.frame_idx];
+        debug_assert!(state == FrameState::Allocated, "double free of {frame:?}");
+        if state == FrameState::Allocated {
             self.regions[loc.region_idx].frames_mut()[loc.frame_idx] = FrameState::Free;
 
             // Update first_free if this is before the current first_free
@@ -275,14 +278,15 @@ impl PhysicalFrameAllocator<Size2MiB> for PhysicalMemoryManager {
     }
 
     fn deallocate_frame(&mut self, frame: PhysFrame<Size2MiB>) -> Option<PhysFrame<Size2MiB>> {
+        let mut all_freed = true;
         for i in 0..(Size2MiB::SIZE / Size4KiB::SIZE) as usize {
             let frame = PhysFrame::<Size4KiB>::containing_address(
                 frame.start_address() + (i as u64 * Size4KiB::SIZE),
             );
-            self.deallocate_frame(frame)?;
+            all_freed &= self.deallocate_frame(frame).is_some();
         }
 
-        Some(frame)
+        all_freed.then_some(frame)
     }
 }
 
@@ -292,14 +296,15 @@ impl PhysicalFrameAllocator<Size1GiB> for PhysicalMemoryManager {
     }
 
     fn deallocate_frame(&mut self, frame: PhysFrame<Size1GiB>) -> Option<PhysFrame<Size1GiB>> {
+        let mut all_freed = true;
         for i in 0..(Size1GiB::SIZE / Size2MiB::SIZE) as usize {
             let frame = PhysFrame::<Size2MiB>::containing_address(
                 frame.start_address() + (i as u64 * Size2MiB::SIZE),
             );
-            self.deallocate_frame(frame)?;
+            all_freed &= self.deallocate_frame(frame).is_some();
         }
 
-        Some(frame)
+        all_freed.then_some(frame)
     }
 }
 
@@ -353,7 +358,6 @@ mod tests {
         assert_eq!(Option::<PhysFrame<Size4KiB>>::None, pmm.allocate_frame());
 
         assert_eq!(Some(frame2), pmm.deallocate_frame(frame2));
-        assert_eq!(None, pmm.deallocate_frame(frame2));
 
         assert_eq!(Some(frame4), pmm.deallocate_frame(frame4));
         assert_eq!(Some(frame2), pmm.allocate_frame());
@@ -399,6 +403,29 @@ mod tests {
         assert_eq!(Some(small_frame1), pmm.deallocate_frame(small_frame1));
         assert_eq!(Some(frame1), pmm.deallocate_frame(frame1));
         assert_eq!(Some(small_frame2), pmm.deallocate_frame(small_frame2));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "double free")]
+    fn test_double_free_panics() {
+        let region = MemoryRegion::new(0, 4, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+        let frame: PhysFrame<Size4KiB> = pmm.allocate_frame().unwrap();
+        assert_eq!(Some(frame), pmm.deallocate_frame(frame));
+        pmm.deallocate_frame(frame);
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn test_deallocate_frames_continues_past_double_free() {
+        let region = MemoryRegion::new(0, 4, FrameState::Free);
+        let mut pmm = PhysicalMemoryManager::new(vec![region]);
+        let range: PhysFrameRangeInclusive<Size4KiB> = pmm.allocate_frames(4).unwrap();
+        assert_eq!(Some(range.start + 1), pmm.deallocate_frame(range.start + 1));
+
+        assert_eq!(None, pmm.deallocate_frames(range));
+        assert_eq!(Some(range), pmm.allocate_frames(4));
     }
 
     #[test]
