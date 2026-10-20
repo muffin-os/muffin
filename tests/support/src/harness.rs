@@ -414,7 +414,7 @@ pub struct RunReport {
 
 impl RunReport {
     /// Exit code of the `index`-th spawned process, or `None` if it was
-    /// signaled rather than exiting.
+    /// signaled rather than exiting or no process has that index.
     #[must_use]
     pub fn exit_code(&self, index: usize) -> Option<u64> {
         match self.processes.get(index).map(|p| &p.outcome) {
