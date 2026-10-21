@@ -148,8 +148,10 @@ fn test_create_file_collision(sector_size: usize) {
     assert_eq!(file.len(), 0);
 
     let mut root = fs.read_root_inode().unwrap();
+    let free_inodes = fs.superblock().num_unallocated_inodes();
     let result = fs.create_regular_file(&mut root, file_name);
     assert_eq!(result.unwrap_err(), Error::EntryExists);
+    assert_eq!(fs.superblock().num_unallocated_inodes(), free_inodes);
 }
 
 #[test]
@@ -604,4 +606,85 @@ fn entry_names<T: BlockDevice>(fs: &Ext2Fs<T>) -> Vec<String> {
         .iter()
         .map(|e| e.name().unwrap().to_owned())
         .collect()
+}
+
+generate_tests!(
+    created_file_reads_back_through_a_fresh_lookup:
+    1024 - created_file_reads_back_through_a_fresh_lookup_1k,
+    4096 - created_file_reads_back_through_a_fresh_lookup_4k,
+);
+
+fn created_file_reads_back_through_a_fresh_lookup(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "data.bin");
+    let data = pattern(13 * block_size + 7);
+    fs.write_to_file(&mut file, 0, &data).unwrap();
+
+    let root = fs.read_root_inode().unwrap();
+    let found: RegularFile = fs
+        .find_and_resolve_entry(&root, |e| e.name() == Some("data.bin"))
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    assert_eq!(found.num_hard_links(), 1);
+    assert_eq!(found.len(), data.len());
+    assert!(found.single_indirect_ptr().is_some());
+    assert_eq!(
+        found.num_disk_sectors(),
+        15 * fs.superblock().sectors_per_block()
+    );
+    assert_eq!(read_all(&fs, &found), data);
+}
+
+generate_tests!(
+    creating_past_the_first_directory_block_grows_the_directory:
+    1024 - creating_past_the_first_directory_block_grows_the_directory_1k,
+    4096 - creating_past_the_first_directory_block_grows_the_directory_4k,
+);
+
+fn creating_past_the_first_directory_block_grows_the_directory(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let sectors_per_block = fs.superblock().sectors_per_block();
+    let mut root = fs.read_root_inode().unwrap();
+    assert_eq!(root.len(), block_size);
+    let mut names = vec![];
+    while root.len() == block_size {
+        let name = format!("{}{}", names.len(), "n".repeat(MAX_NAME_LEN - 3));
+        fs.create_regular_file(&mut root, &name).unwrap();
+        names.push(name);
+        root = fs.read_root_inode().unwrap();
+    }
+
+    assert_eq!(root.len(), 2 * block_size);
+    assert_eq!(root.num_disk_sectors(), 2 * sectors_per_block);
+    let listed = entry_names(&fs);
+    assert!(names.iter().all(|name| listed.contains(name)));
+}
+
+#[test]
+fn directory_past_direct_blocks_is_not_supported_and_frees_the_inode() {
+    let mut fs = empty_fs!(1024);
+    let mut root = fs.read_root_inode().unwrap();
+    let result = loop {
+        let name = format!(
+            "{:03}{}",
+            entry_names(&fs).len(),
+            "n".repeat(MAX_NAME_LEN - 3)
+        );
+        let free_inodes = fs.superblock().num_unallocated_inodes();
+        let free_blocks = fs.superblock().num_unallocated_blocks();
+        match fs.create_regular_file(&mut root, &name) {
+            Ok(_) => {}
+            Err(e) => {
+                assert_eq!(fs.superblock().num_unallocated_inodes(), free_inodes);
+                assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks);
+                break e;
+            }
+        }
+    };
+
+    assert_eq!(result, Error::NotSupported);
+    assert_eq!(fs.read_root_inode().unwrap().len(), 12 * 1024);
 }

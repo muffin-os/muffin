@@ -72,6 +72,15 @@ where
         self.read_inode(entry.inode)
     }
 
+    /// Adds an entry named `name` for `inode_address` to `dir`, appending a
+    /// directory block when no existing block has room.
+    ///
+    /// # Errors
+    /// - [`Error::NameTooLong`] / [`Error::EntryExists`] before anything changes.
+    /// - [`Error::NotSupported`] if all 12 direct blocks of `dir` are full.
+    /// - [`Error::NoSpace`] if a new directory block cannot be allocated.
+    /// - [`Error::InvalidDirEntry`] / [`Error::InvalidDirEntryType`] for a
+    ///   corrupt directory block, and device errors.
     pub fn add_entry_to_dir(
         &mut self,
         dir: &mut Directory,
@@ -89,11 +98,15 @@ where
         let block_size = self.superblock.block_size() as usize;
         let dir_entries_have_type = self.superblock.dir_entries_have_type();
 
-        let inode = &mut dir.inode_mut();
-
         let required_size = DirEntry::size(name.len() as u16);
+        let new_entry = |total_size| DirEntry {
+            inode: inode_address,
+            total_size,
+            type_indicator: dir_entries_have_type.then_some(typ),
+            name_bytes: name.as_bytes().to_vec(),
+        };
 
-        for block in inode.direct_ptrs().flatten() {
+        for block in dir.direct_ptrs().flatten() {
             let mut block_data = vec![0_u8; block_size];
             self.read_block(block, &mut block_data)?;
 
@@ -116,16 +129,7 @@ where
                             .copy_from_slice(&entry_serialized);
                     }
                     let new_entry_offset = offset + usize::from(kept_size);
-                    let new_entry = DirEntry {
-                        inode: inode_address,
-                        total_size: old_total_size - kept_size,
-                        type_indicator: if dir_entries_have_type {
-                            Some(typ)
-                        } else {
-                            None
-                        },
-                        name_bytes: name.as_bytes().to_vec(),
-                    };
+                    let new_entry = new_entry(old_total_size - kept_size);
 
                     let new_entry_serialized = new_entry.serialize();
                     block_data[new_entry_offset..new_entry_offset + new_entry_serialized.len()]
@@ -140,7 +144,20 @@ where
             }
         }
 
-        todo!("add_entry_to_dir with indirect pointers")
+        // shortcut: a directory grows through its 12 direct blocks only. Walk
+        // the indirect tiers here once directories need more entries.
+        let Some(slot) = dir.direct_ptrs().position(|ptr| ptr.is_none()) else {
+            return Err(Error::NotSupported);
+        };
+        let total_size = u16::try_from(block_size).map_err(|_| Error::NotSupported)?;
+        let mut block_data = new_entry(total_size).serialize();
+        block_data.resize(block_size, 0);
+        let block = self.allocate_counted(dir.inode_mut())?;
+        self.write_block(block, &block_data)?;
+        let inode = dir.inode_mut();
+        inode.set_direct_ptr(slot, Some(block));
+        inode.set_len((slot + 1) * block_size);
+        self.write_inode(dir.inode_address(), dir)
     }
 }
 

@@ -207,7 +207,7 @@ where
     }
 
     /// Allocates a block and adds it to the sector count of `inode`.
-    fn allocate_counted(&mut self, inode: &mut Inode) -> Result<BlockAddress, Error> {
+    pub(crate) fn allocate_counted(&mut self, inode: &mut Inode) -> Result<BlockAddress, Error> {
         let sectors = inode
             .num_disk_sectors()
             .checked_add(self.superblock.sectors_per_block())
