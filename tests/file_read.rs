@@ -13,4 +13,6 @@ fn file_read() {
     report.assert_line_contains("fileio: content ok");
     report.assert_line_contains("fileio: seek ok");
     report.assert_exit_code(0, 0);
+    report.assert_fsck_clean();
+    assert_eq!(report.debugfs_cat("/data/hello.txt"), b"muffin says hi\n");
 }

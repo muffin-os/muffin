@@ -210,6 +210,8 @@ ext2_image(
             ":" + name + "_disk",
             "@ovmf//:x64_code",
             "@ovmf//:x64_vars",
+            "@e2fsprogs//:debugfs",
+            "@e2fsprogs//:e2fsck",
         ],
         edition = "2024",
         rustc_env = {
@@ -217,6 +219,8 @@ ext2_image(
             "MUFFIN_TEST_DISK": "$(rootpath :{}_disk)".format(name),
             "OVMF_X86_64_CODE": "$(rootpath @ovmf//:x64_code)",
             "OVMF_X86_64_VARS": "$(rootpath @ovmf//:x64_vars)",
+            "MUFFIN_DEBUGFS": "$(rootpath @e2fsprogs//:debugfs)",
+            "MUFFIN_E2FSCK": "$(rootpath @e2fsprogs//:e2fsck)",
         },
         size = "large",
         tags = ["no-sandbox"],

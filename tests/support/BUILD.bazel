@@ -12,5 +12,17 @@ rust_library(
 rust_test(
     name = "test",
     crate = ":support",
+    data = [
+        "@e2fsprogs//:debugfs",
+        "@e2fsprogs//:e2fsck",
+        "@e2fsprogs//:mke2fs",
+        "@e2fsprogs//:mke2fs_conf",
+    ],
+    rustc_env = {
+        "MUFFIN_DEBUGFS": "$(rootpath @e2fsprogs//:debugfs)",
+        "MUFFIN_E2FSCK": "$(rootpath @e2fsprogs//:e2fsck)",
+        "MUFFIN_MKE2FS": "$(rootpath @e2fsprogs//:mke2fs)",
+        "MUFFIN_MKE2FS_CONF": "$(rootpath @e2fsprogs//:mke2fs_conf)",
+    },
     size = "small",
 )

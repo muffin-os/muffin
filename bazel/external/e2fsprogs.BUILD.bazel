@@ -7,17 +7,17 @@ filegroup(
     srcs = glob(["**"]),
 )
 
-# Only mke2fs is consumed, but e2fsprogs has no target that builds it alone, so
-# the whole suite is configured down to the parts that build without host
-# libraries. The private uuid and blkid libraries stay enabled on purpose:
-# disabling them means "link the host's libuuid/libblkid" instead.
+# Only mke2fs, e2fsck and debugfs are consumed, but e2fsprogs has no target
+# that builds them alone, so the whole suite is configured down to the parts
+# that build without host libraries. The private uuid and blkid libraries
+# stay enabled on purpose: disabling them means "link the host's
+# libuuid/libblkid" instead.
 configure_make(
     name = "e2fsprogs_build",
     configure_options = [
         "--enable-libuuid",
         "--enable-libblkid",
         "--disable-uuidd",
-        "--disable-debugfs",
         "--disable-imager",
         "--disable-resizer",
         "--disable-defrag",
@@ -33,9 +33,25 @@ configure_make(
         "--without-systemd-unit-dir",
     ],
     lib_source = ":srcs",
-    # mke2fs installs to sbin, not bin.
+    # All three install to sbin, not bin.
     out_bin_dir = "sbin",
-    out_binaries = ["mke2fs"],
+    out_binaries = [
+        "debugfs",
+        "e2fsck",
+        "mke2fs",
+    ],
+)
+
+filegroup(
+    name = "debugfs",
+    srcs = [":e2fsprogs_build"],
+    output_group = "debugfs",
+)
+
+filegroup(
+    name = "e2fsck",
+    srcs = [":e2fsprogs_build"],
+    output_group = "e2fsck",
 )
 
 filegroup(

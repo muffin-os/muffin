@@ -41,6 +41,8 @@ pub struct HostEnv {
     pub ovmf_code: PathBuf,
     pub ovmf_vars: PathBuf,
     pub work_dir: PathBuf,
+    pub e2fsck: PathBuf,
+    pub debugfs: PathBuf,
 }
 
 /// Builds a [`HostEnv`] from the calling test crate's compile-time environment.
@@ -58,6 +60,8 @@ macro_rules! host_env {
             work_dir: ::std::path::PathBuf::from(
                 ::std::env::var("TEST_TMPDIR").expect("TEST_TMPDIR is set by bazel test"),
             ),
+            e2fsck: ::std::path::PathBuf::from(env!("MUFFIN_E2FSCK")),
+            debugfs: ::std::path::PathBuf::from(env!("MUFFIN_DEBUGFS")),
         }
     };
 }
@@ -99,12 +103,16 @@ impl KernelTest {
         self
     }
 
+    fn disk_image(&self) -> PathBuf {
+        self.env.work_dir.join(self.name).join("disk.img")
+    }
+
     /// Stages the writable images and spawns QEMU. Shared by [`Self::run`] and
     /// [`Self::run_until_poweroff`].
     fn boot(&self) -> Child {
         let out_dir = self.env.work_dir.join(self.name);
         fs::create_dir_all(&out_dir).expect("should be able to create the test work directory");
-        let disk_image = stage_writable(&self.env.disk, &out_dir.join("disk.img"));
+        let disk_image = stage_writable(&self.env.disk, &self.disk_image());
         let ovmf_vars_image = stage_writable(&self.env.ovmf_vars, &out_dir.join("ovmf-vars.fd"));
 
         let ovmf_code = self.env.ovmf_code.display();
@@ -263,6 +271,9 @@ impl KernelTest {
         RunReport {
             transcript,
             processes,
+            disk: self.disk_image(),
+            e2fsck: self.env.e2fsck,
+            debugfs: self.env.debugfs,
         }
     }
 
@@ -451,9 +462,61 @@ pub struct SpawnedProcess {
 pub struct RunReport {
     pub transcript: Vec<String>,
     pub processes: Vec<SpawnedProcess>,
+    disk: PathBuf,
+    e2fsck: PathBuf,
+    debugfs: PathBuf,
 }
 
 impl RunReport {
+    /// The disk image as the guest left it.
+    #[must_use]
+    pub fn disk_image(&self) -> &Path {
+        &self.disk
+    }
+
+    /// Asserts `e2fsck -fn` finds nothing wrong with the post-run disk.
+    ///
+    /// # Panics
+    /// Panics with e2fsck's stdout and stderr if it exits non-zero or cannot
+    /// be spawned.
+    pub fn assert_fsck_clean(&self) {
+        let out = Command::new(&self.e2fsck)
+            .arg("-fn")
+            .arg(&self.disk)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", self.e2fsck.display()));
+        assert!(
+            out.status.success(),
+            "e2fsck -fn {} found problems ({}):\n{}{}",
+            self.disk.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Returns the bytes of `path` in the post-run disk, read by debugfs.
+    ///
+    /// # Panics
+    /// Panics with debugfs's stderr if it cannot be spawned, exits non-zero,
+    /// or reports the file missing (which it does with exit status 0).
+    #[must_use]
+    pub fn debugfs_cat(&self, path: &str) -> Vec<u8> {
+        let out = Command::new(&self.debugfs)
+            .arg("-R")
+            .arg(format!("cat {path}"))
+            .arg(&self.disk)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", self.debugfs.display()));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && !stderr.contains("File not found"),
+            "debugfs cat {path} failed ({}):\n{stderr}",
+            out.status
+        );
+        out.stdout
+    }
+
     /// Asserts the `index`-th spawned process exited with `expected`.
     ///
     /// # Panics
@@ -648,7 +711,58 @@ mod tests {
                 pid: 1,
                 outcome: Outcome::Signaled("SIGSEGV".to_owned()),
             }],
+            disk: PathBuf::new(),
+            e2fsck: PathBuf::new(),
+            debugfs: PathBuf::new(),
         }
+    }
+
+    const BLOCK_SIZE: usize = 1024;
+    const GROUP_DESCRIPTOR_TABLE: usize = 2 * BLOCK_SIZE;
+
+    fn mkfs(name: &str) -> PathBuf {
+        let disk =
+            PathBuf::from(std::env::var("TEST_TMPDIR").expect("set by bazel test")).join(name);
+        let status = Command::new(env!("MUFFIN_MKE2FS"))
+            .env("MKE2FS_CONFIG", env!("MUFFIN_MKE2FS_CONF"))
+            .args(["-q", "-F", "-t", "ext2", "-b", &BLOCK_SIZE.to_string()])
+            .arg(&disk)
+            .arg("1M")
+            .status()
+            .expect("mke2fs should spawn");
+        assert!(status.success(), "mke2fs failed: {status}");
+        disk
+    }
+
+    fn report_on(disk: PathBuf) -> RunReport {
+        RunReport {
+            transcript: vec![],
+            processes: vec![],
+            disk,
+            e2fsck: PathBuf::from(env!("MUFFIN_E2FSCK")),
+            debugfs: PathBuf::from(env!("MUFFIN_DEBUGFS")),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "File not found")]
+    fn debugfs_cat_rejects_a_missing_file() {
+        let _ = report_on(mkfs("empty.img")).debugfs_cat("/missing");
+    }
+
+    #[test]
+    #[should_panic(expected = "found problems")]
+    fn fsck_rejects_a_zeroed_block_bitmap() {
+        let disk = mkfs("corrupt.img");
+        let mut bytes = fs::read(&disk).expect("image should be readable");
+        // A zeroed group descriptor sends e2fsck -n into an endless loop.
+        let descriptor = &bytes[GROUP_DESCRIPTOR_TABLE..];
+        let bg_block_bitmap =
+            u32::from_le_bytes([descriptor[0], descriptor[1], descriptor[2], descriptor[3]]);
+        let start = usize::try_from(bg_block_bitmap).expect("block number fits usize") * BLOCK_SIZE;
+        bytes[start..start + BLOCK_SIZE].fill(0);
+        fs::write(&disk, bytes).expect("image should be writable");
+        report_on(disk).assert_fsck_clean();
     }
 
     #[test]
