@@ -9,8 +9,9 @@ use kernel::limine::BASE_REVISION;
 use kernel::mcore;
 use kernel::mcore::mtask::process::Process;
 use kernel_ext2::Ext2Fs;
+use kernel_vfs::CreateMode;
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use tracing::{Level, span};
+use tracing::{Level, info, span};
 
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
@@ -44,6 +45,34 @@ unsafe extern "C" fn main() -> ! {
     let path = AbsolutePath::try_new("/bin/fbdemo").expect("executable path should be absolute");
     Process::create_from_executable(Process::root(), path)
         .expect("should be able to create process from executable");
+
+    span!(Level::INFO, "ext2 write smoke").in_scope(|| {
+        const CHUNK: usize = 4096;
+        const TOTAL: usize = 10 * 1024 * 1024;
+        let dir = AbsolutePath::try_new("/scratch").expect("path should be absolute");
+        info!("creating {dir}");
+        vfs()
+            .read()
+            .create_directory(dir)
+            .expect("should be able to create /scratch");
+        let path = AbsolutePath::try_new("/scratch/big.bin").expect("path should be absolute");
+        info!("opening {path}");
+        let node = vfs()
+            .read()
+            .open(path, CreateMode::IfMissing)
+            .expect("should be able to create /scratch/big.bin");
+        info!("writing {TOTAL} bytes in {CHUNK} byte chunks");
+        let chunk = [0xA5_u8; CHUNK];
+        for offset in (0..TOTAL).step_by(CHUNK) {
+            let written = node
+                .write(chunk, offset)
+                .expect("should be able to write a chunk");
+            assert_eq!(CHUNK, written);
+            if (offset + CHUNK).is_multiple_of(1024 * 1024) {
+                info!("{} MiB written", (offset + CHUNK) >> 20);
+            }
+        }
+    });
 
     mcore::exit_bootstrap()
 }
