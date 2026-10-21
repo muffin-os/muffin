@@ -75,10 +75,7 @@ where
         Ok(total_read)
     }
 
-    /// File block index that holds byte `offset`.
-    ///
-    /// # Errors
-    /// [`Error::FileTooLarge`] if `offset` lies past the last addressable block.
+    // FileTooLarge past the last addressable block
     pub(crate) fn file_block_index(&self, offset: usize) -> Result<u32, Error> {
         u32::try_from(offset / self.superblock.block_size() as usize)
             .ok()
@@ -153,7 +150,7 @@ where
         }
     }
 
-    /// Exclusive upper bound of the file block index the triple indirect tier covers.
+    // exclusive upper bound of the file block index the triple indirect tier covers
     pub(crate) fn triple_indirect_end(&self) -> u64 {
         let pointers_per_block = u64::from(self.superblock.pointers_per_block());
         u64::from(self.indirect_pointer_limits().double_indirect_end) + pointers_per_block.pow(3)

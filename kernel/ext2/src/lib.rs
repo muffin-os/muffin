@@ -139,7 +139,6 @@ where
             .map_err(|_| Error::DeviceWrite)
     }
 
-    /// Byte offset of inode `addr` in its group's inode table.
     fn inode_offset(&self, addr: InodeAddress) -> Result<usize, Error> {
         let inodes_per_group = self.superblock.inodes_per_group();
         let block_group_index = (addr.get() - 1) / inodes_per_group;
@@ -276,8 +275,7 @@ where
         Ok(None)
     }
 
-    /// Writes the free block and inode counters of group `group_index` and of
-    /// the superblock, which change together.
+    // the group and superblock counters change together
     fn persist_counters(&mut self, group_index: usize) -> Result<(), Error> {
         // the structs model a subset of the on-disk fields, so writing them
         // whole would zero the rest

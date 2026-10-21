@@ -4,14 +4,13 @@ use kernel_device::block::BlockDevice;
 
 use crate::{BlockAddress, Error, Ext2Fs, IndirectPointerLimits, Inode, RegularFile};
 
-/// Where a file block lives after [`Ext2Fs::map_block`].
 enum MappedBlock {
     Existing(BlockAddress),
-    /// Freshly allocated, so its on-disk bytes are stale.
+    // freshly allocated, so its on-disk bytes are stale
     Allocated(BlockAddress),
 }
 
-/// One of the three inode pointers that root a tree of indirect tables.
+// the three inode pointers that each root a tree of indirect tables
 #[derive(Copy, Clone)]
 enum Tier {
     Single,
@@ -20,7 +19,7 @@ enum Tier {
 }
 
 impl Tier {
-    /// The tier holding `block_index`, `None` for the direct blocks.
+    // None for the direct blocks
     fn containing(block_index: u32, limits: &IndirectPointerLimits) -> Option<Self> {
         if block_index < limits.direct_end {
             None
@@ -33,7 +32,7 @@ impl Tier {
         }
     }
 
-    /// First file block index this tier covers.
+    // first file block index the tier covers
     fn begin(self, limits: &IndirectPointerLimits) -> u32 {
         match self {
             Self::Single => limits.direct_end,
@@ -42,7 +41,7 @@ impl Tier {
         }
     }
 
-    /// Number of tables between the inode and a data block.
+    // tables between the inode and a data block
     fn depth(self) -> u32 {
         match self {
             Self::Single => 1,
@@ -143,9 +142,7 @@ where
         }
     }
 
-    /// Resolves `block_index` of `inode`, allocating the data block and every
-    /// missing table on the way if it is a hole. Table entries are written to
-    /// disk; pointers in the inode itself are only set in memory.
+    // table entries go to disk here, the inode's own pointers only change in memory
     fn map_block(&mut self, inode: &mut Inode, block_index: u32) -> Result<MappedBlock, Error> {
         if let Some(block) = self.resolve_block_index(inode, block_index)? {
             return Ok(MappedBlock::Existing(block));
@@ -185,7 +182,6 @@ where
         Ok(MappedBlock::Allocated(node))
     }
 
-    /// Allocates a zeroed indirect table and adds it to the sector count of `inode`.
     fn allocate_table(&mut self, inode: &mut Inode) -> Result<BlockAddress, Error> {
         let table = self.allocate_counted(inode)?;
         self.write_block(table, &vec![0_u8; self.superblock.block_size() as usize])?;
@@ -206,7 +202,7 @@ where
             .map(|_| ())
     }
 
-    /// Allocates a block and adds it to the sector count of `inode`.
+    // the sector count is checked first, so an overflow never leaks the block
     pub(crate) fn allocate_counted(&mut self, inode: &mut Inode) -> Result<BlockAddress, Error> {
         let sectors = inode
             .num_disk_sectors()
@@ -265,8 +261,7 @@ where
         outcome
     }
 
-    /// Frees every block of `inode` at file block index `kept_blocks` and
-    /// above, and every table left empty. Inode pointers change in memory only.
+    // the inode's own pointers only change in memory
     fn free_blocks_from(&mut self, inode: &mut Inode, kept_blocks: u64) -> Result<(), Error> {
         let limits = self.indirect_pointer_limits();
         for slot in 0..limits.direct_end as usize {
@@ -297,9 +292,7 @@ where
         Ok(())
     }
 
-    /// Frees every block at relative index `kept` and above in the tree of
-    /// `depth` tables rooted at `table`, and every child table left empty.
-    /// Returns whether `table` itself is left empty; it is not freed here.
+    // returns whether `table` is left empty; the caller frees it
     fn free_table_from(
         &mut self,
         inode: &mut Inode,
@@ -351,7 +344,6 @@ where
         outcome.map(|()| is_empty)
     }
 
-    /// Frees `block` and removes it from the sector count of `inode`.
     fn free_counted(&mut self, inode: &mut Inode, block: BlockAddress) -> Result<(), Error> {
         self.deallocate_block(block)?;
         let sectors = inode.num_disk_sectors_mut();

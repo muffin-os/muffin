@@ -209,10 +209,9 @@ impl DirEntry {
     }
 }
 
-/// One record of a directory block.
 enum DirRecord {
     Used(DirEntry),
-    /// A deleted entry, which still owns its bytes up to the next record.
+    // a deleted entry still owns its bytes up to the next record
     Unused { total_size: u16 },
 }
 
@@ -224,13 +223,8 @@ impl DirRecord {
         }
     }
 
-    /// Parses the record at the start of `value`, which runs to the end of its block.
-    ///
-    /// # Errors
-    /// - [`Error::InvalidDirEntry`] if the name is longer than [`MAX_NAME_LEN`]
-    ///   or the record length is not a multiple of 4, is shorter than its
-    ///   header and name, or runs past `value`.
-    /// - [`Error::InvalidDirEntryType`] if a live record has an unknown type code.
+    // a record owns its bytes up to the next one, so a length that does not fit
+    // the block or its own name is a corrupt block, not a short record
     fn parse(dir_entries_have_type: bool, value: &[u8]) -> Result<Self, Error> {
         let header = value.first_chunk().ok_or(Error::InvalidDirEntry)?;
         let arr = DirEntryNoName::try_from(header).map_err(|()| Error::InvalidDirEntry)?;
