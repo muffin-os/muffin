@@ -1,5 +1,5 @@
-use kernel_device::block::MemoryBlockDevice;
-use kernel_ext2::{Error, Ext2Fs, MAX_NAME_LEN, RegularFile};
+use kernel_device::block::{BlockDevice, MemoryBlockDevice};
+use kernel_ext2::{Error, Ext2Fs, IndirectPointerLimits, MAX_NAME_LEN, RegularFile};
 
 mod common;
 
@@ -234,4 +234,161 @@ fn allocate_block_updates_group_descriptor(image: &str, bgdt_offset: usize) {
     assert_eq!(second.get(), first.get() + 1);
     drop(fs);
     assert_eq!(raw_free_blocks(&image_data), free_before - 2);
+}
+
+fn create_file<T: BlockDevice>(fs: &mut Ext2Fs<T>, name: &str) -> RegularFile {
+    let mut root = fs.read_root_inode().unwrap();
+    fs.create_regular_file(&mut root, name).unwrap()
+}
+
+fn on_disk<T: BlockDevice>(fs: &Ext2Fs<T>, file: &RegularFile) -> RegularFile {
+    fs.read_inode(file.inode_address())
+        .unwrap()
+        .try_into()
+        .unwrap()
+}
+
+fn read_all<T: BlockDevice>(fs: &Ext2Fs<T>, file: &RegularFile) -> Vec<u8> {
+    let mut buf = vec![0_u8; file.len()];
+    assert_eq!(fs.read_from_file(file, 0, &mut buf).unwrap(), file.len());
+    buf
+}
+
+generate_tests!(
+    empty_write_returns_zero_and_changes_nothing:
+    1024 - empty_write_returns_zero_and_changes_nothing_1k,
+    4096 - empty_write_returns_zero_and_changes_nothing_4k,
+);
+
+fn empty_write_returns_zero_and_changes_nothing(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    fs.write_to_file(&mut file, 0, b"abc").unwrap();
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+    let sectors = file.num_disk_sectors();
+
+    for offset in [0, block_size, 3 * block_size + 5] {
+        assert_eq!(fs.write_to_file(&mut file, offset, &[]).unwrap(), 0);
+    }
+
+    assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks);
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), 3);
+    assert_eq!(stored.num_disk_sectors(), sectors);
+    assert_eq!(read_all(&fs, &stored), b"abc");
+}
+
+generate_tests!(
+    write_past_max_file_size_fails_without_allocating:
+    1024 - write_past_max_file_size_fails_without_allocating_1k,
+    4096 - write_past_max_file_size_fails_without_allocating_4k,
+);
+
+fn write_past_max_file_size_fails_without_allocating(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+    let IndirectPointerLimits {
+        double_indirect_end,
+        ..
+    } = fs.indirect_pointer_limits();
+    let pointers_per_block = (block_size / 4) as u64;
+    let triple_indirect_end = u64::from(double_indirect_end) + pointers_per_block.pow(3);
+    let max_bytes = usize::try_from(triple_indirect_end).unwrap() * block_size;
+
+    for (offset, data) in [
+        (max_bytes, &b"x"[..]),
+        (max_bytes - 1, &b"xy"[..]),
+        (usize::MAX - 1, &b"xyz"[..]),
+    ] {
+        assert_eq!(
+            fs.write_to_file(&mut file, offset, data),
+            Err(Error::FileTooLarge),
+            "offset {offset}"
+        );
+    }
+
+    assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks);
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), 0);
+    assert_eq!(stored.num_disk_sectors(), 0);
+}
+
+generate_tests!(
+    write_at_block_boundary_starts_next_block:
+    1024 - write_at_block_boundary_starts_next_block_1k,
+    4096 - write_at_block_boundary_starts_next_block_4k,
+);
+
+fn write_at_block_boundary_starts_next_block(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let sectors_per_block = fs.superblock().sectors_per_block();
+    let first = vec![0xAA_u8; block_size];
+    fs.write_to_file(&mut file, 0, &first).unwrap();
+    assert_eq!(file.num_disk_sectors(), sectors_per_block);
+
+    assert_eq!(
+        fs.write_to_file(&mut file, block_size, b"0123456789")
+            .unwrap(),
+        10
+    );
+
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), block_size + 10);
+    assert_eq!(stored.num_disk_sectors(), 2 * sectors_per_block);
+    assert_eq!(read_all(&fs, &stored), [&first[..], b"0123456789"].concat());
+}
+
+generate_tests!(
+    write_straddling_two_blocks_zero_fills_the_rest:
+    1024 - write_straddling_two_blocks_zero_fills_the_rest_1k,
+    4096 - write_straddling_two_blocks_zero_fills_the_rest_4k,
+);
+
+fn write_straddling_two_blocks_zero_fills_the_rest(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+
+    let data = [0x5A_u8; 20];
+    assert_eq!(
+        fs.write_to_file(&mut file, block_size - 10, &data).unwrap(),
+        20
+    );
+
+    assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks - 2);
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), block_size + 10);
+    let mut expected = vec![0_u8; block_size - 10];
+    expected.extend_from_slice(&data);
+    assert_eq!(read_all(&fs, &stored), expected);
+}
+
+generate_tests!(
+    overwrite_inside_block_preserves_other_bytes:
+    1024 - overwrite_inside_block_preserves_other_bytes_1k,
+    4096 - overwrite_inside_block_preserves_other_bytes_4k,
+);
+
+fn overwrite_inside_block_preserves_other_bytes(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let mut expected = vec![0xAA_u8; 2 * block_size];
+    fs.write_to_file(&mut file, 0, &expected).unwrap();
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+    let sectors = file.num_disk_sectors();
+
+    assert_eq!(
+        fs.write_to_file(&mut file, 100, b"\x11\x22\x33\x44")
+            .unwrap(),
+        4
+    );
+
+    expected[100..104].copy_from_slice(b"\x11\x22\x33\x44");
+    assert_eq!(fs.superblock().num_unallocated_blocks(), free_blocks);
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), 2 * block_size);
+    assert_eq!(stored.num_disk_sectors(), sectors);
+    assert_eq!(read_all(&fs, &stored), expected);
 }

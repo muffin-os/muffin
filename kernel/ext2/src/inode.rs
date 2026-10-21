@@ -169,12 +169,10 @@ impl Inode {
         Flags::from_bits_truncate(self.flags)
     }
 
-    pub fn set_file_size_lower(&mut self, size: u32) {
-        self.byte_size_lower = size;
-    }
-
-    pub fn set_file_size_upper(&mut self, size: u32) {
-        self.byte_size_upper_or_dir_acl = size;
+    /// Sets the byte size, split across the lower and upper 32-bit size fields.
+    pub fn set_len(&mut self, len_bytes: usize) {
+        self.byte_size_lower = (len_bytes & 0xFFFF_FFFF) as u32;
+        self.byte_size_upper_or_dir_acl = (len_bytes >> 32) as u32;
     }
 
     pub fn num_disk_sectors(&self) -> u32 {

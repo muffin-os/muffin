@@ -148,6 +148,12 @@ where
         }
     }
 
+    /// Exclusive upper bound of the file block index the triple indirect tier covers.
+    pub(crate) fn triple_indirect_end(&self) -> u64 {
+        let pointers_per_block = u64::from(self.superblock.pointers_per_block());
+        u64::from(self.indirect_pointer_limits().double_indirect_end) + pointers_per_block.pow(3)
+    }
+
     pub fn is_block_allocated(&self, inode: &Inode, block_index: u32) -> Result<bool, Error> {
         self.resolve_block_index(inode, block_index)
             .map(|block| block.is_some())
@@ -174,10 +180,7 @@ where
                 block_index - indirect_end,
             )?
         } else {
-            let pointers_per_block = u64::from(self.superblock.pointers_per_block());
-            let triple_indirect_end = u64::from(double_indirect_end)
-                + pointers_per_block * pointers_per_block * pointers_per_block;
-            if u64::from(block_index) >= triple_indirect_end {
+            if u64::from(block_index) >= self.triple_indirect_end() {
                 return Err(Error::InvalidBlockIndex(block_index));
             }
             self.resolve_triple_indirect_ptr(

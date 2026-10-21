@@ -19,6 +19,8 @@ pub enum Error {
     NotSupported,
     EntryExists,
     NameTooLong,
+    /// The write or truncate would place data past the last block the inode can address.
+    FileTooLarge,
 }
 
 impl Display for Error {
