@@ -1,3 +1,5 @@
+use bitflags::bitflags;
+
 use crate::{EINVAL, Errno};
 
 pub const F_DUPFD: i32 = 1;
@@ -48,6 +50,33 @@ pub const O_RDONLY: i32 = 1 << 16;
 pub const O_RDWR: i32 = 1 << 17;
 pub const O_SEARCH: i32 = 1 << 18;
 pub const O_WRONLY: i32 = 1 << 19;
+
+bitflags! {
+    /// The `oflag` argument of open.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct OpenFlags: i32 {
+        const CLOEXEC = O_CLOEXEC;
+        const CLOFORK = O_CLOFORK;
+        const CREAT = O_CREAT;
+        const DIRECTORY = O_DIRECTORY;
+        const EXCL = O_EXCL;
+        const NOCTTY = O_NOCTTY;
+        const NOFOLLOW = O_NOFOLLOW;
+        const TRUNC = O_TRUNC;
+        const TTY_INIT = O_TTY_INIT;
+        const APPEND = O_APPEND;
+        const DSYNC = O_DSYNC;
+        const NONBLOCK = O_NONBLOCK;
+        const RSYNC = O_RSYNC;
+        const SYNC = O_SYNC;
+        const ACCMODE = O_ACCMODE;
+        const EXEC = O_EXEC;
+        const RDONLY = O_RDONLY;
+        const RDWR = O_RDWR;
+        const SEARCH = O_SEARCH;
+        const WRONLY = O_WRONLY;
+    }
+}
 
 pub const AT_FDCWD: i32 = 1 << 20;
 pub const AT_EACCESS: i32 = 1 << 21;

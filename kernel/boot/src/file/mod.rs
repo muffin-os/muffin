@@ -1,6 +1,7 @@
 use core::ops::Deref;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use kernel_syscall::access::AccessMode;
 use kernel_vfs::Vfs;
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
@@ -32,15 +33,9 @@ pub fn init() {
 pub struct OpenFileDescription {
     position: AtomicU64,
     node: VfsNode,
-}
-
-impl From<VfsNode> for OpenFileDescription {
-    fn from(node: VfsNode) -> Self {
-        Self {
-            position: AtomicU64::new(0),
-            node,
-        }
-    }
+    access: AccessMode,
+    /// Every write starts at the current end of the file.
+    append: bool,
 }
 
 impl Clone for OpenFileDescription {
@@ -49,6 +44,8 @@ impl Clone for OpenFileDescription {
         Self {
             position: AtomicU64::new(position),
             node: self.node.clone(),
+            access: self.access,
+            append: self.append,
         }
     }
 }
@@ -62,7 +59,27 @@ impl Deref for OpenFileDescription {
 }
 
 impl OpenFileDescription {
+    #[must_use]
+    pub fn new(node: VfsNode, access: AccessMode, append: bool) -> Self {
+        Self {
+            position: AtomicU64::new(0),
+            node,
+            access,
+            append,
+        }
+    }
+
     pub fn position(&self) -> &AtomicU64 {
         &self.position
+    }
+
+    #[must_use]
+    pub fn access(&self) -> AccessMode {
+        self.access
+    }
+
+    #[must_use]
+    pub fn is_append(&self) -> bool {
+        self.append
     }
 }

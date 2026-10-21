@@ -1,6 +1,6 @@
 use minilib::{
-    EBADF, EINVAL, ENOMEM, EOVERFLOW, Errno, MapFlags, ProtFlags, SYS_MMAP, SigSet, mmap, open,
-    ret, sigpending, syscall6,
+    EBADF, EINVAL, ENOMEM, EOVERFLOW, Errno, MapFlags, O_RDONLY, ProtFlags, SYS_MMAP, SigSet, mmap,
+    open, ret, sigpending, syscall6,
 };
 
 use crate::check;
@@ -125,7 +125,7 @@ pub fn run() {
         EBADF,
     );
 
-    let hello = check::unwrap_or_fail("mmap/open_hello", open("/data/hello.txt"));
+    let hello = check::unwrap_or_fail("mmap/open_hello", open("/data/hello.txt", O_RDONLY));
     let file = check::unwrap_or_fail(
         "mmap/file_private",
         mmap(0, PAGE, ProtFlags::READ, MapFlags::PRIVATE, hello, 0),

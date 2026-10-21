@@ -1,12 +1,12 @@
 #![no_std]
 #![no_main]
 
-use minilib::{ENOTTY, FbScreenInfo, IoctlRequest, ioctl, open, println};
+use minilib::{ENOTTY, FbScreenInfo, IoctlRequest, O_RDONLY, ioctl, open, println};
 
 minilib::entry!(main);
 
 fn main() -> i32 {
-    let Ok(fd) = open("/dev/fb0") else {
+    let Ok(fd) = open("/dev/fb0", O_RDONLY) else {
         println!("fb-ioctl: FAIL open");
         return 1;
     };
@@ -22,7 +22,7 @@ fn main() -> i32 {
         info.width, info.height, info.pitch, info.bpp
     );
 
-    let Ok(spawn_fd) = open("/spawn") else {
+    let Ok(spawn_fd) = open("/spawn", O_RDONLY) else {
         println!("fb-ioctl: FAIL enotty");
         return 1;
     };

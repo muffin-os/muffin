@@ -15,14 +15,16 @@ use core::ffi::c_int;
 
 pub use io::{Stderr, Stdout};
 pub use kernel_abi::{
-    ARG_MAX, ClockId, DefaultAction, E2BIG, EACCES, EBADF, EFAULT, EINTR, EINVAL, EISDIR,
+    ARG_MAX, ClockId, DefaultAction, E2BIG, EACCES, EBADF, EEXIST, EFAULT, EINTR, EINVAL, EISDIR,
     ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTDIR, ENOTTY, EOVERFLOW, EPERM, ERANGE,
-    ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, PATH_MAX, ProtFlags,
-    SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FSTAT, SYS_FSYNC,
-    SYS_GETCWD, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN,
-    SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN,
-    SYS_WRITE, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal, Stat, StrSlice,
-    Timespec, Whence,
+    ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, O_ACCMODE, O_APPEND, O_CLOEXEC,
+    O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK,
+    O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX,
+    ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FSTAT,
+    SYS_FSYNC, SYS_GETCWD, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP,
+    SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK,
+    SYS_SIGRETURN, SYS_WRITE, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal, Stat,
+    StrSlice, Timespec, Whence,
 };
 pub use panic::catch_unwind;
 pub use start::{__muffin_start_inner, args, env};
@@ -304,10 +306,25 @@ pub fn mmap(
     .map(|a| a as *mut u8)
 }
 
-pub fn open(path: &str) -> Result<c_int, Errno> {
+/// Opens `path` with the `O_*` flags in `oflag` and returns the new fd.
+///
+/// # Errors
+/// Returns the kernel's errno, such as `ENOENT` for a missing file without
+/// `O_CREAT` or `EINVAL` for an invalid `oflag`.
+pub fn open(path: &str, oflag: c_int) -> Result<c_int, Errno> {
     // Safety: `path` is a live slice for the whole call.
-    ret(unsafe { syscall6(SYS_OPEN, path.as_ptr() as usize, path.len(), 0, 0, 0, 0) })
-        .map(|fd| fd as c_int)
+    ret(unsafe {
+        syscall6(
+            SYS_OPEN,
+            path.as_ptr() as usize,
+            path.len(),
+            oflag as usize,
+            0,
+            0,
+            0,
+        )
+    })
+    .map(|fd| fd as c_int)
 }
 
 /// Never returns on success, so the result is always the failure reason.

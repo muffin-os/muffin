@@ -94,12 +94,13 @@ mod tests {
     use alloc::vec;
 
     use kernel_abi::{EBADF, EINVAL, EOVERFLOW, ERANGE, Whence};
+    use kernel_vfs::CreateMode;
     use kernel_vfs::path::AbsoluteOwnedPath;
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
 
     use crate::access::testing::{MemoryFd, MemoryFile, MemoryFileAccess};
-    use crate::access::{CwdAccess, FileAccess};
+    use crate::access::{AccessMode, CwdAccess, FileAccess};
     use crate::unistd::{sys_getcwd, sys_lseek, sys_read, sys_write};
 
     struct Cwd(RwLock<AbsoluteOwnedPath>);
@@ -155,9 +156,9 @@ mod tests {
         let cx = Mutex::new(file_access);
 
         let info = cx
-            .file_info(path.as_ref())
+            .file_info(path.as_ref(), CreateMode::Never)
             .expect("fixture file must exist");
-        let fd = cx.open(&info);
+        let fd = cx.open(&info, AccessMode::ReadWrite, false);
         (cx, fd)
     }
 

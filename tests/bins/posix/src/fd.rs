@@ -1,7 +1,8 @@
 use minilib::{
-    EBADF, EFAULT, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTTY, FbScreenInfo, IoctlRequest, SYS_CLOSE,
-    SYS_IOCTL, SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, fstat, fsync, ioctl, lseek, open,
-    read, ret, write,
+    EACCES, EBADF, EEXIST, EFAULT, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTTY, FbScreenInfo,
+    IoctlRequest, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SYS_CLOSE, SYS_IOCTL,
+    SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, fstat, fsync, ioctl, lseek, open, read, ret,
+    write,
 };
 
 use crate::check;
@@ -19,9 +20,9 @@ const NONCANONICAL_ADDR: usize = 0x0001_0000_0000_0000;
 pub fn run() {
     check::group("fd");
 
-    check::expect_err("fd/open_missing", open("/data/nope"), ENOENT);
+    check::expect_err("fd/open_missing", open("/data/nope", O_RDONLY), ENOENT);
 
-    let fd = check::unwrap_or_fail("fd/open_hello", open("/data/hello.txt"));
+    let fd = check::unwrap_or_fail("fd/open_hello", open("/data/hello.txt", O_RDONLY));
     check::require("fd/open_lowest_free", fd == 3);
 
     let mut buf = [0_u8; HELLO.len()];
@@ -138,24 +139,58 @@ pub fn run() {
         EFAULT,
     );
 
-    let dir = check::unwrap_or_fail("fd/open_dir", open("/data/dir"));
+    let dir = check::unwrap_or_fail("fd/open_dir", open("/data/dir", O_RDONLY));
     check::require("fd/open_dir_next_free", dir == fd + 1);
     check::expect_err("fd/read_dir", read(dir, &mut one), EISDIR);
     check::expect_ok("fd/fstat_dir", fstat(dir, &mut stat), ());
     check::require("fd/fstat_dir_size", stat.size == 1024);
 
-    let via_dotdot = check::unwrap_or_fail("fd/open_dotdot", open("/data/dir/../hello.txt"));
+    let via_dotdot =
+        check::unwrap_or_fail("fd/open_dotdot", open("/data/dir/../hello.txt", O_RDONLY));
     check::expect_ok("fd/fstat_dotdot", fstat(via_dotdot, &mut stat), ());
     check::require("fd/fstat_dotdot_size", stat.size == 15);
 
-    check::expect_err("fd/open_through_file", open("/data/hello.txt/x"), ENOENT);
+    check::expect_err(
+        "fd/open_through_file",
+        open("/data/hello.txt/x", O_RDONLY),
+        ENOENT,
+    );
 
     check::expect_err(
         "fd/close_unimplemented",
         ret(unsafe { minilib::syscall1(SYS_CLOSE, fd as usize) }),
         ENOSYS,
     );
-    let null = check::unwrap_or_fail("fd/open_dev_null", open("/dev/null"));
+    let null = check::unwrap_or_fail("fd/open_dev_null", open("/dev/null", O_RDWR));
     check::expect_ok("fd/read_dev_null", read(null, &mut one), 0);
     check::expect_ok("fd/write_dev_null", write(null, HELLO), HELLO.len());
+
+    let null_write_only =
+        check::unwrap_or_fail("fd/open_dev_null_write_only", open("/dev/null", O_WRONLY));
+    check::expect_err("fd/read_write_only", read(null_write_only, &mut one), EBADF);
+    let hello_read_only =
+        check::unwrap_or_fail("fd/open_hello_read_only", open("/data/hello.txt", O_RDONLY));
+    check::expect_err("fd/write_read_only", write(hello_read_only, HELLO), EBADF);
+
+    check::expect_err("fd/open_no_access_mode", open("/data/hello.txt", 0), EINVAL);
+    check::expect_err(
+        "fd/open_two_access_modes",
+        open("/data/hello.txt", O_RDONLY | O_WRONLY),
+        EINVAL,
+    );
+    check::expect_err(
+        "fd/open_trunc_read_only",
+        open("/data/hello.txt", O_RDONLY | O_TRUNC),
+        EINVAL,
+    );
+    check::expect_err(
+        "fd/open_excl_existing",
+        open("/dev/null", O_CREAT | O_EXCL | O_RDWR),
+        EEXIST,
+    );
+    check::expect_err(
+        "fd/open_creat_unsupported",
+        open("/dev/newfile", O_CREAT | O_WRONLY),
+        EACCES,
+    );
 }

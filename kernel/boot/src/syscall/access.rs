@@ -6,12 +6,14 @@ use kernel_abi::{
     IoctlRequest, ProtFlags, Stat,
 };
 use kernel_syscall::access::{
-    AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location, MemoryRegion as _,
+    AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
+    MemoryRegion as _,
 };
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CreateMode, FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat,
+    CreateMode, FsError, FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat,
+    TruncateError,
 };
 use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
@@ -59,22 +61,19 @@ impl FileAccess for KernelAccess {
     type FileInfo = FileInfo;
     type Fd = FdNum;
 
-    fn file_info(&self, path: &AbsolutePath) -> Result<Self::FileInfo, Errno> {
-        let node = vfs()
-            .read()
-            .open(path, CreateMode::Never)
-            .map_err(|e| match e {
-                OpenError::NotFound => ENOENT,
-                OpenError::OpenFailed => EIO,
-                OpenError::AlreadyExists => EEXIST,
-                OpenError::NoSpace => ENOSPC,
-                OpenError::CreateUnsupported => EACCES,
-            })?;
+    fn file_info(&self, path: &AbsolutePath, create: CreateMode) -> Result<Self::FileInfo, Errno> {
+        let node = vfs().read().open(path, create).map_err(|e| match e {
+            OpenError::NotFound => ENOENT,
+            OpenError::OpenFailed => EIO,
+            OpenError::AlreadyExists => EEXIST,
+            OpenError::NoSpace => ENOSPC,
+            OpenError::CreateUnsupported => EACCES,
+        })?;
         Ok(FileInfo { node })
     }
 
-    fn open(&self, info: &Self::FileInfo) -> Self::Fd {
-        let ofd = OpenFileDescription::from(info.node.clone());
+    fn open(&self, info: &Self::FileInfo, access: AccessMode, append: bool) -> Self::Fd {
+        let ofd = OpenFileDescription::new(info.node.clone(), access, append);
         let num = self
             .process
             .file_descriptors()
@@ -101,6 +100,9 @@ impl FileAccess for KernelAccess {
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
         let ofd = desc.file_description();
+        if !ofd.access().can_read() {
+            return Err(EBADF);
+        }
         let offset = ofd.position().load(Relaxed);
         let read = ofd.read(buf, offset.into_usize()).map_err(|e| match e {
             ReadError::NotReadable => EISDIR,
@@ -119,7 +121,16 @@ impl FileAccess for KernelAccess {
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
         let ofd = desc.file_description();
-        let offset = ofd.position().load(Relaxed);
+        if !ofd.access().can_write() {
+            return Err(EBADF);
+        }
+        let offset = if ofd.is_append() {
+            let mut stat = VfsStat::default();
+            ofd.stat(&mut stat).map_err(|_| EIO)?;
+            stat.size.into_u64()
+        } else {
+            ofd.position().load(Relaxed)
+        };
         let written = ofd.write(buf, offset.into_usize()).map_err(|_| EIO)?;
         ofd.position().store(offset + written.into_u64(), Relaxed);
         Ok(written)
@@ -132,6 +143,21 @@ impl FileAccess for KernelAccess {
             .remove(&fd)
             .map(|_| ())
             .ok_or(EBADF)
+    }
+
+    fn truncate(&self, fd: Self::Fd, len_bytes: u64) -> Result<(), Errno> {
+        let fds = self.process.file_descriptors();
+        let guard = fds.read();
+
+        let desc = guard.get(&fd).ok_or(EBADF)?;
+        desc.file_description()
+            .truncate(len_bytes)
+            .map_err(|e| match e {
+                TruncateError::NotSupported => EINVAL,
+                TruncateError::FsError(FsError::InvalidHandle) => EBADF,
+                TruncateError::FsError(FsError::FileSystemNotOpen)
+                | TruncateError::TruncateFailed => EIO,
+            })
     }
 
     fn ioctl(&self, fd: Self::Fd, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, Errno> {

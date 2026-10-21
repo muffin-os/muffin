@@ -1,14 +1,14 @@
 #![no_std]
 #![no_main]
 
-use minilib::{Stat, Whence, fstat, lseek, open, println, read};
+use minilib::{O_RDONLY, Stat, Whence, fstat, lseek, open, println, read};
 
 const EXPECTED: &[u8] = b"muffin says hi\n";
 
 minilib::entry!(main);
 
 fn main() -> i32 {
-    let Ok(fd) = open("/data/hello.txt") else {
+    let Ok(fd) = open("/data/hello.txt", O_RDONLY) else {
         println!("fileio: FAIL");
         return 1;
     };

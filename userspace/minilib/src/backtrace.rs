@@ -118,7 +118,7 @@ fn map_own_image() -> Option<&'static [u8]> {
     let written = crate::exe_path(&mut path).ok()?;
     let path = core::str::from_utf8(&path[..written]).ok()?;
 
-    let fd = crate::open(path).ok()?;
+    let fd = crate::open(path, crate::O_RDONLY).ok()?;
 
     let mut stat = Stat::default();
     crate::fstat(fd, &mut stat).ok()?;

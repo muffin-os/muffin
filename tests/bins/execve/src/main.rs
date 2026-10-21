@@ -2,8 +2,8 @@
 #![no_main]
 
 use minilib::{
-    ENOENT, ENOEXEC, SigAction, SigHandler, Signal, execve, install_handler, open, println,
-    sigaction,
+    ENOENT, ENOEXEC, O_RDONLY, SigAction, SigHandler, Signal, execve, install_handler, open,
+    println, sigaction,
 };
 
 extern "C" fn on_usr1(_signal: Signal) {}
@@ -32,7 +32,7 @@ fn main() -> i32 {
 
     // fds 0 to 2 are occupied, so this lands on fd 3. The replacement image
     // reads it back without opening anything.
-    if open("/data/hello.txt") != Ok(3) {
+    if open("/data/hello.txt", O_RDONLY) != Ok(3) {
         println!("execve-test: FAIL fd");
         return 1;
     }

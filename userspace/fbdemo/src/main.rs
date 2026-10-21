@@ -12,8 +12,8 @@ use gfx::backend::software::{
 };
 use kernel_abi::gfx::BufferDesc;
 use minilib::{
-    ClockId, FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Timespec, clock_gettime, exit, fsync,
-    ioctl, mmap, open, println,
+    ClockId, FbScreenInfo, IoctlRequest, MapFlags, O_RDONLY, ProtFlags, Timespec, clock_gettime,
+    exit, fsync, ioctl, mmap, open, println,
 };
 
 fn now() -> Duration {
@@ -79,7 +79,7 @@ minilib::entry!(main);
 
 fn main() -> i32 {
     let t = now();
-    let fd = open("/dev/fb0");
+    let fd = open("/dev/fb0", O_RDONLY);
     report("open", t, now());
     let Ok(fd) = fd else {
         println!("fbdemo: FAIL open");

@@ -2,8 +2,8 @@
 #![no_main]
 
 use minilib::{
-    FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, Whence, ioctl, lseek, mmap, open, println,
-    read,
+    FbScreenInfo, IoctlRequest, MapFlags, O_RDONLY, ProtFlags, Whence, ioctl, lseek, mmap, open,
+    println, read,
 };
 
 const PATTERN_LEN: usize = 256;
@@ -11,7 +11,7 @@ const PATTERN_LEN: usize = 256;
 minilib::entry!(main);
 
 fn main() -> i32 {
-    let Ok(fd) = open("/dev/fb0") else {
+    let Ok(fd) = open("/dev/fb0", O_RDONLY) else {
         println!("fb-mmap: FAIL open");
         return 1;
     };
@@ -58,7 +58,7 @@ fn main() -> i32 {
 
     // Shared mapping of a regular ext2 file is unsupported (FileSystem::mmap
     // default rejects it), so the syscall must fail.
-    let Ok(spawn_fd) = open("/spawn") else {
+    let Ok(spawn_fd) = open("/spawn", O_RDONLY) else {
         println!("fb-mmap: FAIL shared-regular");
         return 1;
     };

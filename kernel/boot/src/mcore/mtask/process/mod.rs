@@ -15,6 +15,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use conquer_once::spin::OnceCell;
 use kernel_abi::ProcessId;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
+use kernel_syscall::access::AccessMode;
 use kernel_syscall::exec::build_initial_stack;
 use kernel_syscall::signal::SignalState;
 use kernel_vfs::node::VfsNode;
@@ -565,7 +566,11 @@ extern "C" fn trampoline(_arg: *mut c_void) {
                 CreateMode::Never,
             )
             .expect("should be able to open /dev/null");
-        let devnull_ofd = Arc::new(OpenFileDescription::from(devnull));
+        let devnull_ofd = Arc::new(OpenFileDescription::new(
+            devnull,
+            AccessMode::ReadOnly,
+            false,
+        ));
         guard.insert(
             0.into(),
             FileDescriptor::new(0.into(), FileDescriptorFlags::empty(), devnull_ofd.clone()),
@@ -578,7 +583,11 @@ extern "C" fn trampoline(_arg: *mut c_void) {
                 CreateMode::Never,
             )
             .expect("should be able to open /dev/serial");
-        let devserial_ofd = Arc::new(OpenFileDescription::from(devserial));
+        let devserial_ofd = Arc::new(OpenFileDescription::new(
+            devserial,
+            AccessMode::WriteOnly,
+            false,
+        ));
         guard.insert(
             1.into(),
             FileDescriptor::new(
