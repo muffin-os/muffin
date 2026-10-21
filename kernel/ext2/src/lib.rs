@@ -141,10 +141,16 @@ where
             .map_err(|_| Error::DeviceRead)
     }
 
-    /// Writes a data block. A cached copy, left over from the block's life as
-    /// metadata, is dropped so it never shadows or overwrites the data.
+    /// Writes data to `buf.len() / block_size` consecutive blocks starting at
+    /// `addr`. Cached copies, left over from the blocks' life as metadata,
+    /// are dropped so they never shadow or overwrite the data.
     pub fn write_block(&mut self, addr: BlockAddress, buf: &[u8]) -> Result<usize, Error> {
-        self.cache.lock().remove(&addr.get());
+        let blocks = buf.len().div_ceil(self.superblock.block_size() as usize) as u32;
+        let mut cache = self.cache.lock();
+        for number in addr.get()..addr.get() + blocks {
+            cache.remove(&number);
+        }
+        drop(cache);
         let offset = self.resolve_block_offset(addr);
         self.block_device
             .write_at(offset, buf)

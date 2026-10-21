@@ -167,4 +167,47 @@ impl BlockDevice for VirtioBlockDevice {
 
         Ok(buf.len())
     }
+
+    fn write_at(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Self::Error> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let Inner { blk, bounce } = &mut *self.inner.lock();
+
+        let mut position = offset;
+        let mut done = 0;
+        while done < buf.len() {
+            let sector_index = position / SECTOR_SIZE;
+            let intra_sector = position % SECTOR_SIZE;
+            let remaining = buf.len() - done;
+            let sectors = (intra_sector + remaining)
+                .div_ceil(SECTOR_SIZE)
+                .min(BOUNCE_SECTORS);
+
+            let len = sectors * SECTOR_SIZE;
+            let staging = bounce
+                .as_mut()
+                .get_mut(..len)
+                .ok_or(BounceBufferError::BufferTooLarge(len))?;
+            let take = remaining.min(len - intra_sector);
+            // a partial first or last sector keeps its other bytes
+            if intra_sector != 0 {
+                blk.read_blocks(sector_index, &mut staging[..SECTOR_SIZE])?;
+            }
+            if take < len - intra_sector {
+                blk.read_blocks(
+                    sector_index + sectors - 1,
+                    &mut staging[len - SECTOR_SIZE..],
+                )?;
+            }
+            staging[intra_sector..intra_sector + take].copy_from_slice(&buf[done..done + take]);
+            blk.write_blocks(sector_index, staging)?;
+
+            done += take;
+            position += take;
+        }
+
+        Ok(buf.len())
+    }
 }

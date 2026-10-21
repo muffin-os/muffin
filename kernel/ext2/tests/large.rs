@@ -261,10 +261,17 @@ fn read_hole_in_triple_indirect(sector_size: usize) {
     );
 }
 
+#[derive(Default)]
+struct Counters {
+    reads: Cell<usize>,
+    writes: Cell<usize>,
+    // device requests, what a driver turns into one command each
+    write_requests: Cell<usize>,
+}
+
 struct CountingDevice {
     inner: MemoryBlockDevice<Vec<u8>>,
-    reads: Rc<Cell<usize>>,
-    writes: Rc<Cell<usize>>,
+    counters: Rc<Counters>,
 }
 
 impl BlockDevice for CountingDevice {
@@ -279,40 +286,51 @@ impl BlockDevice for CountingDevice {
     }
 
     fn read_sector(&self, sector_index: usize, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.reads.set(self.reads.get() + 1);
+        self.counters.reads.set(self.counters.reads.get() + 1);
         self.inner.read_sector(sector_index, buf)
     }
 
     fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error> {
-        self.writes.set(self.writes.get() + 1);
+        self.counters.writes.set(self.counters.writes.get() + 1);
         self.inner.write_sector(sector_index, buf)
+    }
+
+    fn write_at(&mut self, offset: usize, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.counters
+            .write_requests
+            .set(self.counters.write_requests.get() + 1);
+        let sector_size = self.sector_size();
+        for (i, sector) in buf.chunks(sector_size).enumerate() {
+            self.write_sector(offset / sector_size + i, sector)?;
+        }
+        Ok(buf.len())
     }
 }
 
-fn counting_fs(image: &str) -> (Ext2Fs<CountingDevice>, Rc<Cell<usize>>, Rc<Cell<usize>>) {
+fn counting_fs(image: &str) -> (Ext2Fs<CountingDevice>, Rc<Counters>) {
     let image_data = common::load_copy_of_image(image);
-    let reads = Rc::new(Cell::new(0));
-    let writes = Rc::new(Cell::new(0));
+    let counters = Rc::new(Counters::default());
     let device = CountingDevice {
         inner: MemoryBlockDevice::try_new(512, image_data).expect("device creation must succeed"),
-        reads: Rc::clone(&reads),
-        writes: Rc::clone(&writes),
+        counters: Rc::clone(&counters),
     };
     let fs = Ext2Fs::try_new(device).expect("filesystem must mount");
-    (fs, reads, writes)
+    (fs, counters)
 }
 
 // Metadata (bitmap, counters, inode, indirect tables) reaches the device at
-// sync only, so a sequential write costs its data sectors and little else.
+// sync only, so a sequential write costs its data sectors and little else,
+// and the blocks of one chunk go out as one request.
 #[test]
 fn sequential_write_sector_amplification() {
     const LEN: usize = 512 * 1024;
-    let (mut fs, _, writes) = counting_fs("kernel/ext2/tests/filesystems/empty.img");
+    let (mut fs, counters) = counting_fs("kernel/ext2/tests/filesystems/empty.img");
     let mut root = fs.read_root_inode().expect("root inode must be readable");
     let mut file = fs
         .create_regular_file(&mut root, "seq.bin")
         .expect("file creation must succeed");
-    writes.set(0);
+    counters.writes.set(0);
+    counters.write_requests.set(0);
 
     let chunk = vec![0xA5_u8; 4096];
     for offset in (0..LEN).step_by(chunk.len()) {
@@ -324,13 +342,21 @@ fn sequential_write_sector_amplification() {
     }
     let data_sectors = LEN / 512;
     assert_eq!(
-        writes.get(),
+        counters.writes.get(),
         data_sectors,
         "writes before sync must be data only"
     );
+    let requests = counters.write_requests.get();
+    // a chunk splits only where an indirect table was allocated between its
+    // blocks: once entering the single, twice entering the double tier
+    assert!(
+        requests <= LEN / chunk.len() + 3,
+        "sequential write issued {requests} requests for {} chunks",
+        LEN / chunk.len()
+    );
 
     fs.sync().expect("sync must succeed");
-    let sectors = writes.get();
+    let sectors = counters.writes.get();
     // 512 blocks need 2 indirect tables and 1 double indirect table, plus the
     // bitmap, descriptor table, superblock and the inode table blocks of the
     // file and its parent: 8 blocks
@@ -342,7 +368,8 @@ fn sequential_write_sector_amplification() {
 
 #[test]
 fn sequential_read_sector_amplification() {
-    let (fs, reads, _) = counting_fs(IMAGE);
+    let (fs, counters) = counting_fs(IMAGE);
+    let reads = &counters.reads;
     let file = open_pattern(&fs);
 
     let mut offset = 0;

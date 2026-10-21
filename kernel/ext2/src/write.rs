@@ -100,45 +100,78 @@ where
 
         let mut scratch = vec![0_u8; block_size];
         let mut written = 0;
-        let mut failure = None;
+        // full blocks after `written`, consecutive on disk, not yet written
+        let mut run: Option<(BlockAddress, usize)> = None;
+        let mut outcome = Ok(());
         for block_index in first_block_index..=last_block_index {
-            let within_block = (offset + written) % block_size;
-            let chunk_len = (block_size - within_block).min(buf.len() - written);
-            let chunk = &buf[written..written + chunk_len];
-            let is_partial = chunk_len < block_size;
-            let result = self
-                .map_block(file.inode_mut(), block_index)
-                .and_then(|mapped| {
-                    let block = match mapped {
-                        MappedBlock::Existing(block) if is_partial => {
-                            self.read_block(block, &mut scratch)?;
-                            block
-                        }
-                        MappedBlock::Allocated(block) if is_partial => {
-                            scratch.fill(0);
-                            block
-                        }
-                        MappedBlock::Existing(block) | MappedBlock::Allocated(block) => {
-                            return self.write_block(block, chunk);
-                        }
-                    };
-                    scratch[within_block..within_block + chunk_len].copy_from_slice(chunk);
-                    self.write_block(block, &scratch)
-                });
-            if let Err(e) = result {
-                failure = Some(e);
-                break;
+            let cursor = written + run.map_or(0, |(_, blocks)| blocks * block_size);
+            let within_block = (offset + cursor) % block_size;
+            let chunk_len = (block_size - within_block).min(buf.len() - cursor);
+            let mapped = match self.map_block(file.inode_mut(), block_index) {
+                Ok(mapped) => mapped,
+                Err(e) => {
+                    outcome = Err(e);
+                    break;
+                }
+            };
+            let (MappedBlock::Existing(block) | MappedBlock::Allocated(block)) = mapped;
+            let is_full = chunk_len == block_size;
+            if is_full
+                && let Some((start, blocks)) = run
+                && start.get() as usize + blocks == block.get() as usize
+            {
+                run = Some((start, blocks + 1));
+                continue;
             }
-            written += chunk_len;
+            if let Some((start, blocks)) = run.take() {
+                match self.write_block(start, &buf[written..written + blocks * block_size]) {
+                    Ok(_) => written += blocks * block_size,
+                    Err(e) => {
+                        outcome = Err(e);
+                        break;
+                    }
+                }
+            }
+            if is_full {
+                run = Some((block, 1));
+                continue;
+            }
+            let result = match mapped {
+                MappedBlock::Existing(_) => self.read_block(block, &mut scratch).map(|_| ()),
+                MappedBlock::Allocated(_) => {
+                    scratch.fill(0);
+                    Ok(())
+                }
+            }
+            .and_then(|()| {
+                scratch[within_block..within_block + chunk_len]
+                    .copy_from_slice(&buf[written..written + chunk_len]);
+                self.write_block(block, &scratch)
+            });
+            match result {
+                Ok(_) => written += chunk_len,
+                Err(e) => {
+                    outcome = Err(e);
+                    break;
+                }
+            }
+        }
+        // the run's blocks are in the inode already, so they are written even
+        // after a later failure
+        if let Some((start, blocks)) = run {
+            match self.write_block(start, &buf[written..written + blocks * block_size]) {
+                Ok(_) => written += blocks * block_size,
+                Err(e) => outcome = outcome.and(Err(e)),
+            }
         }
 
         if offset + written > file.len() {
             file.inode_mut().set_len(offset + written);
         }
         self.write_inode(file.inode_address(), file)?;
-        match failure {
-            Some(e) if written == 0 => Err(e),
-            Some(_) | None => Ok(written),
+        match outcome {
+            Err(e) if written == 0 => Err(e),
+            Err(_) | Ok(()) => Ok(written),
         }
     }
 
