@@ -75,6 +75,7 @@ fn test_write_into_hole_counts_sectors(sector_size: usize) {
     let before = file.inode().num_disk_sectors();
     let len_before = file.len();
     let block_size = fs.superblock().block_size() as usize;
+    let free_before = fs.superblock().num_unallocated_blocks();
 
     let data = vec![0xCD_u8; block_size];
     assert_eq!(
@@ -91,6 +92,8 @@ fn test_write_into_hole_counts_sectors(sector_size: usize) {
         .try_into()
         .unwrap();
     assert_eq!(on_disk.inode().num_disk_sectors(), expected);
+    assert_eq!(fs.superblock().num_unallocated_blocks(), free_before - 1);
+    assert_eq!(read_at(&fs, &on_disk, block_size, block_size), data);
 }
 
 generate_tests!(
@@ -391,4 +394,178 @@ fn overwrite_inside_block_preserves_other_bytes(block_size: usize) {
     assert_eq!(stored.len(), 2 * block_size);
     assert_eq!(stored.num_disk_sectors(), sectors);
     assert_eq!(read_all(&fs, &stored), expected);
+}
+
+fn pattern(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+}
+
+fn read_at<T: BlockDevice>(
+    fs: &Ext2Fs<T>,
+    file: &RegularFile,
+    offset: usize,
+    len: usize,
+) -> Vec<u8> {
+    let mut buf = vec![0xEE_u8; len];
+    assert_eq!(fs.read_from_file(file, offset, &mut buf).unwrap(), len);
+    buf
+}
+
+generate_tests!(
+    write_past_direct_blocks_allocates_single_indirect:
+    1024 - write_past_direct_blocks_allocates_single_indirect_1k,
+    4096 - write_past_direct_blocks_allocates_single_indirect_4k,
+);
+
+fn write_past_direct_blocks_allocates_single_indirect(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+    let sectors_per_block = fs.superblock().sectors_per_block();
+    let data = pattern(13 * block_size + 7);
+
+    assert_eq!(fs.write_to_file(&mut file, 0, &data).unwrap(), data.len());
+
+    let data_blocks = 14;
+    let tables = 1;
+    assert_eq!(
+        fs.superblock().num_unallocated_blocks(),
+        free_blocks - data_blocks - tables
+    );
+    let stored = on_disk(&fs, &file);
+    assert!(stored.single_indirect_ptr().is_some());
+    assert_eq!(stored.double_indirect_ptr(), None);
+    assert_eq!(
+        stored.num_disk_sectors(),
+        (data_blocks + tables) * sectors_per_block
+    );
+    assert_eq!(read_all(&fs, &stored), data);
+}
+
+generate_tests!(
+    sparse_write_in_double_indirect_region_allocates_each_table:
+    1024 - sparse_write_in_double_indirect_region_allocates_each_table_1k,
+    4096 - sparse_write_in_double_indirect_region_allocates_each_table_4k,
+);
+
+fn sparse_write_in_double_indirect_region_allocates_each_table(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+    let sectors_per_block = fs.superblock().sectors_per_block();
+    let IndirectPointerLimits { indirect_end, .. } = fs.indirect_pointer_limits();
+    let pointers_per_block = (block_size / 4) as u32;
+    // second table under the double indirect block, so the slot math is exercised
+    let block_index = indirect_end + pointers_per_block + 3;
+    let offset = block_index as usize * block_size + 5;
+    let data = pattern(block_size);
+
+    assert_eq!(
+        fs.write_to_file(&mut file, offset, &data).unwrap(),
+        data.len()
+    );
+
+    let allocated = 2 + 2; // two data blocks, the double table and one single table
+    assert_eq!(
+        fs.superblock().num_unallocated_blocks(),
+        free_blocks - allocated
+    );
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), offset + data.len());
+    assert_eq!(stored.num_disk_sectors(), allocated * sectors_per_block);
+    assert!(stored.direct_ptrs().all(|ptr| ptr.is_none()));
+    assert_eq!(stored.single_indirect_ptr(), None);
+    assert!(stored.double_indirect_ptr().is_some());
+    assert_eq!(stored.triple_indirect_ptr(), None);
+    assert!(!fs.is_block_allocated(&stored, block_index - 1).unwrap());
+    assert!(fs.is_block_allocated(&stored, block_index).unwrap());
+    assert!(fs.is_block_allocated(&stored, block_index + 1).unwrap());
+
+    let mut expected = vec![0_u8; offset];
+    expected.extend_from_slice(&data);
+    assert_eq!(read_all(&fs, &stored), expected);
+}
+
+generate_tests!(
+    sparse_write_in_triple_indirect_region_allocates_each_table:
+    1024 - sparse_write_in_triple_indirect_region_allocates_each_table_1k,
+    4096 - sparse_write_in_triple_indirect_region_allocates_each_table_4k,
+);
+
+fn sparse_write_in_triple_indirect_region_allocates_each_table(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+    let sectors_per_block = fs.superblock().sectors_per_block();
+    let IndirectPointerLimits {
+        double_indirect_end,
+        ..
+    } = fs.indirect_pointer_limits();
+    let pointers_per_block = (block_size / 4) as u32;
+    // a non-first slot at every level of the triple indirect tree
+    let block_index =
+        double_indirect_end + pointers_per_block * pointers_per_block + pointers_per_block + 1;
+    let offset = block_index as usize * block_size;
+    let data = pattern(100);
+
+    assert_eq!(
+        fs.write_to_file(&mut file, offset, &data).unwrap(),
+        data.len()
+    );
+
+    let allocated = 1 + 3;
+    assert_eq!(
+        fs.superblock().num_unallocated_blocks(),
+        free_blocks - allocated
+    );
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), offset + data.len());
+    assert_eq!(stored.num_disk_sectors(), allocated * sectors_per_block);
+    assert_eq!(stored.single_indirect_ptr(), None);
+    assert_eq!(stored.double_indirect_ptr(), None);
+    assert!(stored.triple_indirect_ptr().is_some());
+    assert!(!fs.is_block_allocated(&stored, double_indirect_end).unwrap());
+    assert!(!fs.is_block_allocated(&stored, block_index - 1).unwrap());
+    assert!(fs.is_block_allocated(&stored, block_index).unwrap());
+    assert_eq!(read_at(&fs, &stored, offset, data.len()), data);
+    assert_eq!(
+        read_at(&fs, &stored, offset - block_size, block_size),
+        vec![0; block_size]
+    );
+    assert_eq!(read_at(&fs, &stored, 0, block_size), vec![0; block_size]);
+}
+
+generate_tests!(
+    write_until_full_persists_every_allocated_block:
+    1024 - write_until_full_persists_every_allocated_block_1k,
+    4096 - write_until_full_persists_every_allocated_block_4k,
+);
+
+fn write_until_full_persists_every_allocated_block(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut file = create_file(&mut fs, "f");
+    let free_blocks = fs.superblock().num_unallocated_blocks();
+    let sectors_per_block = fs.superblock().sectors_per_block();
+    let data = pattern((free_blocks as usize + 8) * block_size);
+
+    let written = fs.write_to_file(&mut file, 0, &data).unwrap();
+
+    assert!(
+        written > 0 && written < data.len(),
+        "short write, got {written}"
+    );
+    assert_eq!(written % block_size, 0);
+    assert_eq!(fs.superblock().num_unallocated_blocks(), 0);
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), written);
+    assert_eq!(stored.num_disk_sectors(), free_blocks * sectors_per_block);
+    assert_eq!(read_all(&fs, &stored), data[..written]);
+
+    assert_eq!(
+        fs.write_to_file(&mut file, written, b"more"),
+        Err(Error::NoSpace)
+    );
+    let stored = on_disk(&fs, &file);
+    assert_eq!(stored.len(), written);
+    assert_eq!(stored.num_disk_sectors(), free_blocks * sectors_per_block);
 }

@@ -237,6 +237,18 @@ impl Inode {
         BlockAddress::new(self.triply_indirect_block_ptr)
     }
 
+    pub fn set_single_indirect_ptr(&mut self, ptr: Option<BlockAddress>) {
+        self.singly_indirect_block_ptr = ptr.map_or(0, BlockAddress::into_u32);
+    }
+
+    pub fn set_double_indirect_ptr(&mut self, ptr: Option<BlockAddress>) {
+        self.doubly_indirect_block_ptr = ptr.map_or(0, BlockAddress::into_u32);
+    }
+
+    pub fn set_triple_indirect_ptr(&mut self, ptr: Option<BlockAddress>) {
+        self.triply_indirect_block_ptr = ptr.map_or(0, BlockAddress::into_u32);
+    }
+
     pub fn len(&self) -> usize {
         if self.typ() == Some(Type::Directory) {
             self.byte_size_lower as usize

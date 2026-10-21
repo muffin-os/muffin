@@ -2,13 +2,70 @@ use alloc::vec;
 
 use kernel_device::block::BlockDevice;
 
-use crate::{BlockAddress, Error, Ext2Fs, Inode, RegularFile};
+use crate::{BlockAddress, Error, Ext2Fs, IndirectPointerLimits, Inode, RegularFile};
 
 /// Where a file block lives after [`Ext2Fs::map_block`].
 enum MappedBlock {
     Existing(BlockAddress),
     /// Freshly allocated, so its on-disk bytes are stale.
     Allocated(BlockAddress),
+}
+
+/// One of the three inode pointers that root a tree of indirect tables.
+#[derive(Copy, Clone)]
+enum Tier {
+    Single,
+    Double,
+    Triple,
+}
+
+impl Tier {
+    /// The tier holding `block_index`, `None` for the direct blocks.
+    fn containing(block_index: u32, limits: &IndirectPointerLimits) -> Option<Self> {
+        if block_index < limits.direct_end {
+            None
+        } else if block_index < limits.indirect_end {
+            Some(Self::Single)
+        } else if block_index < limits.double_indirect_end {
+            Some(Self::Double)
+        } else {
+            Some(Self::Triple)
+        }
+    }
+
+    /// First file block index this tier covers.
+    fn begin(self, limits: &IndirectPointerLimits) -> u32 {
+        match self {
+            Self::Single => limits.direct_end,
+            Self::Double => limits.indirect_end,
+            Self::Triple => limits.double_indirect_end,
+        }
+    }
+
+    /// Number of tables between the inode and a data block.
+    fn depth(self) -> u32 {
+        match self {
+            Self::Single => 1,
+            Self::Double => 2,
+            Self::Triple => 3,
+        }
+    }
+
+    fn root(self, inode: &Inode) -> Option<BlockAddress> {
+        match self {
+            Self::Single => inode.single_indirect_ptr(),
+            Self::Double => inode.double_indirect_ptr(),
+            Self::Triple => inode.triple_indirect_ptr(),
+        }
+    }
+
+    fn set_root(self, inode: &mut Inode, root: Option<BlockAddress>) {
+        match self {
+            Self::Single => inode.set_single_indirect_ptr(root),
+            Self::Double => inode.set_double_indirect_ptr(root),
+            Self::Triple => inode.set_triple_indirect_ptr(root),
+        }
+    }
 }
 
 impl<T> Ext2Fs<T>
@@ -86,29 +143,67 @@ where
         }
     }
 
-    /// File block index that holds byte `offset`.
-    fn file_block_index(&self, offset: usize) -> Result<u32, Error> {
-        u32::try_from(offset / self.superblock.block_size() as usize)
-            .ok()
-            .filter(|&index| u64::from(index) < self.triple_indirect_end())
-            .ok_or(Error::FileTooLarge)
-    }
-
-    /// Resolves `block_index` of `inode`, allocating the data block if it is a
-    /// hole. Allocations are recorded in the in-memory `inode` only.
+    /// Resolves `block_index` of `inode`, allocating the data block and every
+    /// missing table on the way if it is a hole. Table entries are written to
+    /// disk; pointers in the inode itself are only set in memory.
     fn map_block(&mut self, inode: &mut Inode, block_index: u32) -> Result<MappedBlock, Error> {
         if let Some(block) = self.resolve_block_index(inode, block_index)? {
             return Ok(MappedBlock::Existing(block));
         }
-        let Ok(slot) = usize::try_from(block_index) else {
-            return Err(Error::InvalidBlockIndex(block_index));
+        let limits = self.indirect_pointer_limits();
+        let Some(tier) = Tier::containing(block_index, &limits) else {
+            let block = self.allocate_counted(inode)?;
+            inode.set_direct_ptr(block_index as usize, Some(block));
+            return Ok(MappedBlock::Allocated(block));
         };
-        if slot >= 12 {
-            todo!("allocate indirect block");
+
+        let mut node = match tier.root(inode) {
+            Some(table) => table,
+            None => {
+                let table = self.allocate_table(inode)?;
+                tier.set_root(inode, Some(table));
+                table
+            }
+        };
+        let relative_index = block_index - tier.begin(&limits);
+        let pointers_per_block = self.superblock.pointers_per_block();
+        for level in (0..tier.depth()).rev() {
+            let slot = relative_index / pointers_per_block.pow(level) % pointers_per_block;
+            node = match self.resolve_indirect_ptr(Some(node), slot)? {
+                Some(child) => child,
+                None => {
+                    let child = if level == 0 {
+                        self.allocate_counted(inode)?
+                    } else {
+                        self.allocate_table(inode)?
+                    };
+                    self.write_table_entry(node, slot, child)?;
+                    child
+                }
+            };
         }
-        let block = self.allocate_counted(inode)?;
-        inode.set_direct_ptr(slot, Some(block));
-        Ok(MappedBlock::Allocated(block))
+        Ok(MappedBlock::Allocated(node))
+    }
+
+    /// Allocates a zeroed indirect table and adds it to the sector count of `inode`.
+    fn allocate_table(&mut self, inode: &mut Inode) -> Result<BlockAddress, Error> {
+        let table = self.allocate_counted(inode)?;
+        self.write_block(table, &vec![0_u8; self.superblock.block_size() as usize])?;
+        Ok(table)
+    }
+
+    fn write_table_entry(
+        &mut self,
+        table: BlockAddress,
+        slot: u32,
+        entry: BlockAddress,
+    ) -> Result<(), Error> {
+        self.indirect_cache.lock().invalidate(table);
+        let offset = self.resolve_block_offset(table) + slot as usize * size_of::<BlockAddress>();
+        self.block_device
+            .write_at(offset, &entry.into_u32().to_le_bytes())
+            .map_err(|_| Error::DeviceWrite)
+            .map(|_| ())
     }
 
     /// Allocates a block and adds it to the sector count of `inode`.

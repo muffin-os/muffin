@@ -57,48 +57,53 @@ where
         buf: &mut [u8],
     ) -> Result<usize, Error> {
         let file_size = file.len();
-        if offset >= file_size {
+        if offset >= file_size || buf.is_empty() {
             return Ok(0);
         }
+        let len = buf.len().min(file_size - offset);
+        let start_block = self.file_block_index(offset)?;
+        let last_block = self.file_block_index(offset + len - 1)?;
 
-        let block_size = self.superblock.block_size();
-        let offset = offset as u32;
-
-        let start_block = offset / block_size;
-        let last_block = (offset + buf.len() as u32 - 1) / block_size;
-        let relative_offset = (offset % block_size) as usize;
-        let block_count = (last_block - start_block + 1) as usize;
-
-        let mut data: Vec<u8> = vec![0_u8; block_count * block_size as usize];
-        let res = self.read_blocks_from_inode(
-            file,
-            start_block as usize,
-            last_block as usize,
-            &mut data,
-        )?;
-        let total_read = res.min(file_size - offset as usize).min(buf.len());
+        let block_size = self.superblock.block_size() as usize;
+        let relative_offset = offset % block_size;
+        let block_count = (last_block - start_block) as usize + 1;
+        let mut data: Vec<u8> = vec![0_u8; block_count * block_size];
+        let res = self.read_blocks_from_inode(file, start_block, last_block, &mut data)?;
+        let total_read = res.min(len);
         buf[..total_read].copy_from_slice(&data[relative_offset..relative_offset + total_read]);
 
         Ok(total_read)
     }
 
-    pub(crate) fn read_blocks_from_inode(
+    /// File block index that holds byte `offset`.
+    ///
+    /// # Errors
+    /// [`Error::FileTooLarge`] if `offset` lies past the last addressable block.
+    pub(crate) fn file_block_index(&self, offset: usize) -> Result<u32, Error> {
+        u32::try_from(offset / self.superblock.block_size() as usize)
+            .ok()
+            .filter(|&index| u64::from(index) < self.triple_indirect_end())
+            .ok_or(Error::FileTooLarge)
+    }
+
+    fn read_blocks_from_inode(
         &self,
         inode: &Inode,
-        start_block: usize,
-        last_block: usize,
+        start_block: u32,
+        last_block: u32,
         buf: &mut [u8],
     ) -> Result<usize, Error> {
         let block_size = self.superblock.block_size() as usize;
+        let block_count = (last_block - start_block) as usize + 1;
         assert_eq!(
             buf.len(),
-            (last_block - start_block + 1) * block_size,
+            block_count * block_size,
             "buf.len() must be equal to the number of blocks you want to read"
         );
 
-        let mut pointers = Vec::with_capacity(last_block - start_block + 1);
+        let mut pointers = Vec::with_capacity(block_count);
         for block in start_block..=last_block {
-            pointers.push(self.resolve_block_index(inode, block as u32)?);
+            pointers.push(self.resolve_block_index(inode, block)?);
         }
 
         let mut total_read = 0;
