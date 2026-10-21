@@ -21,7 +21,8 @@ use crate::mcore::mtask::wait::try_reserve;
 /// userspace program corrupted or forged.
 pub const SIGFRAME_MAGIC: u64 = 0x8D2F_FAB8_19E3_EECC;
 
-// The flags userspace owns, the same set Linux's FIX_EFLAGS lets sigreturn restore.
+// The arithmetic, trap and direction flags: everything ring 3 may set itself, so
+// a sigreturn frame restoring them cannot raise privilege or enable interrupts.
 const USER_RFLAGS: RFlags = RFlags::CARRY_FLAG
     .union(RFlags::PARITY_FLAG)
     .union(RFlags::AUXILIARY_CARRY_FLAG)
