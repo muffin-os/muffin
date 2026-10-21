@@ -53,6 +53,19 @@ pub trait FileSystem: Send + Sync {
     fn read(&mut self, handle: FsHandle, buf: &mut [u8], offset: usize)
     -> Result<usize, ReadError>;
 
+    /// Writes `buf` to the file at `handle` starting at byte `offset`,
+    /// growing the file when the write ends past its size, and returns the
+    /// number of bytes written.
+    ///
+    /// # Errors
+    /// - [`WriteError::FsError`] if the handle is invalid or already closed.
+    /// - [`WriteError::NotWritable`] if the file takes no data, such as a
+    ///   directory.
+    /// - [`WriteError::NoSpace`] if the file system has no room for the write.
+    /// - [`WriteError::FileTooLarge`] if the write would end past the largest
+    ///   size the file system supports.
+    /// - [`WriteError::WriteFailed`] for an underlying error, such as a
+    ///   hardware error.
     fn write(&mut self, handle: FsHandle, buf: &[u8], offset: usize) -> Result<usize, WriteError>;
 
     /// Sets the size of the file at `handle` to `len_bytes`. Bytes past

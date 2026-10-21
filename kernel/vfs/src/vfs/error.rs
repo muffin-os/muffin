@@ -69,6 +69,10 @@ pub enum WriteError {
     WriteFailed,
     #[error("file is not writable")]
     NotWritable,
+    #[error("no space left for the written bytes")]
+    NoSpace,
+    #[error("the write would end past the largest size the file system supports")]
+    FileTooLarge,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]

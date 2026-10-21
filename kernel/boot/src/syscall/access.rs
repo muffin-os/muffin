@@ -2,8 +2,8 @@ use alloc::sync::Arc;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
-    EACCES, EBADF, EEXIST, EINVAL, EIO, EISDIR, ENODEV, ENOENT, ENOMEM, ENOSPC, ENOTTY, Errno,
-    IoctlRequest, ProtFlags, Stat,
+    EACCES, EBADF, EEXIST, EFBIG, EINVAL, EIO, EISDIR, ENODEV, ENOENT, ENOMEM, ENOSPC, ENOTTY,
+    Errno, IoctlRequest, ProtFlags, Stat,
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
@@ -13,7 +13,7 @@ use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CreateMode, FsError, FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat,
-    TruncateError,
+    TruncateError, WriteError,
 };
 use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
@@ -131,7 +131,12 @@ impl FileAccess for KernelAccess {
         } else {
             ofd.position().load(Relaxed)
         };
-        let written = ofd.write(buf, offset.into_usize()).map_err(|_| EIO)?;
+        let written = ofd.write(buf, offset.into_usize()).map_err(|e| match e {
+            WriteError::NotWritable => EISDIR,
+            WriteError::NoSpace => ENOSPC,
+            WriteError::FileTooLarge => EFBIG,
+            WriteError::FsError(_) | WriteError::WriteFailed => EIO,
+        })?;
         ofd.position().store(offset + written.into_u64(), Relaxed);
         Ok(written)
     }

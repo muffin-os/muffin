@@ -122,13 +122,43 @@ where
         }
     }
 
-    fn write(
-        &mut self,
-        _handle: FsHandle,
-        _buf: &[u8],
-        _offset: usize,
-    ) -> Result<usize, WriteError> {
-        todo!("write support for ext2");
+    fn write(&mut self, handle: FsHandle, buf: &[u8], offset: usize) -> Result<usize, WriteError> {
+        let inode = &self
+            .handles
+            .get(&handle)
+            .ok_or(FsError::InvalidHandle)?
+            .inode;
+
+        let mut guard = inode.write();
+        match &mut guard.inner {
+            Inner::RegularFile(file) => {
+                self.ext2fs
+                    .write_to_file(file, offset, buf)
+                    .map_err(|e| match e {
+                        Error::NoSpace => WriteError::NoSpace,
+                        Error::FileTooLarge => WriteError::FileTooLarge,
+                        Error::InvalidSuperblock
+                        | Error::UnableToReadSuperblock
+                        | Error::UnableToWriteSuperblock
+                        | Error::UnableToReadBlockGroupDescriptorTable
+                        | Error::UnableToWriteBlockGroupDescriptorTable
+                        | Error::InvalidBlockGroupDescriptor(_)
+                        | Error::NotDirectory
+                        | Error::NotRegularFile
+                        | Error::DeviceRead
+                        | Error::DeviceWrite
+                        | Error::InvalidInodeAddress(_)
+                        | Error::InvalidBlockIndex(_)
+                        | Error::InvalidDirEntryType(_)
+                        | Error::InvalidDirEntry
+                        | Error::InvalidBlockAddress(_)
+                        | Error::NotSupported
+                        | Error::EntryExists
+                        | Error::NameTooLong => WriteError::WriteFailed,
+                    })
+            }
+            Inner::Directory(_) => Err(WriteError::NotWritable),
+        }
     }
 
     fn truncate(&mut self, handle: FsHandle, _len_bytes: u64) -> Result<(), TruncateError> {

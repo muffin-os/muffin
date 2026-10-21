@@ -55,6 +55,21 @@ ext2_image(
     files = {"//tests/bins:file_read": "bin/file-read"},
 )
 
+_SEED = "muffin seed data\n"
+
+ext2_image(
+    name = "file_write_disk",
+    contents = {
+        "data/gone.txt": _SEED,
+        "data/over.txt": _SEED,
+        "data/seed.txt": _SEED,
+        "data/trunc.txt": _SEED,
+        "spawn": "/bin/file-write\n",
+    },
+    empty_dirs = ["data/dir"],
+    files = {"//tests/bins:file_write": "bin/file-write"},
+)
+
 ext2_image(
     name = "floats_disk",
     contents = {"spawn": "/bin/floats\n/bin/floats\n"},
@@ -234,6 +249,7 @@ ext2_image(
         "fb_ioctl",
         "fb_mmap",
         "file_read",
+        "file_write",
         "floats",
         "heap_bounds",
         "kstack_overflow",
