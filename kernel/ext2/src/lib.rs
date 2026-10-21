@@ -171,9 +171,77 @@ where
             .map(|inode| inode.and_then(InodeAddress::new))
     }
 
+    /// Marks `block` free in its group's bitmap and counts it in the group and
+    /// superblock free counters, persisting all three.
+    ///
+    /// # Errors
+    /// - [`Error::InvalidBlockAddress`] if `block` lies outside the data
+    ///   blocks or is not marked allocated; nothing changes.
+    /// - [`Error::DeviceRead`] / [`Error::DeviceWrite`],
+    ///   [`Error::UnableToWriteBlockGroupDescriptorTable`] and
+    ///   [`Error::UnableToWriteSuperblock`] if the device fails.
+    pub fn deallocate_block(&mut self, block: BlockAddress) -> Result<(), Error> {
+        self.deallocate(Resource::Block, block.get())
+    }
+
+    fn deallocate(&mut self, resource: Resource, number: u32) -> Result<(), Error> {
+        let (per_group, first_number, bit_count, invalid) = match resource {
+            Resource::Block => (
+                self.superblock.blocks_per_group(),
+                self.superblock.first_data_block(),
+                self.superblock
+                    .num_blocks()
+                    .saturating_sub(self.superblock.first_data_block()),
+                Error::InvalidBlockAddress(number),
+            ),
+            Resource::Inode => (
+                self.superblock.inodes_per_group(),
+                1,
+                self.superblock.num_inodes(),
+                Error::InvalidInodeAddress(number),
+            ),
+        };
+        let bit_number = number
+            .checked_sub(first_number)
+            .filter(|&bit| bit < bit_count)
+            .ok_or(invalid)?;
+        let group_index = (bit_number / per_group) as usize;
+        let bit = (bit_number % per_group) as usize;
+        let descriptor = self.bgdt.get(group_index).ok_or(invalid)?;
+        let bitmap_block = match resource {
+            Resource::Block => descriptor.block_usage_bitmap_block(),
+            Resource::Inode => descriptor.inode_usage_bitmap_block(),
+        };
+
+        let mut bitmap = vec![0_u8; self.superblock.block_size() as usize];
+        self.read_block(bitmap_block, &mut bitmap)?;
+        let mask = 1 << (bit % 8);
+        let byte = bitmap
+            .get_mut(bit / 8)
+            .filter(|byte| **byte & mask != 0)
+            .ok_or(invalid)?;
+        *byte &= !mask;
+        self.write_block(bitmap_block, &bitmap)?;
+
+        let descriptor = &mut self.bgdt[group_index];
+        match resource {
+            Resource::Block => {
+                let free = descriptor.num_unallocated_blocks_mut();
+                *free = free.saturating_add(1);
+                let free = self.superblock.num_unallocated_blocks_mut();
+                *free = free.saturating_add(1);
+            }
+            Resource::Inode => {
+                let free = descriptor.num_unallocated_inodes_mut();
+                *free = free.saturating_add(1);
+                let free = self.superblock.num_unallocated_inodes_mut();
+                *free = free.saturating_add(1);
+            }
+        }
+        self.persist_counters(group_index)
+    }
+
     fn allocate(&mut self, resource: Resource) -> Result<Option<u32>, Error> {
-        let block_size = self.superblock.block_size();
-        let bgdt_offset = self.superblock.bgdt_offset();
         // bitmap bit 0 is inode 1 resp. block s_first_data_block
         let (per_group, first_number) = match resource {
             Resource::Block => (
@@ -204,28 +272,29 @@ where
                     *self.superblock.num_unallocated_inodes_mut() -= 1;
                 }
             }
-
-            let mut bgdt_data = vec![0_u8; block_size as usize];
-            self.block_device
-                .read_at(bgdt_offset, &mut bgdt_data)
-                .map_err(|_| Error::UnableToReadBlockGroupDescriptorTable)?;
-            let bgd_offset = group_index * BGD_SIZE;
-            let bgd_end = bgd_offset + BGD_SIZE;
-            let bgd_data = Into::<[u8; BGD_SIZE]>::into(&*descriptor);
-            bgdt_data[bgd_offset..bgd_end].copy_from_slice(&bgd_data);
-            self.block_device
-                .write_at(bgdt_offset, &bgdt_data)
-                .map_err(|_| Error::UnableToWriteBlockGroupDescriptorTable)?;
-
-            let superblock_data = Into::<SuperblockArray>::into(&self.superblock);
-            self.block_device
-                .write_at(SUPERBLOCK_OFFSET, superblock_data.as_slice())
-                .map_err(|_| Error::UnableToWriteSuperblock)?;
-
+            self.persist_counters(group_index)?;
             return Ok(Some(group_index as u32 * per_group + bit + first_number));
         }
 
         Ok(None)
+    }
+
+    /// Writes the descriptor of `group_index` and the superblock, whose free
+    /// counters change together.
+    fn persist_counters(&mut self, group_index: usize) -> Result<(), Error> {
+        let bgd_data = Into::<[u8; BGD_SIZE]>::into(&self.bgdt[group_index]);
+        self.block_device
+            .write_at(
+                self.superblock.bgdt_offset() + group_index * BGD_SIZE,
+                &bgd_data,
+            )
+            .map_err(|_| Error::UnableToWriteBlockGroupDescriptorTable)?;
+
+        let superblock_data = Into::<SuperblockArray>::into(&self.superblock);
+        self.block_device
+            .write_at(SUPERBLOCK_OFFSET, superblock_data.as_slice())
+            .map_err(|_| Error::UnableToWriteSuperblock)
+            .map(|_| ())
     }
 
     fn reserve_first_free_bit(&mut self, bitmap_block: BlockAddress) -> Result<Option<u32>, Error> {

@@ -216,4 +216,146 @@ where
         *inode.num_disk_sectors_mut() = sectors;
         Ok(block)
     }
+
+    /// Sets the byte size of `file` to `len_bytes`. Shrinking frees every data
+    /// block past the new end and every indirect table left empty, and zeroes
+    /// the rest of the block holding the new end, so growing later reads
+    /// zeros. Growing allocates nothing; the new range is a hole.
+    ///
+    /// Blocks freed before an error stay freed and unlinked on disk, and the
+    /// size is left unchanged.
+    ///
+    /// # Errors
+    /// - [`Error::FileTooLarge`] if `len_bytes` lies past the last addressable
+    ///   block; nothing changes.
+    /// - [`Error::InvalidBlockAddress`] if the file points at a block that is
+    ///   not marked allocated.
+    /// - [`Error::DeviceRead`] / [`Error::DeviceWrite`] and the deallocator's
+    ///   superblock and descriptor table errors if the device fails.
+    pub fn truncate_file(&mut self, file: &mut RegularFile, len_bytes: usize) -> Result<(), Error> {
+        if len_bytes == file.len() {
+            return Ok(());
+        }
+        if let Some(last_byte) = len_bytes.checked_sub(1) {
+            self.file_block_index(last_byte)?;
+        }
+        if len_bytes > file.len() {
+            file.inode_mut().set_len(len_bytes);
+            return self.write_inode(file.inode_address(), file);
+        }
+
+        let block_size = self.superblock.block_size() as usize;
+        let tail_begin = len_bytes % block_size;
+        if tail_begin != 0
+            && let Some(block) =
+                self.resolve_block_index(file, self.file_block_index(len_bytes)?)?
+        {
+            let mut data = vec![0_u8; block_size];
+            self.read_block(block, &mut data)?;
+            data[tail_begin..].fill(0);
+            self.write_block(block, &data)?;
+        }
+
+        let kept_blocks = len_bytes.div_ceil(block_size) as u64;
+        let outcome = self.free_blocks_from(file.inode_mut(), kept_blocks);
+        if outcome.is_ok() {
+            file.inode_mut().set_len(len_bytes);
+        }
+        self.write_inode(file.inode_address(), file)?;
+        outcome
+    }
+
+    /// Frees every block of `inode` at file block index `kept_blocks` and
+    /// above, and every table left empty. Inode pointers change in memory only.
+    fn free_blocks_from(&mut self, inode: &mut Inode, kept_blocks: u64) -> Result<(), Error> {
+        let limits = self.indirect_pointer_limits();
+        for slot in 0..limits.direct_end as usize {
+            if (slot as u64) < kept_blocks {
+                continue;
+            }
+            let direct = inode.direct_ptrs().nth(slot).flatten();
+            if let Some(block) = direct {
+                self.free_counted(inode, block)?;
+                inode.set_direct_ptr(slot, None);
+            }
+        }
+
+        let pointers_per_block = u64::from(self.superblock.pointers_per_block());
+        for tier in [Tier::Single, Tier::Double, Tier::Triple] {
+            let Some(root) = tier.root(inode) else {
+                continue;
+            };
+            let kept_in_tier = kept_blocks.saturating_sub(u64::from(tier.begin(&limits)));
+            if kept_in_tier >= pointers_per_block.pow(tier.depth()) {
+                continue;
+            }
+            if self.free_table_from(inode, root, tier.depth(), kept_in_tier)? {
+                self.free_counted(inode, root)?;
+                tier.set_root(inode, None);
+            }
+        }
+        Ok(())
+    }
+
+    /// Frees every block at relative index `kept` and above in the tree of
+    /// `depth` tables rooted at `table`, and every child table left empty.
+    /// Returns whether `table` itself is left empty; it is not freed here.
+    fn free_table_from(
+        &mut self,
+        inode: &mut Inode,
+        table: BlockAddress,
+        depth: u32,
+        kept: u64,
+    ) -> Result<bool, Error> {
+        let mut entries = vec![0_u8; self.superblock.block_size() as usize];
+        self.read_block(table, &mut entries)?;
+        let child_span = u64::from(self.superblock.pointers_per_block()).pow(depth - 1);
+
+        let mut is_empty = true;
+        let mut is_changed = false;
+        let mut outcome = Ok(());
+        for (slot, entry) in (0_u64..).zip(entries.as_chunks_mut::<4>().0) {
+            let Some(child) = BlockAddress::new(u32::from_le_bytes(*entry)) else {
+                continue;
+            };
+            let child_begin = slot * child_span;
+            let freed = if child_begin + child_span <= kept {
+                Ok(false)
+            } else if depth == 1 {
+                Ok(true)
+            } else {
+                self.free_table_from(inode, child, depth - 1, kept.saturating_sub(child_begin))
+            }
+            .and_then(|is_freed| {
+                if is_freed {
+                    self.free_counted(inode, child)?;
+                }
+                Ok(is_freed)
+            });
+            match freed {
+                Ok(true) => {
+                    *entry = [0; 4];
+                    is_changed = true;
+                }
+                Ok(false) => is_empty = false,
+                Err(e) => {
+                    outcome = Err(e);
+                    break;
+                }
+            }
+        }
+        // entries of freed children must not survive an error further down
+        if is_changed {
+            self.write_block(table, &entries)?;
+        }
+        outcome.map(|()| is_empty)
+    }
+
+    /// Frees `block` and removes it from the sector count of `inode`.
+    fn free_counted(&mut self, inode: &mut Inode, block: BlockAddress) -> Result<(), Error> {
+        self.deallocate_block(block)?;
+        let sectors = inode.num_disk_sectors_mut();
+        *sectors = sectors.saturating_sub(self.superblock.sectors_per_block());
+        Ok(())
+    }
 }

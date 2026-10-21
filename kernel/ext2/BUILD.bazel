@@ -54,6 +54,22 @@ rust_test(
 )
 
 rust_test(
+    name = "truncate_test",
+    srcs = [
+        "tests/common.rs",
+        "tests/truncate.rs",
+    ],
+    crate_root = "tests/truncate.rs",
+    data = glob(["tests/filesystems/*.img"]),
+    edition = "2024",
+    size = "small",
+    deps = [
+        ":ext2",
+        "//kernel/device",
+    ],
+)
+
+rust_test(
     name = "superblock_test",
     srcs = ["tests/superblock.rs"],
     edition = "2024",

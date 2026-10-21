@@ -21,6 +21,8 @@ pub enum Error {
     NameTooLong,
     /// The write or truncate would place data past the last block the inode can address.
     FileTooLarge,
+    /// The block lies outside the filesystem's data blocks or is not marked allocated.
+    InvalidBlockAddress(u32),
 }
 
 impl Display for Error {
