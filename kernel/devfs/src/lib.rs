@@ -17,7 +17,7 @@ use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CloseError, CreateMode, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError,
-    Stat, StatError, WriteError,
+    Stat, StatError, TruncateError, WriteError,
 };
 
 #[derive(Clone)]
@@ -67,6 +67,10 @@ impl FileSystem for ArcLockedDevFs {
 
     fn write(&mut self, handle: FsHandle, buf: &[u8], offset: usize) -> Result<usize, WriteError> {
         self.inner.write().write(handle, buf, offset)
+    }
+
+    fn truncate(&mut self, handle: FsHandle, len_bytes: u64) -> Result<(), TruncateError> {
+        self.inner.write().truncate(handle, len_bytes)
     }
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {

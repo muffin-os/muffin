@@ -9,7 +9,7 @@ use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CloseError, CreateMode, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError,
-    ReadError, Stat, StatError, WriteError,
+    ReadError, Stat, StatError, TruncateError, WriteError,
 };
 use thiserror::Error;
 
@@ -188,6 +188,11 @@ impl FileSystem for DevFs {
         self.resolve_handle(handle)?.write(buf, offset)
     }
 
+    fn truncate(&mut self, handle: FsHandle, _len_bytes: u64) -> Result<(), TruncateError> {
+        self.resolve_handle(handle)?;
+        Err(TruncateError::NotSupported)
+    }
+
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
         self.resolve_handle(handle)?.stat(stat)
     }
@@ -273,6 +278,16 @@ mod tests {
             Err(OpenError::NotFound),
             devfs.open(path, CreateMode::IfMissing)
         );
+    }
+
+    #[test]
+    fn truncate_is_not_supported() {
+        let mut devfs = DevFs::new();
+        let handle = devfs
+            .open(AbsolutePath::try_new("/zero").unwrap(), CreateMode::Never)
+            .unwrap();
+
+        assert_eq!(Err(TruncateError::NotSupported), devfs.truncate(handle, 0));
     }
 
     #[test]

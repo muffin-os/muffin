@@ -94,3 +94,17 @@ pub enum IoctlError {
     #[error("invalid ioctl argument")]
     InvalidArgument,
 }
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
+pub enum TruncateError {
+    #[error("{0}")]
+    FsError(
+        #[from]
+        #[source]
+        FsError,
+    ),
+    #[error("file cannot be truncated")]
+    NotSupported,
+    #[error("truncate failed")]
+    TruncateFailed,
+}

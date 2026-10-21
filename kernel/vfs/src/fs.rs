@@ -3,7 +3,7 @@ use kernel_abi::IoctlRequest;
 use crate::path::AbsolutePath;
 use crate::{
     CloseError, CreateMode, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError,
-    Stat, StatError, WriteError,
+    Stat, StatError, TruncateError, WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -54,6 +54,17 @@ pub trait FileSystem: Send + Sync {
     -> Result<usize, ReadError>;
 
     fn write(&mut self, handle: FsHandle, buf: &[u8], offset: usize) -> Result<usize, WriteError>;
+
+    /// Sets the size of the file at `handle` to `len_bytes`. Bytes past
+    /// `len_bytes` are discarded; growing the file appends zero bytes.
+    ///
+    /// # Errors
+    /// - [`TruncateError::FsError`] if the handle is invalid or already closed.
+    /// - [`TruncateError::NotSupported`] if the file has no adjustable size,
+    ///   such as a device file.
+    /// - [`TruncateError::TruncateFailed`] for an underlying error, such as a
+    ///   hardware error.
+    fn truncate(&mut self, handle: FsHandle, len_bytes: u64) -> Result<(), TruncateError>;
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError>;
 

@@ -10,7 +10,8 @@ use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile, Ty
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
 use kernel_vfs::{
-    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError, WriteError,
+    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError,
+    TruncateError, WriteError,
 };
 use spin::RwLock;
 
@@ -128,6 +129,12 @@ where
         _offset: usize,
     ) -> Result<usize, WriteError> {
         todo!("write support for ext2");
+    }
+
+    fn truncate(&mut self, handle: FsHandle, _len_bytes: u64) -> Result<(), TruncateError> {
+        self.handles.get(&handle).ok_or(FsError::InvalidHandle)?;
+        // shortcut: ext2 files cannot be resized yet, until the ext2 truncate path is wired in here
+        Err(TruncateError::NotSupported)
     }
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {

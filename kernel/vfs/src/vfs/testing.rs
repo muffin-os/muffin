@@ -10,7 +10,8 @@ use spin::RwLock;
 use crate::fs::{FileSystem, FsHandle};
 use crate::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use crate::{
-    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError, WriteError,
+    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError,
+    TruncateError, WriteError,
 };
 
 #[derive(Default)]
@@ -106,6 +107,13 @@ impl FileSystem for TestFs {
         Ok(buf.len())
     }
 
+    fn truncate(&mut self, handle: FsHandle, len_bytes: u64) -> Result<(), TruncateError> {
+        let path = self.open_files.get(&handle).ok_or(FsError::InvalidHandle)?;
+        let len_bytes = usize::try_from(len_bytes).map_err(|_| TruncateError::TruncateFailed)?;
+        self.files[path].write().resize(len_bytes, 0);
+        Ok(())
+    }
+
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
         let path = self.open_files.get(&handle).ok_or(FsError::InvalidHandle)?;
         stat.size = self.files[path].read().len();
@@ -119,10 +127,10 @@ impl FileSystem for TestFs {
 
 #[cfg(test)]
 mod tests {
-    use crate::fs::FileSystem;
+    use crate::fs::{FileSystem, FsHandle};
     use crate::path::{AbsoluteOwnedPath, AbsolutePath};
     use crate::testing::TestFs;
-    use crate::{CloseError, CreateMode};
+    use crate::{CloseError, CreateMode, FsError, TruncateError};
 
     #[test]
     fn test_open_close() {
@@ -142,5 +150,24 @@ mod tests {
 
         assert!(fs.close(handle).is_ok());
         assert_eq!(Err(CloseError::NotOpen), fs.close(handle));
+    }
+
+    #[test]
+    fn truncate_on_closed_handle_is_invalid_handle() {
+        let mut fs = TestFs::default();
+        fs.insert_file(AbsolutePath::try_new("/foo").unwrap(), b"ab".to_vec());
+        let handle = fs
+            .open(AbsolutePath::try_new("/foo").unwrap(), CreateMode::Never)
+            .unwrap();
+        fs.close(handle).unwrap();
+
+        assert_eq!(
+            Err(TruncateError::FsError(FsError::InvalidHandle)),
+            fs.truncate(handle, 0)
+        );
+        assert_eq!(
+            Err(TruncateError::FsError(FsError::InvalidHandle)),
+            fs.truncate(FsHandle::from(u64::MAX), 0)
+        );
     }
 }
