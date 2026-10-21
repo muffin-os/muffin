@@ -276,20 +276,37 @@ where
         Ok(None)
     }
 
-    /// Writes the descriptor of `group_index` and the superblock, whose free
-    /// counters change together.
+    /// Writes the free block and inode counters of group `group_index` and of
+    /// the superblock, which change together.
     fn persist_counters(&mut self, group_index: usize) -> Result<(), Error> {
-        let bgd_data = Into::<[u8; BGD_SIZE]>::into(&self.bgdt[group_index]);
+        // the structs model a subset of the on-disk fields, so writing them
+        // whole would zero the rest
+        const BGD_FREE_COUNTS_OFFSET: usize = 12;
+        const SUPERBLOCK_FREE_COUNTS_OFFSET: usize = 12;
+
+        let descriptor = &self.bgdt[group_index];
+        let bgd_counts = [
+            descriptor.num_unallocated_blocks().to_le_bytes(),
+            descriptor.num_unallocated_inodes().to_le_bytes(),
+        ]
+        .concat();
         self.block_device
             .write_at(
-                self.superblock.bgdt_offset() + group_index * BGD_SIZE,
-                &bgd_data,
+                self.superblock.bgdt_offset() + group_index * BGD_SIZE + BGD_FREE_COUNTS_OFFSET,
+                &bgd_counts,
             )
             .map_err(|_| Error::UnableToWriteBlockGroupDescriptorTable)?;
 
-        let superblock_data = Into::<SuperblockArray>::into(&self.superblock);
+        let superblock_counts = [
+            self.superblock.num_unallocated_blocks().to_le_bytes(),
+            self.superblock.num_unallocated_inodes().to_le_bytes(),
+        ]
+        .concat();
         self.block_device
-            .write_at(SUPERBLOCK_OFFSET, superblock_data.as_slice())
+            .write_at(
+                SUPERBLOCK_OFFSET + SUPERBLOCK_FREE_COUNTS_OFFSET,
+                &superblock_counts,
+            )
             .map_err(|_| Error::UnableToWriteSuperblock)
             .map(|_| ())
     }

@@ -286,3 +286,31 @@ fn truncate_to_same_size_leaves_the_disk_untouched(block_size: usize) {
         "truncate to the same size wrote to the disk"
     );
 }
+
+generate_tests!(
+    allocate_then_deallocate_leaves_the_image_byte_identical:
+    1024 - allocate_then_deallocate_leaves_the_image_byte_identical_1k,
+    4096 - allocate_then_deallocate_leaves_the_image_byte_identical_4k,
+);
+
+// Superblock and descriptor fields this crate does not model must survive the
+// counter updates, e2fsck reads them.
+fn allocate_then_deallocate_leaves_the_image_byte_identical(block_size: usize) {
+    let mut image = empty_image(block_size);
+    let before = image.clone();
+
+    let device = MemoryBlockDevice::try_new(512, &mut image[..]).unwrap();
+    let mut fs = Ext2Fs::try_new(device).unwrap();
+    let block = fs.allocate_block().unwrap().unwrap();
+    fs.deallocate_block(block).unwrap();
+    drop(fs);
+
+    let superblock = 1024..2048;
+    assert_eq!(image[superblock.clone()], before[superblock]);
+    let descriptor = block_size.max(2048)..block_size.max(2048) + 32;
+    assert_eq!(image[descriptor.clone()], before[descriptor]);
+    assert!(
+        image == before,
+        "bytes outside the superblock and descriptor changed"
+    );
+}
