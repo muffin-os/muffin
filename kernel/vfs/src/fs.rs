@@ -2,8 +2,8 @@ use kernel_abi::IoctlRequest;
 
 use crate::path::AbsolutePath;
 use crate::{
-    CloseError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError, Stat,
-    StatError, WriteError,
+    CloseError, CreateMode, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError,
+    Stat, StatError, WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -16,10 +16,22 @@ impl From<u64> for FsHandle {
 }
 
 pub trait FileSystem: Send + Sync {
+    /// Opens the file at `path`, creating it as an empty regular file first
+    /// when `create` asks for it and nothing exists at `path`. Lookup and
+    /// creation are one step, so no other open can slip in between.
+    ///
     /// # Errors
-    /// Returns an error if the path does not point to a file, or if there
-    /// was an underlying error during opening (such as a hardware error).
-    fn open(&mut self, path: &AbsolutePath) -> Result<FsHandle, OpenError>;
+    /// - [`OpenError::NotFound`] if nothing exists at `path` and `create` is
+    ///   [`CreateMode::Never`], or if the parent directory does not exist.
+    /// - [`OpenError::AlreadyExists`] if `create` is [`CreateMode::Exclusive`]
+    ///   and something exists at `path`.
+    /// - [`OpenError::CreateUnsupported`] if the file would have to be created
+    ///   and the file system cannot create files.
+    /// - [`OpenError::NoSpace`] if the file would have to be created and the
+    ///   file system has no room for it.
+    /// - [`OpenError::OpenFailed`] for an underlying error, such as a hardware
+    ///   error.
+    fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError>;
 
     /// # Errors
     /// Returns an error if the handle is invalid or already closed,

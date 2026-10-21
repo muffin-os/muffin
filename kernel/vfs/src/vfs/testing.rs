@@ -1,14 +1,17 @@
 use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::iter::successors;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
 use spin::RwLock;
 
 use crate::fs::{FileSystem, FsHandle};
-use crate::path::{AbsoluteOwnedPath, AbsolutePath};
-use crate::{CloseError, FsError, FsyncError, OpenError, ReadError, Stat, StatError, WriteError};
+use crate::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
+use crate::{
+    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError, WriteError,
+};
 
 #[derive(Default)]
 pub struct TestFs {
@@ -22,18 +25,37 @@ impl TestFs {
         self.files
             .insert(path.as_ref().to_owned(), RwLock::new(data));
     }
+
+    // Directories are implicit: the root and every ancestor of a file exist.
+    fn has_directory(&self, dir: &AbsolutePath) -> bool {
+        dir == ROOT
+            || self
+                .files
+                .keys()
+                .any(|file| successors(file.as_ref().parent(), |p| p.parent()).any(|p| p == dir))
+    }
 }
 
 impl FileSystem for TestFs {
-    fn open(&mut self, path: &AbsolutePath) -> Result<FsHandle, OpenError> {
-        let owned = path.to_owned();
-        if self.files.contains_key(&owned) {
-            let handle = FsHandle::from(self.handle_counter.fetch_add(1, Relaxed));
-            self.open_files.insert(handle, owned.clone());
-            Ok(handle)
-        } else {
-            Err(OpenError::NotFound)
+    fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError> {
+        let exists = self.files.contains_key(path);
+        match (exists, create) {
+            (true, CreateMode::Exclusive) => return Err(OpenError::AlreadyExists),
+            (true, CreateMode::Never | CreateMode::IfMissing) => {}
+            (false, CreateMode::Never) => return Err(OpenError::NotFound),
+            (false, CreateMode::IfMissing | CreateMode::Exclusive) => {
+                if !path
+                    .parent()
+                    .is_some_and(|parent| self.has_directory(parent))
+                {
+                    return Err(OpenError::NotFound);
+                }
+                self.insert_file(path, Vec::new());
+            }
         }
+        let handle = FsHandle::from(self.handle_counter.fetch_add(1, Relaxed));
+        self.open_files.insert(handle, path.to_owned());
+        Ok(handle)
     }
 
     fn close(&mut self, handle: FsHandle) -> Result<(), CloseError> {
@@ -97,10 +119,10 @@ impl FileSystem for TestFs {
 
 #[cfg(test)]
 mod tests {
-    use crate::CloseError;
     use crate::fs::FileSystem;
     use crate::path::{AbsoluteOwnedPath, AbsolutePath};
     use crate::testing::TestFs;
+    use crate::{CloseError, CreateMode};
 
     #[test]
     fn test_open_close() {
@@ -110,8 +132,13 @@ mod tests {
             Default::default(),
         );
 
-        assert!(fs.open(AbsolutePath::try_new("/bar").unwrap()).is_err());
-        let handle = fs.open(AbsolutePath::try_new("/foo").unwrap()).unwrap();
+        assert!(
+            fs.open(AbsolutePath::try_new("/bar").unwrap(), CreateMode::Never)
+                .is_err()
+        );
+        let handle = fs
+            .open(AbsolutePath::try_new("/foo").unwrap(), CreateMode::Never)
+            .unwrap();
 
         assert!(fs.close(handle).is_ok());
         assert_eq!(Err(CloseError::NotOpen), fs.close(handle));

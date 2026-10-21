@@ -6,6 +6,7 @@ use kernel_abi::{
     ARG_MAX, E2BIG, EFAULT, EINVAL, EIO, ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, Errno, PATH_MAX,
     Signal, StrSlice,
 };
+use kernel_vfs::CreateMode;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
 use x86_64::VirtAddr;
 use x86_64::registers::model_specific::FsBase;
@@ -42,7 +43,10 @@ pub fn dispatch_sys_execve(
 
     let args = ExecArgs::copy_in(argv_ptr, argc, envp_ptr, envc)?;
 
-    let node = vfs().write().open(&path).map_err(|_| ENOENT)?;
+    let node = vfs()
+        .write()
+        .open(&path, CreateMode::Never)
+        .map_err(|_| ENOENT)?;
     let validated = elf::validate(&node).map_err(exec_errno)?;
 
     let process = Process::current().clone();

@@ -21,8 +21,8 @@ use kernel::mem::heap::Heap;
 use kernel::mem::phys::PhysicalMemory;
 use kernel::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use kernel_ext2::Ext2Fs;
-use kernel_vfs::Stat;
 use kernel_vfs::path::{AbsolutePath, ROOT};
+use kernel_vfs::{CreateMode, Stat};
 use kernel_virtual_memory::Segment;
 use tracing::info;
 use x86_64::structures::paging::{Page, PageSize, PageTableFlags, Size4KiB};
@@ -55,7 +55,7 @@ unsafe extern "C" fn main() -> ! {
     // to live in the kernel. It is opt-in through a marker file so that the shared
     // test kernel stays generic, and so no other suite pays for it.
     if let Ok(marker) = AbsolutePath::try_new("/kernel-stack-overflow")
-        && vfs().write().open(marker).is_ok()
+        && vfs().write().open(marker, CreateMode::Never).is_ok()
     {
         let task = Task::create_new(Process::root(), overflow_kernel_stack, ptr::null_mut())
             .expect("should be able to create the stack overflow task");
@@ -66,7 +66,7 @@ unsafe extern "C" fn main() -> ! {
     // A mid-range map failure cannot be provoked from userspace either, so the
     // probe pre-maps one page to make `map_range` fail partway through.
     if AbsolutePath::try_new("/map-range-rollback")
-        .is_ok_and(|marker| vfs().write().open(marker).is_ok())
+        .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok())
     {
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
         let window = VirtualMemoryHigherHalf
@@ -104,7 +104,8 @@ unsafe extern "C" fn main() -> ! {
     // The heap's end bounds are kernel-internal, so this probe reports whether
     // a page past the heap end is mapped and whether the heap's last page is
     // reserved in the higher-half manager.
-    if AbsolutePath::try_new("/heap-bounds").is_ok_and(|marker| vfs().write().open(marker).is_ok())
+    if AbsolutePath::try_new("/heap-bounds")
+        .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok())
     {
         let end = Heap::bottom() + Heap::size() as u64;
         let past_end_mapped = AddressSpace::kernel().translate(end).is_some();
@@ -118,14 +119,14 @@ unsafe extern "C" fn main() -> ! {
     }
 
     let attach_exec_sibling = AbsolutePath::try_new("/exec-sibling")
-        .is_ok_and(|marker| vfs().write().open(marker).is_ok());
+        .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok());
 
     {
         info!("reading spawn manifest");
         let manifest_path = AbsolutePath::try_new("/spawn").expect("should be a valid path");
         let node = vfs()
             .write()
-            .open(manifest_path)
+            .open(manifest_path, CreateMode::Never)
             .expect("should be able to open /spawn manifest");
         let stat = {
             let mut stat = Stat::default();

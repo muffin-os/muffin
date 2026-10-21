@@ -8,8 +8,8 @@ use kernel_abi::IoctlRequest;
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CloseError, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError, Stat,
-    StatError, WriteError,
+    CloseError, CreateMode, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError,
+    ReadError, Stat, StatError, WriteError,
 };
 use thiserror::Error;
 
@@ -146,8 +146,23 @@ impl DevFs {
 }
 
 impl FileSystem for DevFs {
-    fn open(&mut self, path: &AbsolutePath) -> Result<FsHandle, OpenError> {
-        let node = self.resolve_node(path)?;
+    fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError> {
+        let node = match (self.resolve_node(path), create) {
+            (Ok(_), CreateMode::Exclusive) => return Err(OpenError::AlreadyExists),
+            (Ok(node), CreateMode::Never | CreateMode::IfMissing) => node,
+            (Err(e), CreateMode::Never) => return Err(e.into()),
+            (Err(e), CreateMode::IfMissing | CreateMode::Exclusive) => {
+                let parent_is_directory = path
+                    .parent()
+                    .and_then(|parent| self.resolve_node(parent).ok())
+                    .is_some_and(|parent| parent.directory().is_some());
+                return Err(if parent_is_directory {
+                    OpenError::CreateUnsupported
+                } else {
+                    e.into()
+                });
+            }
+        };
         let file_node = node.file().ok_or(OpenError::NotFound)?;
         let file = file_node.open_fn()()?;
         let handle = Self::new_fs_handle();
@@ -217,14 +232,62 @@ mod tests {
     fn test_open_not_found() {
         let mut devfs = DevFs::new();
         let path = AbsolutePath::try_new("/nonexistent").unwrap();
-        let result = devfs.open(path);
+        let result = devfs.open(path, CreateMode::Never);
         assert_eq!(result, Err(OpenError::NotFound));
     }
 
     #[test]
     fn test_open_directory_is_not_found() {
         let mut devfs = DevFs::new();
-        assert_eq!(devfs.open(ROOT), Err(OpenError::NotFound));
+        assert_eq!(
+            devfs.open(ROOT, CreateMode::Never),
+            Err(OpenError::NotFound)
+        );
+    }
+
+    #[test]
+    fn create_on_missing_path_is_unsupported() {
+        let mut devfs = DevFs::new();
+        let path = AbsolutePath::try_new("/newfile").unwrap();
+
+        for create in [CreateMode::IfMissing, CreateMode::Exclusive] {
+            assert_eq!(
+                Err(OpenError::CreateUnsupported),
+                devfs.open(path, create),
+                "{create:?}"
+            );
+        }
+        assert_eq!(
+            Err(OpenError::NotFound),
+            devfs.open(path, CreateMode::Never),
+            "a rejected create must not leave a file behind"
+        );
+    }
+
+    #[test]
+    fn create_in_missing_directory_is_not_found() {
+        let mut devfs = DevFs::new();
+        let path = AbsolutePath::try_new("/nodir/newfile").unwrap();
+
+        assert_eq!(
+            Err(OpenError::NotFound),
+            devfs.open(path, CreateMode::IfMissing)
+        );
+    }
+
+    #[test]
+    fn create_on_existing_file_opens_it_unless_exclusive() {
+        let mut devfs = DevFs::new();
+        let null = AbsolutePath::try_new("/null").unwrap();
+
+        let handle = devfs
+            .open(null, CreateMode::IfMissing)
+            .expect("IfMissing must open the existing /null");
+        assert_eq!(Ok(4), devfs.write(handle, b"data", 0));
+        assert_eq!(
+            Err(OpenError::AlreadyExists),
+            devfs.open(null, CreateMode::Exclusive)
+        );
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -290,7 +353,7 @@ mod tests {
             .expect("should be able to register file");
 
         let file = devfs
-            .open(path)
+            .open(path, CreateMode::Never)
             .expect("should be able to open registered file");
 
         assert_eq!(Ok(()), devfs.close(file));
@@ -319,10 +382,10 @@ mod tests {
             .expect("should be able to register file");
 
         let file1 = devfs
-            .open(path)
+            .open(path, CreateMode::Never)
             .expect("should be able to open registered file");
         let file2 = devfs
-            .open(path)
+            .open(path, CreateMode::Never)
             .expect("should be able to open registered file");
 
         assert_ne!(
@@ -342,7 +405,7 @@ mod tests {
             .expect("should be able to register file");
 
         let file = devfs
-            .open(path)
+            .open(path, CreateMode::Never)
             .expect("should be able to open registered file");
 
         let write_buf = b"hello";
@@ -368,7 +431,7 @@ mod tests {
         devfs
             .register_file(path, || Ok(TestDevFile::new()))
             .expect("should be able to register file");
-        let file = devfs.open(path).unwrap();
+        let file = devfs.open(path, CreateMode::Never).unwrap();
 
         assert_eq!(Ok(5), devfs.write(file, b"hello", 0));
         assert_eq!(Ok(2), devfs.write(file, b"LL", 2));

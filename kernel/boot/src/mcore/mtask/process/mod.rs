@@ -17,9 +17,9 @@ use kernel_abi::ProcessId;
 use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
 use kernel_syscall::exec::build_initial_stack;
 use kernel_syscall::signal::SignalState;
-use kernel_vfs::OpenError;
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
+use kernel_vfs::{CreateMode, OpenError};
 use kernel_virtual_memory::VirtualMemoryManager;
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
@@ -273,7 +273,7 @@ impl Process {
         let path = path.as_ref();
         let node = vfs()
             .read()
-            .open(path)
+            .open(path, CreateMode::Never)
             .map_err(CreateProcessError::OpenExecutable)?;
         elf::validate(&node)?;
 
@@ -551,7 +551,7 @@ extern "C" fn trampoline(_arg: *mut c_void) {
         .expect("should have an executable path");
     let node = vfs()
         .write()
-        .open(&executable_path)
+        .open(&executable_path, CreateMode::Never)
         .expect("should be able to open executable");
     let validated = elf::validate(&node).expect("should be able to validate executable");
 
@@ -560,7 +560,10 @@ extern "C" fn trampoline(_arg: *mut c_void) {
 
         let devnull = vfs()
             .read()
-            .open(AbsolutePath::try_new("/dev/null").unwrap())
+            .open(
+                AbsolutePath::try_new("/dev/null").unwrap(),
+                CreateMode::Never,
+            )
             .expect("should be able to open /dev/null");
         let devnull_ofd = Arc::new(OpenFileDescription::from(devnull));
         guard.insert(
@@ -570,7 +573,10 @@ extern "C" fn trampoline(_arg: *mut c_void) {
 
         let devserial = vfs()
             .read()
-            .open(AbsolutePath::try_new("/dev/serial").unwrap())
+            .open(
+                AbsolutePath::try_new("/dev/serial").unwrap(),
+                CreateMode::Never,
+            )
             .expect("should be able to open /dev/serial");
         let devserial_ofd = Arc::new(OpenFileDescription::from(devserial));
         guard.insert(

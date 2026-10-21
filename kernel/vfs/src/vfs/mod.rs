@@ -20,6 +20,17 @@ pub mod testing;
 
 type Fs = Arc<RwLock<dyn FileSystem>>;
 
+/// Whether opening a path may create a regular file there.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum CreateMode {
+    /// Open only what already exists.
+    Never,
+    /// Create an empty file when nothing exists, otherwise open the existing one.
+    IfMissing,
+    /// Create an empty file, failing if something already exists.
+    Exclusive,
+}
+
 pub struct Vfs {
     file_systems: BTreeMap<AbsoluteOwnedPath, Fs>,
 }
@@ -77,12 +88,13 @@ impl Vfs {
             .ok_or(UnmountError::NotMounted)
     }
 
-    /// Opens a file at the given path.
+    /// Opens the file at the given path, creating it as [`FileSystem::open`]
+    /// describes for `create`.
     ///
     /// # Errors
-    /// This function returns an error if the file does not exist,
-    /// or if another error occurs during opening.
-    pub fn open<P>(&self, path: P) -> Result<VfsNode, OpenError>
+    /// Returns [`OpenError::NotFound`] if no file system is mounted at or
+    /// above `path`, and otherwise any error of [`FileSystem::open`].
+    pub fn open<P>(&self, path: P, create: CreateMode) -> Result<VfsNode, OpenError>
     where
         P: AsRef<AbsolutePath>,
     {
@@ -100,7 +112,7 @@ impl Vfs {
         };
         let mut guard = fs.write();
         guard
-            .open(relative_path)
+            .open(relative_path, create)
             .map(|handle| VfsNode::new(path, handle, Arc::downgrade(&fs)))
     }
 
@@ -122,7 +134,7 @@ mod tests {
 
     use crate::path::{AbsolutePath, ROOT};
     use crate::testing::TestFs;
-    use crate::{MountError, OpenError, Stat, UnmountError, Vfs};
+    use crate::{CreateMode, MountError, OpenError, Stat, UnmountError, Vfs};
 
     #[test]
     fn test_read() {
@@ -140,7 +152,10 @@ mod tests {
                 let offset = offset * 10;
                 let len = len * 10;
                 let node = vfs
-                    .open(AbsolutePath::try_new("/foo/bar.txt").unwrap())
+                    .open(
+                        AbsolutePath::try_new("/foo/bar.txt").unwrap(),
+                        CreateMode::Never,
+                    )
                     .unwrap();
                 let mut buf = vec![0_u8; len];
                 let bytes_read = node.read(&mut buf, offset).unwrap();
@@ -167,7 +182,10 @@ mod tests {
         let mut vfs = Vfs::new();
         vfs.mount(ROOT, fs).unwrap();
         let node = vfs
-            .open(AbsolutePath::try_new("/foo/bar.txt").unwrap())
+            .open(
+                AbsolutePath::try_new("/foo/bar.txt").unwrap(),
+                CreateMode::Never,
+            )
             .unwrap();
 
         assert_eq!(Ok(0), node.read(&mut [0_u8; 4], 8));
@@ -185,7 +203,10 @@ mod tests {
         let mut vfs = Vfs::new();
         vfs.mount(ROOT, fs).unwrap();
         let node = vfs
-            .open(AbsolutePath::try_new("/foo/bar.txt").unwrap())
+            .open(
+                AbsolutePath::try_new("/foo/bar.txt").unwrap(),
+                CreateMode::Never,
+            )
             .unwrap();
 
         let mut stat = Stat::default();
@@ -216,7 +237,10 @@ mod tests {
         vfs.mount(AbsolutePath::try_new("/dev").unwrap(), fs)
             .unwrap();
 
-        assert!(vfs.open(AbsolutePath::try_new("/dev").unwrap()).is_ok());
+        assert!(
+            vfs.open(AbsolutePath::try_new("/dev").unwrap(), CreateMode::Never)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -229,8 +253,17 @@ mod tests {
         vfs.mount(AbsolutePath::try_new("/dev").unwrap(), fs)
             .unwrap();
 
-        assert!(vfs.open(AbsolutePath::try_new("//dev/x").unwrap()).is_ok());
-        assert!(vfs.open(AbsolutePath::try_new("/dev//x/").unwrap()).is_ok());
+        assert!(
+            vfs.open(AbsolutePath::try_new("//dev/x").unwrap(), CreateMode::Never)
+                .is_ok()
+        );
+        assert!(
+            vfs.open(
+                AbsolutePath::try_new("/dev//x/").unwrap(),
+                CreateMode::Never
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -261,13 +294,16 @@ mod tests {
         vfs.mount(AbsolutePath::try_new("/dev").unwrap(), dev_fs)
             .unwrap();
 
-        let node = vfs.open(AbsolutePath::try_new("/dev/x").unwrap()).unwrap();
+        let node = vfs
+            .open(AbsolutePath::try_new("/dev/x").unwrap(), CreateMode::Never)
+            .unwrap();
         let mut buf = [0_u8; 1];
         assert_eq!(Ok(1), node.read(&mut buf, 0));
         assert_eq!([0xBB], buf, "must resolve in the fs mounted at /dev");
         assert_eq!(
             Err(OpenError::NotFound),
-            vfs.open(AbsolutePath::try_new("/x").unwrap()).map(|_| ()),
+            vfs.open(AbsolutePath::try_new("/x").unwrap(), CreateMode::Never)
+                .map(|_| ()),
             "a mounted fs must not be reachable through the root fs"
         );
     }
@@ -280,12 +316,15 @@ mod tests {
 
         let mut vfs = Vfs::new();
         vfs.mount(dev, fs).unwrap();
-        assert!(vfs.open(AbsolutePath::try_new("/dev/x").unwrap()).is_ok());
+        assert!(
+            vfs.open(AbsolutePath::try_new("/dev/x").unwrap(), CreateMode::Never)
+                .is_ok()
+        );
 
         assert_eq!(Ok(()), vfs.unmount(dev));
         assert_eq!(
             Err(OpenError::NotFound),
-            vfs.open(AbsolutePath::try_new("/dev/x").unwrap())
+            vfs.open(AbsolutePath::try_new("/dev/x").unwrap(), CreateMode::Never)
                 .map(|_| ())
         );
         assert_eq!(Err(UnmountError::NotMounted), vfs.unmount(dev));
@@ -301,7 +340,74 @@ mod tests {
 
         assert_eq!(
             Err(OpenError::NotFound),
-            vfs.open(AbsolutePath::try_new("/y").unwrap()).map(|_| ())
+            vfs.open(AbsolutePath::try_new("/y").unwrap(), CreateMode::Never)
+                .map(|_| ())
         );
+    }
+
+    fn vfs_with_hello() -> Vfs {
+        let mut fs = TestFs::default();
+        fs.insert_file(AbsolutePath::try_new("/dir/hello").unwrap(), vec![0xAA; 4]);
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, fs).unwrap();
+        vfs
+    }
+
+    #[test]
+    fn open_exclusive_on_existing_file_is_already_exists() {
+        let vfs = vfs_with_hello();
+
+        assert_eq!(
+            Err(OpenError::AlreadyExists),
+            vfs.open(
+                AbsolutePath::try_new("/dir/hello").unwrap(),
+                CreateMode::Exclusive
+            )
+            .map(|_| ())
+        );
+    }
+
+    #[test]
+    fn open_if_missing_in_missing_directory_is_not_found() {
+        let vfs = vfs_with_hello();
+
+        assert_eq!(
+            Err(OpenError::NotFound),
+            vfs.open(
+                AbsolutePath::try_new("/nodir/new").unwrap(),
+                CreateMode::IfMissing
+            )
+            .map(|_| ())
+        );
+    }
+
+    #[test]
+    fn open_if_missing_creates_an_empty_file() {
+        let vfs = vfs_with_hello();
+        let path = AbsolutePath::try_new("/dir/new").unwrap();
+
+        let node = vfs.open(path, CreateMode::IfMissing).unwrap();
+        let mut stat = Stat::default();
+        assert_eq!(Ok(()), node.stat(&mut stat));
+        assert_eq!(0, stat.size, "a created file starts empty");
+        assert!(
+            vfs.open(path, CreateMode::Never).is_ok(),
+            "the created file must be visible to later opens"
+        );
+    }
+
+    #[test]
+    fn open_if_missing_on_existing_file_keeps_its_contents() {
+        let vfs = vfs_with_hello();
+
+        let node = vfs
+            .open(
+                AbsolutePath::try_new("/dir/hello").unwrap(),
+                CreateMode::IfMissing,
+            )
+            .unwrap();
+        let mut buf = [0_u8; 4];
+        assert_eq!(Ok(4), node.read(&mut buf, 0));
+        assert_eq!([0xAA; 4], buf);
     }
 }

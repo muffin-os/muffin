@@ -21,6 +21,12 @@ pub enum OpenError {
     NotFound,
     #[error("open failed")]
     OpenFailed,
+    #[error("already exists")]
+    AlreadyExists,
+    #[error("no space left to create the file")]
+    NoSpace,
+    #[error("the file system cannot create files")]
+    CreateUnsupported,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]

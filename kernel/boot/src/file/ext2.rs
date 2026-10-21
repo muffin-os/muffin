@@ -10,7 +10,7 @@ use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile, Ty
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
 use kernel_vfs::{
-    CloseError, FsError, FsyncError, OpenError, ReadError, Stat, StatError, WriteError,
+    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError, WriteError,
 };
 use spin::RwLock;
 
@@ -51,23 +51,32 @@ impl<T> FileSystem for VirtualExt2Fs<T>
 where
     T: BlockDevice + Send + Sync,
 {
-    fn open(&mut self, path: &AbsolutePath) -> Result<FsHandle, OpenError> {
+    fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError> {
         static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         // instead of creating a new inode, check whether we already have that inode open behind another handle
         if let Some(v) = self.handles.values().find(|v| path == v.path.as_ref()) {
+            if create == CreateMode::Exclusive {
+                return Err(OpenError::AlreadyExists);
+            }
             let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
             self.handles.insert(handle, v.clone());
             return Ok(handle);
         }
 
-        let (found_num, found) = self
-            .find_inode(path)
-            .map_err(|e| match e {
-                Error::NotDirectory => OpenError::NotFound,
-                _ => OpenError::OpenFailed,
-            })?
-            .ok_or(OpenError::NotFound)?;
+        let (found_num, found) = match (self.lookup(path)?, create) {
+            (Some(_), CreateMode::Exclusive) => return Err(OpenError::AlreadyExists),
+            (Some(found), CreateMode::Never | CreateMode::IfMissing) => found,
+            (None, CreateMode::Never) => return Err(OpenError::NotFound),
+            (None, CreateMode::IfMissing | CreateMode::Exclusive) => {
+                let parent = path.parent().ok_or(OpenError::NotFound)?;
+                // shortcut: ext2 cannot create files yet, until the ext2 create path is wired in here
+                return Err(match self.lookup(parent)? {
+                    Some(_) => OpenError::CreateUnsupported,
+                    None => OpenError::NotFound,
+                });
+            }
+        };
 
         let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
         let inode = VirtualExt2Inode::try_new(found_num, found).ok_or(OpenError::NotFound)?;
@@ -141,6 +150,29 @@ impl<T> VirtualExt2Fs<T>
 where
     T: BlockDevice + Send + Sync,
 {
+    fn lookup(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, OpenError> {
+        self.find_inode(path).map_err(|e| match e {
+            // a path component is a file, so nothing exists below it
+            Error::NotDirectory => OpenError::NotFound,
+            Error::InvalidSuperblock
+            | Error::UnableToReadSuperblock
+            | Error::UnableToWriteSuperblock
+            | Error::UnableToReadBlockGroupDescriptorTable
+            | Error::UnableToWriteBlockGroupDescriptorTable
+            | Error::InvalidBlockGroupDescriptor(_)
+            | Error::NotRegularFile
+            | Error::DeviceRead
+            | Error::DeviceWrite
+            | Error::InvalidInodeAddress(_)
+            | Error::InvalidBlockIndex(_)
+            | Error::InvalidDirEntryType(_)
+            | Error::NoSpace
+            | Error::NotSupported
+            | Error::EntryExists
+            | Error::NameTooLong => OpenError::OpenFailed,
+        })
+    }
+
     fn find_inode(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, Error> {
         let root_inode = self.ext2fs.read_root_inode()?;
         self.find_inode_from(path, root_inode.into_inner())

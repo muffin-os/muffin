@@ -142,7 +142,7 @@ mod tests {
 
     use crate::path::{AbsolutePath, ROOT};
     use crate::testing::TestFs;
-    use crate::{CloseError, Vfs};
+    use crate::{CloseError, CreateMode, Vfs};
 
     #[test]
     fn test_drop() {
@@ -156,7 +156,10 @@ mod tests {
         vfs.mount(ROOT, fs).unwrap();
 
         let node = vfs
-            .open(AbsolutePath::try_new("/foo/bar.txt").unwrap())
+            .open(
+                AbsolutePath::try_new("/foo/bar.txt").unwrap(),
+                CreateMode::Never,
+            )
             .unwrap();
         let fs = node.fs.upgrade().expect("file system should still exist");
 
@@ -185,7 +188,10 @@ mod tests {
         vfs.mount(ROOT, fs).unwrap();
 
         let node = vfs
-            .open(AbsolutePath::try_new("/foo/bar.txt").unwrap())
+            .open(
+                AbsolutePath::try_new("/foo/bar.txt").unwrap(),
+                CreateMode::Never,
+            )
             .unwrap();
         let fs = node.fs.upgrade().expect("file system should still exist");
 

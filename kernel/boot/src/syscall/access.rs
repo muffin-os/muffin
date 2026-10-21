@@ -2,15 +2,17 @@ use alloc::sync::Arc;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
-    EBADF, EINVAL, EIO, EISDIR, ENODEV, ENOENT, ENOMEM, ENOTTY, Errno, IoctlRequest, ProtFlags,
-    Stat,
+    EACCES, EBADF, EEXIST, EINVAL, EIO, EISDIR, ENODEV, ENOENT, ENOMEM, ENOSPC, ENOTTY, Errno,
+    IoctlRequest, ProtFlags, Stat,
 };
 use kernel_syscall::access::{
     AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location, MemoryRegion as _,
 };
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
-use kernel_vfs::{FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat};
+use kernel_vfs::{
+    CreateMode, FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat,
+};
 use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
 use x86_64::VirtAddr;
@@ -58,10 +60,16 @@ impl FileAccess for KernelAccess {
     type Fd = FdNum;
 
     fn file_info(&self, path: &AbsolutePath) -> Result<Self::FileInfo, Errno> {
-        let node = vfs().read().open(path).map_err(|e| match e {
-            OpenError::NotFound => ENOENT,
-            OpenError::OpenFailed => EIO,
-        })?;
+        let node = vfs()
+            .read()
+            .open(path, CreateMode::Never)
+            .map_err(|e| match e {
+                OpenError::NotFound => ENOENT,
+                OpenError::OpenFailed => EIO,
+                OpenError::AlreadyExists => EEXIST,
+                OpenError::NoSpace => ENOSPC,
+                OpenError::CreateUnsupported => EACCES,
+            })?;
         Ok(FileInfo { node })
     }
 
