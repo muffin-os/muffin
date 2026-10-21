@@ -108,7 +108,7 @@ where
         Directory::try_from((inode_address, inode)).map_err(|_| Error::NotDirectory)
     }
 
-    // the inode goes to disk before the entry, so a live entry never points at nothing
+    // the inode is stored before the entry, so a live entry never points at nothing
     fn link_inode(
         &mut self,
         parent: &mut Directory,

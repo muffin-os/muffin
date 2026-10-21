@@ -132,4 +132,13 @@ pub trait FileSystem: Send + Sync {
     /// # Errors
     /// Returns an error if the underlying device fails to commit.
     fn fsync(&mut self, _handle: FsHandle) -> Result<(), FsyncError>;
+
+    /// Commits every pending write of the file system to the underlying
+    /// device. The default impl has nothing to commit.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying device fails to commit.
+    fn sync(&mut self) -> Result<(), FsyncError> {
+        Ok(())
+    }
 }

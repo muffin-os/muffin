@@ -2,7 +2,10 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::vec;
+use alloc::vec::Vec;
 
 pub use address::*;
 pub use dir::*;
@@ -14,7 +17,6 @@ use spin::Mutex;
 pub use superblock::*;
 
 use crate::block_group::{BGD_SIZE, BlockGroupDescriptor, BlockGroupDescriptorTable};
-use crate::read::IndirectCache;
 
 mod address;
 mod block_group;
@@ -30,11 +32,22 @@ mod write;
 const ROOT_DIR_INODE_ADDRESS: InodeAddress = InodeAddress::new(2).unwrap();
 
 /// An ext2 filesystem over a block device.
+///
+/// Metadata blocks (bitmaps, descriptors, inode table, indirect tables) live
+/// in a write-back cache; file and directory data go straight to the device.
+/// Nothing in the cache reaches the device before [`Ext2Fs::sync`].
 pub struct Ext2Fs<T> {
     block_device: T,
     superblock: Superblock,
     bgdt: BlockGroupDescriptorTable,
-    indirect_cache: Mutex<IndirectCache>,
+    // shortcut: unbounded, every metadata block touched stays resident; add
+    // eviction once a workload touches more metadata than fits in memory
+    cache: Mutex<BTreeMap<u32, MetadataBlock>>,
+}
+
+struct MetadataBlock {
+    data: Vec<u8>,
+    dirty: bool,
 }
 
 const SUPERBLOCK_OFFSET: usize = 1024;
@@ -89,7 +102,7 @@ where
             block_device,
             superblock,
             bgdt,
-            indirect_cache: Mutex::new(IndirectCache::new()),
+            cache: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -102,26 +115,23 @@ where
             .and_then(|inode| Directory::try_from(inode).map_err(|_| Error::NotDirectory))
     }
 
+    /// Returns a snapshot of the inode. Keep at most one live copy per
+    /// address, since [`Ext2Fs::write_inode`] stores a copy whole.
     pub fn read_inode(&self, addr: InodeAddress) -> Result<(InodeAddress, Inode), Error> {
-        // shortcut: every call returns a fresh copy, so two live copies of one
-        // inode overwrite each other's writes. Centralize inodes in a cache
-        // before anything holds two handles to the same file.
-        let address = self.inode_offset(addr)?;
-        let mut inode_buffer = [0_u8; 128]; // inode size can vary, but the specified fields are always between 0 and 128, and we don't need more
-        self.block_device
-            .read_at(address, &mut inode_buffer)
-            .map_err(|_| Error::DeviceRead)?;
+        let (block, within) = self.inode_location(addr)?;
+        // inode size can vary, but the specified fields are always between 0 and 128, and we don't need more
+        let inode_buffer: [u8; 128] =
+            self.read_metadata(block, |data| data[within..within + 128].try_into().unwrap())?;
 
         Ok((addr, Inode::try_from(InodeRawArray::from(inode_buffer)).expect("inode conversion can't fail. if it does, the logic has changed and this should propagate the error")))
     }
 
     pub fn write_inode(&mut self, addr: InodeAddress, inode: &Inode) -> Result<(), Error> {
-        let address = self.inode_offset(addr)?;
+        let (block, within) = self.inode_location(addr)?;
         let inode_raw = InodeRawArray::from(inode);
-        self.block_device
-            .write_at(address, inode_raw.as_slice())
-            .map_err(|_| Error::DeviceWrite)
-            .map(|_| ())
+        self.modify_metadata(block, |data| {
+            data[within..within + inode_raw.as_slice().len()].copy_from_slice(inode_raw.as_slice());
+        })
     }
 
     pub fn read_block(&self, addr: BlockAddress, buf: &mut [u8]) -> Result<usize, Error> {
@@ -131,12 +141,76 @@ where
             .map_err(|_| Error::DeviceRead)
     }
 
+    /// Writes a data block. A cached copy, left over from the block's life as
+    /// metadata, is dropped so it never shadows or overwrites the data.
     pub fn write_block(&mut self, addr: BlockAddress, buf: &[u8]) -> Result<usize, Error> {
-        self.indirect_cache.lock().invalidate(addr);
+        self.cache.lock().remove(&addr.get());
         let offset = self.resolve_block_offset(addr);
         self.block_device
             .write_at(offset, buf)
             .map_err(|_| Error::DeviceWrite)
+    }
+
+    /// Writes every dirty metadata block to the device. A block whose write
+    /// fails stays dirty, so a later call retries it.
+    pub fn sync(&mut self) -> Result<(), Error> {
+        let block_size = self.superblock.block_size() as usize;
+        for (number, block) in self.cache.lock().iter_mut().filter(|(_, b)| b.dirty) {
+            self.block_device
+                .write_at(*number as usize * block_size, &block.data)
+                .map_err(|_| Error::DeviceWrite)?;
+            block.dirty = false;
+        }
+        Ok(())
+    }
+
+    fn read_metadata<R>(&self, number: u32, f: impl FnOnce(&[u8]) -> R) -> Result<R, Error> {
+        let mut cache = self.cache.lock();
+        Ok(f(&self.cached(&mut cache, number)?.data))
+    }
+
+    fn modify_metadata<R>(
+        &mut self,
+        number: u32,
+        f: impl FnOnce(&mut [u8]) -> R,
+    ) -> Result<R, Error> {
+        let mut cache = self.cache.lock();
+        let block = self.cached(&mut cache, number)?;
+        block.dirty = true;
+        Ok(f(&mut block.data))
+    }
+
+    // a freshly allocated table: its on-disk bytes are stale, so none are read
+    pub(crate) fn insert_zeroed_metadata(&mut self, number: u32) {
+        let data = vec![0_u8; self.superblock.block_size() as usize];
+        self.cache
+            .lock()
+            .insert(number, MetadataBlock { data, dirty: true });
+    }
+
+    // loads the block on a miss
+    fn cached<'c>(
+        &self,
+        cache: &'c mut BTreeMap<u32, MetadataBlock>,
+        number: u32,
+    ) -> Result<&'c mut MetadataBlock, Error> {
+        Ok(match cache.entry(number) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let mut data = vec![0_u8; self.superblock.block_size() as usize];
+                self.block_device
+                    .read_at(number as usize * data.len(), &mut data)
+                    .map_err(|_| Error::DeviceRead)?;
+                entry.insert(MetadataBlock { data, dirty: false })
+            }
+        })
+    }
+
+    // block number and byte offset within it
+    fn inode_location(&self, addr: InodeAddress) -> Result<(u32, usize), Error> {
+        let offset = self.inode_offset(addr)?;
+        let block_size = self.superblock.block_size() as usize;
+        Ok(((offset / block_size) as u32, offset % block_size))
     }
 
     fn inode_offset(&self, addr: InodeAddress) -> Result<usize, Error> {
@@ -168,14 +242,12 @@ where
     }
 
     /// Marks `block` free in its group's bitmap and counts it in the group and
-    /// superblock free counters, persisting all three.
+    /// superblock free counters.
     ///
     /// # Errors
     /// - [`Error::InvalidBlockAddress`] if `block` lies outside the data
     ///   blocks or is not marked allocated; nothing changes.
-    /// - [`Error::DeviceRead`] / [`Error::DeviceWrite`],
-    ///   [`Error::UnableToWriteBlockGroupDescriptorTable`] and
-    ///   [`Error::UnableToWriteSuperblock`] if the device fails.
+    /// - [`Error::DeviceRead`] if a metadata block cannot be loaded.
     pub fn deallocate_block(&mut self, block: BlockAddress) -> Result<(), Error> {
         self.deallocate(Resource::Block, block.get())
     }
@@ -209,15 +281,19 @@ where
             Resource::Inode => descriptor.inode_usage_bitmap_block(),
         };
 
-        let mut bitmap = vec![0_u8; self.superblock.block_size() as usize];
-        self.read_block(bitmap_block, &mut bitmap)?;
         let mask = 1 << (bit % 8);
-        let byte = bitmap
-            .get_mut(bit / 8)
-            .filter(|byte| **byte & mask != 0)
-            .ok_or(invalid)?;
-        *byte &= !mask;
-        self.write_block(bitmap_block, &bitmap)?;
+        let byte_index = bit / 8;
+        let is_allocated = self.read_metadata(bitmap_block.get(), |bitmap| {
+            bitmap.get(byte_index).is_some_and(|byte| byte & mask != 0)
+        })?;
+        if !is_allocated {
+            return Err(invalid);
+        }
+        self.modify_metadata(bitmap_block.get(), |bitmap| bitmap[byte_index] &= !mask)?;
+        // a freed metadata block must not resurface with stale contents
+        if resource == Resource::Block {
+            self.cache.lock().remove(&number);
+        }
 
         let descriptor = &mut self.bgdt[group_index];
         match resource {
@@ -284,6 +360,7 @@ where
         // whole would zero the rest
         const BGD_FREE_COUNTS_OFFSET: usize = 12;
         const SUPERBLOCK_FREE_COUNTS_OFFSET: usize = 12;
+        let block_size = self.superblock.block_size() as usize;
 
         let descriptor = &self.bgdt[group_index];
         let bgd_counts = [
@@ -292,45 +369,40 @@ where
             descriptor.num_directories().to_le_bytes(),
         ]
         .concat();
-        self.block_device
-            .write_at(
-                self.superblock.bgdt_offset() + group_index * BGD_SIZE + BGD_FREE_COUNTS_OFFSET,
-                &bgd_counts,
-            )
-            .map_err(|_| Error::UnableToWriteBlockGroupDescriptorTable)?;
+        let offset =
+            self.superblock.bgdt_offset() + group_index * BGD_SIZE + BGD_FREE_COUNTS_OFFSET;
+        self.modify_metadata((offset / block_size) as u32, |data| {
+            data[offset % block_size..][..bgd_counts.len()].copy_from_slice(&bgd_counts);
+        })?;
 
         let superblock_counts = [
             self.superblock.num_unallocated_blocks().to_le_bytes(),
             self.superblock.num_unallocated_inodes().to_le_bytes(),
         ]
         .concat();
-        self.block_device
-            .write_at(
-                SUPERBLOCK_OFFSET + SUPERBLOCK_FREE_COUNTS_OFFSET,
-                &superblock_counts,
-            )
-            .map_err(|_| Error::UnableToWriteSuperblock)
-            .map(|_| ())
+        let offset = SUPERBLOCK_OFFSET + SUPERBLOCK_FREE_COUNTS_OFFSET;
+        self.modify_metadata((offset / block_size) as u32, |data| {
+            data[offset % block_size..][..superblock_counts.len()]
+                .copy_from_slice(&superblock_counts);
+        })
     }
 
     fn reserve_first_free_bit(&mut self, bitmap_block: BlockAddress) -> Result<Option<u32>, Error> {
-        let mut bitmap = vec![0_u8; self.superblock.block_size() as usize];
-        self.read_block(bitmap_block, &mut bitmap)?;
-
-        for (i, byte) in bitmap.iter_mut().enumerate() {
-            if *byte == u8::MAX {
-                continue;
-            }
-            let bit_index = byte.trailing_ones();
-            *byte |= 1 << bit_index;
-            self.write_block(bitmap_block, &bitmap)?;
-            return Ok(Some(i as u32 * 8 + bit_index));
-        }
-        Ok(None)
+        let Some(i) = self.read_metadata(bitmap_block.get(), |bitmap| {
+            bitmap.iter().position(|byte| *byte != u8::MAX)
+        })?
+        else {
+            return Ok(None);
+        };
+        self.modify_metadata(bitmap_block.get(), |bitmap| {
+            let bit_index = bitmap[i].trailing_ones();
+            bitmap[i] |= 1 << bit_index;
+            Some(i as u32 * 8 + bit_index)
+        })
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Resource {
     Block,
     Inode,

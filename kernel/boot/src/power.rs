@@ -115,6 +115,10 @@ pub fn shutdown() -> ! {
         hlt();
     }
 
+    if let Err(e) = crate::file::vfs().read().sync_all() {
+        error!(error = %e, "file system sync failed, unsynced writes are lost");
+    }
+
     info!("powering off");
 
     let cpu_count = unsafe {

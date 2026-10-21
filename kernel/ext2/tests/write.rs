@@ -228,6 +228,7 @@ fn allocate_block_updates_group_descriptor(image: &str, bgdt_offset: usize) {
     let device = MemoryBlockDevice::try_new(512, &mut image_data[..]).unwrap();
     let mut fs = Ext2Fs::try_new(device).unwrap();
     let first = fs.allocate_block().unwrap().unwrap();
+    fs.sync().unwrap();
     drop(fs);
     assert_eq!(raw_free_blocks(&image_data), free_before - 1);
 
@@ -239,6 +240,7 @@ fn allocate_block_updates_group_descriptor(image: &str, bgdt_offset: usize) {
     );
     let second = fs.allocate_block().unwrap().unwrap();
     assert_eq!(second.get(), first.get() + 1);
+    fs.sync().unwrap();
     drop(fs);
     assert_eq!(raw_free_blocks(&image_data), free_before - 2);
 }
@@ -259,6 +261,7 @@ fn allocate_with_zero_free_counters_on_disk_keeps_them_at_zero() {
 
     assert!(block.is_some());
     assert_eq!(fs.superblock().num_unallocated_blocks(), 0);
+    fs.sync().unwrap();
     drop(fs);
     assert_eq!(
         image[BG_FREE_BLOCKS_COUNT..BG_FREE_BLOCKS_COUNT + 2],
@@ -850,6 +853,7 @@ fn create_directory_counts_it_in_the_group_descriptor(image: &str, bgdt_offset: 
     let mut root = fs.read_root_inode().unwrap();
     fs.create_directory(&mut root, "d").unwrap();
     fs.create_regular_file(&mut root, "f").unwrap();
+    fs.sync().unwrap();
     drop(fs);
     assert_eq!(raw_used_dirs(&image_data), dirs_before + 1);
 }
@@ -883,10 +887,10 @@ impl<T: BlockDevice<Error = ()>> BlockDevice for FailingWrites<T> {
     }
 }
 
-// A live entry pointing at an inode that was never written is corruption, so
-// the entry must only exist once the inode does.
+// Metadata is written back by sync, so that is where a failing device must
+// surface, and the block must stay dirty so a later sync retries it.
 #[test]
-fn failed_inode_write_leaves_no_directory_entry() {
+fn sync_reports_failed_metadata_write_and_retries() {
     const SUPERBLOCK_INODES_PER_GROUP: usize = 1024 + 40;
     const SUPERBLOCK_INODE_SIZE: usize = 1024 + 88;
     const BG_INODE_TABLE: usize = 2048 + 8;
@@ -906,13 +910,9 @@ fn failed_inode_write_leaves_no_directory_entry() {
     };
     let mut fs = Ext2Fs::try_new(device).unwrap();
     let mut root = fs.read_root_inode().unwrap();
-    let free_inodes = fs.superblock().num_unallocated_inodes();
+    fs.create_regular_file(&mut root, "f").unwrap();
 
-    assert_eq!(
-        fs.create_regular_file(&mut root, "f").err(),
-        Some(Error::DeviceWrite)
-    );
-
-    assert!(!entry_names(&fs).contains(&"f".to_owned()));
-    assert_eq!(fs.superblock().num_unallocated_inodes(), free_inodes);
+    assert_eq!(fs.sync(), Err(Error::DeviceWrite));
+    // still dirty, so the retry hits the same failing sectors
+    assert_eq!(fs.sync(), Err(Error::DeviceWrite));
 }

@@ -187,24 +187,29 @@ unsafe extern "C" fn main() -> ! {
         // The other CPUs run the scheduler, so CPU 0 can poll here without
         // stalling user tasks.
         while !pending.is_empty() {
-            pending.retain(|proc| match proc.exit_outcome() {
-                Some(ExitOutcome::Exited(code)) => {
-                    kernel::serial_println!(
+            pending.retain(|proc| {
+                let Some(outcome) = proc.exit_outcome() else {
+                    return true;
+                };
+                // the harness pulls the plug once every outcome is printed, so
+                // the disk the host inspects must be complete before that
+                vfs()
+                    .read()
+                    .sync_all()
+                    .expect("should be able to sync file systems");
+                match outcome {
+                    ExitOutcome::Exited(code) => kernel::serial_println!(
                         "test-kernel: outcome pid={} exit={}",
                         proc.pid(),
                         code
-                    );
-                    false
-                }
-                Some(ExitOutcome::Signaled(signo)) => {
-                    kernel::serial_println!(
+                    ),
+                    ExitOutcome::Signaled(signo) => kernel::serial_println!(
                         "test-kernel: outcome pid={} signal={}",
                         proc.pid(),
                         signo.name()
-                    );
-                    false
+                    ),
                 }
-                None => true,
+                false
             });
             if !pending.is_empty() {
                 x86_64::instructions::hlt();

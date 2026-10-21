@@ -72,6 +72,10 @@ unsafe extern "C" fn main() -> ! {
                 info!("{} MiB written", (offset + CHUNK) >> 20);
             }
         }
+        info!("syncing");
+        node.fsync()
+            .expect("should be able to fsync /scratch/big.bin");
+        info!("synced");
     });
 
     mcore::exit_bootstrap()

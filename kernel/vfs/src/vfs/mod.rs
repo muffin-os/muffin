@@ -125,6 +125,18 @@ impl Vfs {
         fs.write().create_directory(relative_path)
     }
 
+    /// Commits every mounted file system's pending writes. All are tried;
+    /// the first failure is returned.
+    ///
+    /// # Errors
+    /// Returns the first error of [`FileSystem::sync`].
+    pub fn sync_all(&self) -> Result<(), FsyncError> {
+        self.file_systems
+            .values()
+            .map(|fs| fs.write().sync())
+            .fold(Ok(()), Result::and)
+    }
+
     // the returned path is `path` with the mount point stripped, as the file
     // system mounted there sees it
     fn resolve<'a>(&self, path: &'a AbsolutePath) -> Option<(&'a AbsolutePath, Fs)> {

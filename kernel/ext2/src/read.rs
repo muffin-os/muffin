@@ -6,9 +6,6 @@ use kernel_device::block::BlockDevice;
 use crate::{BlockAddress, Error, Ext2Fs, Inode, RegularFile};
 
 const SZ: usize = size_of::<BlockAddress>();
-// A triple indirect resolution touches three distinct tables, so four slots
-// let a sequential scan keep every table it is about to need again.
-const INDIRECT_CACHE_CAPACITY: usize = 4;
 
 /// Exclusive upper bound of the file block index each pointer tier covers.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -16,34 +13,6 @@ pub struct IndirectPointerLimits {
     pub direct_end: u32,
     pub indirect_end: u32,
     pub double_indirect_end: u32,
-}
-
-/// Most recently used indirect block tables, newest first.
-pub(crate) struct IndirectCache {
-    entries: Vec<(BlockAddress, Vec<Option<BlockAddress>>)>,
-}
-
-impl IndirectCache {
-    pub(crate) fn new() -> Self {
-        Self { entries: vec![] }
-    }
-
-    fn lookup(&mut self, addr: BlockAddress, index: usize) -> Option<Option<BlockAddress>> {
-        let pos = self.entries.iter().position(|(a, _)| *a == addr)?;
-        self.entries[..=pos].rotate_right(1);
-        self.entries[0].1.get(index).copied()
-    }
-
-    fn insert(&mut self, addr: BlockAddress, table: Vec<Option<BlockAddress>>) {
-        if self.entries.len() == INDIRECT_CACHE_CAPACITY {
-            self.entries.pop();
-        }
-        self.entries.insert(0, (addr, table));
-    }
-
-    pub(crate) fn invalidate(&mut self, addr: BlockAddress) {
-        self.entries.retain(|(a, _)| *a != addr);
-    }
 }
 
 impl<T> Ext2Fs<T>
@@ -201,27 +170,14 @@ where
             return Ok(None);
         };
         let index = block_index as usize;
-
-        if let Some(cached) = self.indirect_cache.lock().lookup(indirect_ptr, index) {
-            return Ok(cached);
-        }
-
-        let mut indirect_block_data = vec![0_u8; self.superblock.block_size() as usize];
-        self.read_block(indirect_ptr, &mut indirect_block_data)?;
-        let (chunks, _) = indirect_block_data.as_chunks::<SZ>();
-        let table = chunks
-            .iter()
-            .copied()
-            .map(u32::from_le_bytes)
-            .map(BlockAddress::new)
-            .collect::<Vec<_>>();
-
-        let resolved = table
-            .get(index)
-            .copied()
-            .ok_or(Error::InvalidBlockIndex(block_index))?;
-        self.indirect_cache.lock().insert(indirect_ptr, table);
-        Ok(resolved)
+        self.read_metadata(indirect_ptr.get(), |table| {
+            table
+                .as_chunks::<SZ>()
+                .0
+                .get(index)
+                .map(|entry| BlockAddress::new(u32::from_le_bytes(*entry)))
+                .ok_or(Error::InvalidBlockIndex(block_index))
+        })?
     }
 
     pub fn resolve_double_indirect_ptr(

@@ -74,9 +74,9 @@ where
     /// Writes `buf` at byte `offset` of `file`, allocating every missing block
     /// in the range, and grows the file if the write ends past its size.
     ///
-    /// The inode on disk reflects every block allocated, also when an error
-    /// stops the write early. In that case the bytes written so far are
-    /// returned, or the error if nothing was written.
+    /// The inode reflects every block allocated, also when an error stops
+    /// the write early. In that case the bytes written so far are returned,
+    /// or the error if nothing was written.
     ///
     /// # Errors
     /// - [`Error::FileTooLarge`] if the write would end past the last
@@ -184,7 +184,7 @@ where
 
     fn allocate_table(&mut self, inode: &mut Inode) -> Result<BlockAddress, Error> {
         let table = self.allocate_counted(inode)?;
-        self.write_block(table, &vec![0_u8; self.superblock.block_size() as usize])?;
+        self.insert_zeroed_metadata(table.get());
         Ok(table)
     }
 
@@ -194,12 +194,11 @@ where
         slot: u32,
         entry: BlockAddress,
     ) -> Result<(), Error> {
-        self.indirect_cache.lock().invalidate(table);
-        let offset = self.resolve_block_offset(table) + slot as usize * size_of::<BlockAddress>();
-        self.block_device
-            .write_at(offset, &entry.into_u32().to_le_bytes())
-            .map_err(|_| Error::DeviceWrite)
-            .map(|_| ())
+        let at = slot as usize * size_of::<BlockAddress>();
+        self.modify_metadata(table.get(), |data| {
+            data[at..at + size_of::<BlockAddress>()]
+                .copy_from_slice(&entry.into_u32().to_le_bytes());
+        })
     }
 
     // the sector count is checked first, so an overflow never leaks the block
@@ -300,8 +299,7 @@ where
         depth: u32,
         kept: u64,
     ) -> Result<bool, Error> {
-        let mut entries = vec![0_u8; self.superblock.block_size() as usize];
-        self.read_block(table, &mut entries)?;
+        let mut entries = self.read_metadata(table.get(), <[u8]>::to_vec)?;
         let child_span = u64::from(self.superblock.pointers_per_block()).pow(depth - 1);
 
         let mut is_empty = true;
@@ -339,7 +337,7 @@ where
         }
         // entries of freed children must not survive an error further down
         if is_changed {
-            self.write_block(table, &entries)?;
+            self.modify_metadata(table.get(), |data| data.copy_from_slice(&entries))?;
         }
         outcome.map(|()| is_empty)
     }

@@ -264,6 +264,7 @@ fn read_hole_in_triple_indirect(sector_size: usize) {
 struct CountingDevice {
     inner: MemoryBlockDevice<Vec<u8>>,
     reads: Rc<Cell<usize>>,
+    writes: Rc<Cell<usize>>,
 }
 
 impl BlockDevice for CountingDevice {
@@ -283,19 +284,65 @@ impl BlockDevice for CountingDevice {
     }
 
     fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.writes.set(self.writes.get() + 1);
         self.inner.write_sector(sector_index, buf)
     }
 }
 
-#[test]
-fn sequential_read_sector_amplification() {
-    let image_data = common::load_copy_of_image(IMAGE);
+fn counting_fs(image: &str) -> (Ext2Fs<CountingDevice>, Rc<Cell<usize>>, Rc<Cell<usize>>) {
+    let image_data = common::load_copy_of_image(image);
     let reads = Rc::new(Cell::new(0));
+    let writes = Rc::new(Cell::new(0));
     let device = CountingDevice {
         inner: MemoryBlockDevice::try_new(512, image_data).expect("device creation must succeed"),
         reads: Rc::clone(&reads),
+        writes: Rc::clone(&writes),
     };
     let fs = Ext2Fs::try_new(device).expect("filesystem must mount");
+    (fs, reads, writes)
+}
+
+// Metadata (bitmap, counters, inode, indirect tables) reaches the device at
+// sync only, so a sequential write costs its data sectors and little else.
+#[test]
+fn sequential_write_sector_amplification() {
+    const LEN: usize = 512 * 1024;
+    let (mut fs, _, writes) = counting_fs("kernel/ext2/tests/filesystems/empty.img");
+    let mut root = fs.read_root_inode().expect("root inode must be readable");
+    let mut file = fs
+        .create_regular_file(&mut root, "seq.bin")
+        .expect("file creation must succeed");
+    writes.set(0);
+
+    let chunk = vec![0xA5_u8; 4096];
+    for offset in (0..LEN).step_by(chunk.len()) {
+        assert_eq!(
+            fs.write_to_file(&mut file, offset, &chunk)
+                .expect("write must succeed"),
+            chunk.len()
+        );
+    }
+    let data_sectors = LEN / 512;
+    assert_eq!(
+        writes.get(),
+        data_sectors,
+        "writes before sync must be data only"
+    );
+
+    fs.sync().expect("sync must succeed");
+    let sectors = writes.get();
+    // 512 blocks need 2 indirect tables and 1 double indirect table, plus the
+    // bitmap, descriptor table, superblock and the inode table blocks of the
+    // file and its parent: 8 blocks
+    assert!(
+        sectors <= data_sectors + 8 * 2,
+        "sequential write issued {sectors} write_sector calls, data alone needs {data_sectors}"
+    );
+}
+
+#[test]
+fn sequential_read_sector_amplification() {
+    let (fs, reads, _) = counting_fs(IMAGE);
     let file = open_pattern(&fs);
 
     let mut offset = 0;

@@ -72,6 +72,7 @@ fn deallocate_block_frees_bitmap_bit_and_counters(block_size: usize) {
         Err(Error::InvalidBlockAddress(past_end.get()))
     );
     assert_eq!(fs.superblock().num_unallocated_blocks(), free_before);
+    fs.sync().unwrap();
     drop(fs);
     assert_eq!(raw_free_blocks(&image), group_free_before);
 
@@ -272,6 +273,7 @@ fn truncate_to_same_size_leaves_the_disk_untouched(block_size: usize) {
     let len = 2 * block_size + 5;
     fs.write_to_file(&mut file, 0, &pattern(len)).unwrap();
     let address = file.inode_address();
+    fs.sync().unwrap();
     drop(fs);
     let before = image.clone();
 
@@ -279,6 +281,7 @@ fn truncate_to_same_size_leaves_the_disk_untouched(block_size: usize) {
     let mut fs = Ext2Fs::try_new(device).unwrap();
     let mut file = open_inode(&fs, address);
     fs.truncate_file(&mut file, len).unwrap();
+    fs.sync().unwrap();
     drop(fs);
 
     assert!(
@@ -303,6 +306,7 @@ fn allocate_then_deallocate_leaves_the_image_byte_identical(block_size: usize) {
     let mut fs = Ext2Fs::try_new(device).unwrap();
     let block = fs.allocate_block().unwrap().unwrap();
     fs.deallocate_block(block).unwrap();
+    fs.sync().unwrap();
     drop(fs);
 
     let superblock = 1024..2048;

@@ -1,4 +1,3 @@
-use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::ops::{Deref, DerefMut};
@@ -8,7 +7,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use kernel_device::block::BlockDevice;
 use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile};
 use kernel_vfs::fs::{FileSystem, FsHandle};
-use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
+use kernel_vfs::path::{AbsolutePath, Path};
 use kernel_vfs::{
     CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadError, Stat, StatError,
     TruncateError, WriteError,
@@ -20,8 +19,9 @@ pub struct VirtualExt2Fs<T> {
     handles: BTreeMap<FsHandle, Arc<OpenFile>>,
 }
 
+// one live inode per address, so handles to the same file see each other's writes
 struct OpenFile {
-    path: AbsoluteOwnedPath,
+    address: InodeAddress,
     inode: RwLock<OpenInode>,
 }
 
@@ -55,19 +55,14 @@ where
     fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError> {
         static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        // instead of creating a new inode, check whether we already have that inode open behind another handle
-        if let Some(v) = self.handles.values().find(|v| path == v.path.as_ref()) {
-            if create == CreateMode::Exclusive {
-                return Err(OpenError::AlreadyExists);
-            }
-            let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
-            self.handles.insert(handle, v.clone());
-            return Ok(handle);
-        }
-
         let inode = match (self.lookup(path)?, create) {
             (Some(_), CreateMode::Exclusive) => return Err(OpenError::AlreadyExists),
             (Some(found), CreateMode::Never | CreateMode::IfMissing) => {
+                if let Some(open) = self.handles.values().find(|f| f.address == found.0) {
+                    let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
+                    self.handles.insert(handle, open.clone());
+                    return Ok(handle);
+                }
                 OpenInode::try_new(found).ok_or(OpenError::NotFound)?
             }
             (None, CreateMode::Never) => return Err(OpenError::NotFound),
@@ -81,7 +76,7 @@ where
         self.handles.insert(
             handle,
             Arc::new(OpenFile {
-                path: path.to_owned(),
+                address: inode.address(),
                 inode: RwLock::new(inode),
             }),
         );
@@ -146,9 +141,7 @@ where
                         Error::FileTooLarge => WriteError::FileTooLarge,
                         Error::InvalidSuperblock
                         | Error::UnableToReadSuperblock
-                        | Error::UnableToWriteSuperblock
                         | Error::UnableToReadBlockGroupDescriptorTable
-                        | Error::UnableToWriteBlockGroupDescriptorTable
                         | Error::InvalidBlockGroupDescriptor(_)
                         | Error::NotDirectory
                         | Error::NotRegularFile
@@ -197,10 +190,12 @@ where
         Ok(())
     }
 
-    // every write reaches the block device before it returns, so there is
-    // nothing left to commit
     fn fsync(&mut self, _handle: FsHandle) -> Result<(), FsyncError> {
-        Ok(())
+        self.sync()
+    }
+
+    fn sync(&mut self) -> Result<(), FsyncError> {
+        self.ext2fs.sync().map_err(|_| FsyncError::Failed)
     }
 }
 
@@ -214,9 +209,7 @@ where
             Error::NotDirectory => OpenError::NotFound,
             Error::InvalidSuperblock
             | Error::UnableToReadSuperblock
-            | Error::UnableToWriteSuperblock
             | Error::UnableToReadBlockGroupDescriptorTable
-            | Error::UnableToWriteBlockGroupDescriptorTable
             | Error::InvalidBlockGroupDescriptor(_)
             | Error::NotRegularFile
             | Error::DeviceRead
@@ -296,9 +289,7 @@ fn create_error(e: Error) -> OpenError {
         Error::NameTooLong => OpenError::NameTooLong,
         Error::InvalidSuperblock
         | Error::UnableToReadSuperblock
-        | Error::UnableToWriteSuperblock
         | Error::UnableToReadBlockGroupDescriptorTable
-        | Error::UnableToWriteBlockGroupDescriptorTable
         | Error::InvalidBlockGroupDescriptor(_)
         | Error::NotDirectory
         | Error::NotRegularFile
@@ -321,9 +312,7 @@ fn mkdir_error(e: Error) -> MkdirError {
         Error::NameTooLong => MkdirError::NameTooLong,
         Error::InvalidSuperblock
         | Error::UnableToReadSuperblock
-        | Error::UnableToWriteSuperblock
         | Error::UnableToReadBlockGroupDescriptorTable
-        | Error::UnableToWriteBlockGroupDescriptorTable
         | Error::InvalidBlockGroupDescriptor(_)
         | Error::NotDirectory
         | Error::NotRegularFile
@@ -350,6 +339,13 @@ impl OpenInode {
             Ok(file) => Self::RegularFile(file),
             Err(found) => Self::Directory(Directory::try_from(found).ok()?),
         })
+    }
+
+    fn address(&self) -> InodeAddress {
+        match self {
+            Self::RegularFile(f) => f.inode_address(),
+            Self::Directory(d) => d.inode_address(),
+        }
     }
 }
 
