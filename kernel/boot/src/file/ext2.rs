@@ -157,10 +157,22 @@ where
         }
     }
 
-    fn truncate(&mut self, handle: FsHandle, _len_bytes: u64) -> Result<(), TruncateError> {
-        self.handles.get(&handle).ok_or(FsError::InvalidHandle)?;
-        // shortcut: ext2 files cannot be resized yet, until the ext2 truncate path is wired in here
-        Err(TruncateError::NotSupported)
+    fn truncate(&mut self, handle: FsHandle, len_bytes: u64) -> Result<(), TruncateError> {
+        let inode = &self
+            .handles
+            .get(&handle)
+            .ok_or(FsError::InvalidHandle)?
+            .inode;
+        let len_bytes = usize::try_from(len_bytes).map_err(|_| TruncateError::TruncateFailed)?;
+
+        let mut guard = inode.write();
+        match &mut *guard {
+            OpenInode::RegularFile(file) => self
+                .ext2fs
+                .truncate_file(file, len_bytes)
+                .map_err(|_| TruncateError::TruncateFailed),
+            OpenInode::Directory(_) => Err(TruncateError::NotSupported),
+        }
     }
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
@@ -174,6 +186,8 @@ where
         Ok(())
     }
 
+    // every write reaches the block device before it returns, so there is
+    // nothing left to commit
     fn fsync(&mut self, _handle: FsHandle) -> Result<(), FsyncError> {
         Ok(())
     }

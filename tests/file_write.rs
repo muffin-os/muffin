@@ -28,7 +28,15 @@ fn pattern(offset: usize, len: usize) -> Vec<u8> {
 fn file_write() {
     let report = KernelTest::new("file_write", host_env!()).run();
 
-    for group in ["overwrite", "append", "dir", "create", "excl", "big"] {
+    for group in [
+        "overwrite",
+        "append",
+        "dir",
+        "create",
+        "excl",
+        "big",
+        "trunc",
+    ] {
         report.assert_line_contains(&format!("filewrite: {group} ok"));
     }
     report.assert_no_line_contains("filewrite: FAIL");
@@ -43,6 +51,8 @@ fn file_write() {
         [SEED, SUFFIX].concat()
     );
     assert_eq!(report.debugfs_cat("/data/new.txt"), NEW);
+    assert_eq!(report.debugfs_cat("/data/trunc.txt"), NEW);
+    assert_eq!(report.debugfs_cat("/data/gone.txt"), b"");
     assert_eq!(report.debugfs_cat("/data/big.bin"), pattern(0, BIG_LEN));
 
     let sparse = report.debugfs_cat("/data/sparse.bin");

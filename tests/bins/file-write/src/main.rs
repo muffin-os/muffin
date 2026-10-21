@@ -5,7 +5,7 @@ mod check;
 
 use minilib::{
     EBADF, EEXIST, EISDIR, ENAMETOOLONG, ENOENT, O_APPEND, O_CREAT, O_EXCL, O_RDONLY, O_RDWR,
-    O_WRONLY, Stat, Whence, fstat, lseek, open, write,
+    O_TRUNC, O_WRONLY, Stat, Whence, fstat, lseek, open, write,
 };
 
 const SEED: &[u8] = b"muffin seed data\n";
@@ -32,6 +32,7 @@ fn main() -> i32 {
     create();
     excl();
     big();
+    trunc();
     0
 }
 
@@ -188,4 +189,22 @@ fn big() {
     );
     check::require("big/hole_is_zero", chunk[..1024].iter().all(|&b| b == 0));
     check::ok("big");
+}
+
+fn trunc() {
+    let fd = check::unwrap_or_fail("trunc/open", open("/data/trunc.txt", O_WRONLY | O_TRUNC));
+    check::require("trunc/fstat_empty", size_of("trunc/fstat", fd) == 0);
+    check::expect_ok("trunc/write", write(fd, NEW), NEW.len());
+
+    let ro = check::unwrap_or_fail("trunc/reopen", open("/data/trunc.txt", O_RDONLY));
+    let mut buf = [0_u8; SEED.len() + NEW.len()];
+    let n = check::read_to_end("trunc/read", ro, &mut buf);
+    check::require("trunc/contents", &buf[..n] == NEW);
+
+    let gone = check::unwrap_or_fail(
+        "trunc/open_gone",
+        open("/data/gone.txt", O_WRONLY | O_TRUNC),
+    );
+    check::require("trunc/fstat_gone", size_of("trunc/fstat_gone", gone) == 0);
+    check::ok("trunc");
 }
