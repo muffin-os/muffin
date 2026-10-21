@@ -241,6 +241,29 @@ fn allocate_block_updates_group_descriptor(image: &str, bgdt_offset: usize) {
     assert_eq!(raw_free_blocks(&image_data), free_before - 2);
 }
 
+// e2fsck repairs free counters, so a counter already at zero must not stop
+// the bitmap from handing out the blocks it still has.
+#[test]
+fn allocate_with_zero_free_counters_on_disk_keeps_them_at_zero() {
+    const SUPERBLOCK_FREE_BLOCKS_COUNT: usize = 1024 + 12;
+    const BG_FREE_BLOCKS_COUNT: usize = 2048 + 12;
+    let mut image = common::load_copy_of_image("kernel/ext2/tests/filesystems/empty.img");
+    image[SUPERBLOCK_FREE_BLOCKS_COUNT..SUPERBLOCK_FREE_BLOCKS_COUNT + 4].fill(0);
+    image[BG_FREE_BLOCKS_COUNT..BG_FREE_BLOCKS_COUNT + 2].fill(0);
+
+    let device = MemoryBlockDevice::try_new(512, &mut image[..]).unwrap();
+    let mut fs = Ext2Fs::try_new(device).unwrap();
+    let block = fs.allocate_block().unwrap();
+
+    assert!(block.is_some());
+    assert_eq!(fs.superblock().num_unallocated_blocks(), 0);
+    drop(fs);
+    assert_eq!(
+        image[BG_FREE_BLOCKS_COUNT..BG_FREE_BLOCKS_COUNT + 2],
+        [0, 0]
+    );
+}
+
 fn create_file<T: BlockDevice>(fs: &mut Ext2Fs<T>, name: &str) -> RegularFile {
     let mut root = fs.read_root_inode().unwrap();
     fs.create_regular_file(&mut root, name).unwrap()

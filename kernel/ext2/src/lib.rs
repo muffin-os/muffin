@@ -258,16 +258,19 @@ where
             };
 
             let descriptor = &mut self.bgdt[group_index];
-            match resource {
-                Resource::Block => {
-                    *descriptor.num_unallocated_blocks_mut() -= 1;
-                    *self.superblock.num_unallocated_blocks_mut() -= 1;
-                }
-                Resource::Inode => {
-                    *descriptor.num_unallocated_inodes_mut() -= 1;
-                    *self.superblock.num_unallocated_inodes_mut() -= 1;
-                }
-            }
+            let (group_free, superblock_free) = match resource {
+                Resource::Block => (
+                    descriptor.num_unallocated_blocks_mut(),
+                    self.superblock.num_unallocated_blocks_mut(),
+                ),
+                Resource::Inode => (
+                    descriptor.num_unallocated_inodes_mut(),
+                    self.superblock.num_unallocated_inodes_mut(),
+                ),
+            };
+            // the bitmap is the truth, a stale counter must not panic
+            *group_free = group_free.saturating_sub(1);
+            *superblock_free = superblock_free.saturating_sub(1);
             self.persist_counters(group_index)?;
             return Ok(Some(group_index as u32 * per_group + bit + first_number));
         }

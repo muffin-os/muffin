@@ -255,12 +255,12 @@ impl Superblock {
         Ext2FsId(self.fsid)
     }
 
-    pub fn volume_name(&self) -> &str {
-        core::str::from_utf8(&self.volume_name).unwrap()
+    pub fn volume_name(&self) -> Option<&str> {
+        core::str::from_utf8(&self.volume_name).ok()
     }
 
-    pub fn last_mount_path(&self) -> &str {
-        core::str::from_utf8(&self.last_mount_path).unwrap()
+    pub fn last_mount_path(&self) -> Option<&str> {
+        core::str::from_utf8(&self.last_mount_path).ok()
     }
 
     pub fn compression(&self) -> u32 {
@@ -460,5 +460,16 @@ mod tests {
 
         let reversed = Into::<SuperblockArray>::into(sb);
         assert_eq!(data[..206], reversed[..206]); // only check the actual superblock data
+    }
+
+    #[test]
+    fn non_utf8_volume_name_and_mount_path_read_as_none() {
+        let mut data = [0_u8; 1024];
+        data[120..136].fill(0xFF);
+        data[136..152].fill(0xFF);
+        let sb = Superblock::try_from(SuperblockArray::from(data)).unwrap();
+
+        assert_eq!(sb.volume_name(), None);
+        assert_eq!(sb.last_mount_path(), None);
     }
 }
