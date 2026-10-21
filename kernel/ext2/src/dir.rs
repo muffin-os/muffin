@@ -159,6 +159,32 @@ where
         inode.set_len((slot + 1) * block_size);
         self.write_inode(dir.inode_address(), dir)
     }
+
+    // `..` owns the rest of the block, so later entries are carved out of it
+    pub(crate) fn empty_dir_block(
+        &self,
+        own: InodeAddress,
+        parent: InodeAddress,
+    ) -> Result<Vec<u8>, Error> {
+        let block_size = self.superblock.block_size() as usize;
+        let dir_entries_have_type = self.superblock.dir_entries_have_type();
+        let dot_size = DirEntry::size(1);
+        let dot_dot_size = u16::try_from(block_size)
+            .map_err(|_| Error::NotSupported)?
+            .saturating_sub(dot_size);
+        let entry = |inode, total_size, name: &[u8]| DirEntry {
+            inode,
+            total_size,
+            type_indicator: dir_entries_have_type.then_some(DirType::Directory),
+            name_bytes: name.to_vec(),
+        };
+        let mut data = entry(own, dot_size, b".").serialize();
+        // serialize emits header and name only, so the record is padded by hand
+        data.resize(usize::from(dot_size), 0);
+        data.extend(entry(parent, dot_dot_size, b"..").serialize());
+        data.resize(block_size, 0);
+        Ok(data)
+    }
 }
 
 pub struct DirEntry {

@@ -1,5 +1,7 @@
 use kernel_device::block::{BlockDevice, MemoryBlockDevice};
-use kernel_ext2::{Error, Ext2Fs, IndirectPointerLimits, MAX_NAME_LEN, RegularFile};
+use kernel_ext2::{
+    DirType, Directory, Error, Ext2Fs, IndirectPointerLimits, MAX_NAME_LEN, RegularFile,
+};
 
 mod common;
 
@@ -710,6 +712,146 @@ fn directory_past_direct_blocks_is_not_supported_and_frees_the_inode() {
 
     assert_eq!(result, Error::NotSupported);
     assert_eq!(fs.read_root_inode().unwrap().len(), 12 * 1024);
+}
+
+generate_tests!(
+    created_directory_holds_dot_and_dotdot_and_links_its_parent:
+    1024 - created_directory_holds_dot_and_dotdot_and_links_its_parent_1k,
+    4096 - created_directory_holds_dot_and_dotdot_and_links_its_parent_4k,
+);
+
+fn created_directory_holds_dot_and_dotdot_and_links_its_parent(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut root = fs.read_root_inode().unwrap();
+    let root_links = root.num_hard_links();
+    let created = fs.create_directory(&mut root, "d").unwrap();
+
+    let root = fs.read_root_inode().unwrap();
+    assert_eq!(root.num_hard_links(), root_links + 1);
+    let entry = fs
+        .find_entry(&root, |e| e.name() == Some("d"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.typ(), Some(DirType::Directory));
+    let dir: Directory = fs.resolve_dir_entry(entry).unwrap().try_into().unwrap();
+    assert_eq!(dir.inode_address(), created.inode_address());
+    assert_eq!(dir.num_hard_links(), 2);
+    assert_eq!(dir.len(), block_size);
+    assert_eq!(dir.num_disk_sectors(), fs.superblock().sectors_per_block());
+
+    let entries = fs.list_dir(&dir).unwrap();
+    let listed: Vec<_> = entries
+        .iter()
+        .map(|e| (e.name().unwrap(), e.inode(), e.typ()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (".", dir.inode_address(), Some(DirType::Directory)),
+            ("..", root.inode_address(), Some(DirType::Directory)),
+        ]
+    );
+}
+
+generate_tests!(
+    file_in_created_directory_reads_back_from_root:
+    1024 - file_in_created_directory_reads_back_from_root_1k,
+    4096 - file_in_created_directory_reads_back_from_root_4k,
+);
+
+fn file_in_created_directory_reads_back_from_root(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut root = fs.read_root_inode().unwrap();
+    let mut dir = fs.create_directory(&mut root, "d").unwrap();
+    let mut file = fs.create_regular_file(&mut dir, "f").unwrap();
+    let data = pattern(block_size + 3);
+    fs.write_to_file(&mut file, 0, &data).unwrap();
+
+    let root = fs.read_root_inode().unwrap();
+    let dir: Directory = fs
+        .find_and_resolve_entry(&root, |e| e.name() == Some("d"))
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let found: RegularFile = fs
+        .find_and_resolve_entry(&dir, |e| e.name() == Some("f"))
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(read_all(&fs, &found), data);
+    assert_eq!(
+        fs.list_dir(&dir)
+            .unwrap()
+            .iter()
+            .map(|e| e.name().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        [".", "..", "f"]
+    );
+}
+
+generate_tests!(
+    nested_directory_dotdot_resolves_to_outer:
+    1024 - nested_directory_dotdot_resolves_to_outer_1k,
+    4096 - nested_directory_dotdot_resolves_to_outer_4k,
+);
+
+fn nested_directory_dotdot_resolves_to_outer(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    let mut root = fs.read_root_inode().unwrap();
+    let mut outer = fs.create_directory(&mut root, "outer").unwrap();
+    let inner = fs.create_directory(&mut outer, "inner").unwrap();
+
+    let outer: Directory = fs
+        .read_inode(outer.inode_address())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(outer.num_hard_links(), 3);
+    let (parent_address, parent) = fs
+        .find_and_resolve_entry(&inner, |e| e.name() == Some(".."))
+        .unwrap()
+        .unwrap();
+    assert_eq!(parent_address, outer.inode_address());
+    assert_eq!(parent.num_hard_links(), 3);
+}
+
+// e2fsck checks the per-group directory count, so the raw descriptor bytes
+// are the oracle.
+#[test]
+fn create_directory_counts_it_in_the_group_descriptor_1k_blocks() {
+    create_directory_counts_it_in_the_group_descriptor(
+        "kernel/ext2/tests/filesystems/empty.img",
+        2048,
+    );
+}
+
+#[test]
+fn create_directory_counts_it_in_the_group_descriptor_4k_blocks() {
+    create_directory_counts_it_in_the_group_descriptor(
+        "kernel/ext2/tests/filesystems/empty4k.img",
+        4096,
+    );
+}
+
+fn create_directory_counts_it_in_the_group_descriptor(image: &str, bgdt_offset: usize) {
+    const BG_USED_DIRS_COUNT: usize = 16;
+    let raw_used_dirs = |image: &[u8]| {
+        let at = bgdt_offset + BG_USED_DIRS_COUNT;
+        u16::from_le_bytes([image[at], image[at + 1]])
+    };
+
+    let mut image_data = common::load_copy_of_image(image);
+    let dirs_before = raw_used_dirs(&image_data);
+
+    let device = MemoryBlockDevice::try_new(512, &mut image_data[..]).unwrap();
+    let mut fs = Ext2Fs::try_new(device).unwrap();
+    let mut root = fs.read_root_inode().unwrap();
+    fs.create_directory(&mut root, "d").unwrap();
+    fs.create_regular_file(&mut root, "f").unwrap();
+    drop(fs);
+    assert_eq!(raw_used_dirs(&image_data), dirs_before + 1);
 }
 
 /// Fails every write that lands in `failing_sectors`; reads pass through.

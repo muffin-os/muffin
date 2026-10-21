@@ -50,6 +50,10 @@ impl BlockGroupDescriptor {
     pub fn num_directories(&self) -> u16 {
         self.num_directories
     }
+
+    pub fn num_directories_mut(&mut self) -> &mut u16 {
+        &mut self.num_directories
+    }
 }
 
 pub type Inner = Vec<BlockGroupDescriptor>;

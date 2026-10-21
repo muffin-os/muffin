@@ -278,7 +278,7 @@ where
         Ok(None)
     }
 
-    // the group and superblock counters change together
+    // the group's counters and the superblock's change together
     fn persist_counters(&mut self, group_index: usize) -> Result<(), Error> {
         // the structs model a subset of the on-disk fields, so writing them
         // whole would zero the rest
@@ -289,6 +289,7 @@ where
         let bgd_counts = [
             descriptor.num_unallocated_blocks().to_le_bytes(),
             descriptor.num_unallocated_inodes().to_le_bytes(),
+            descriptor.num_directories().to_le_bytes(),
         ]
         .concat();
         self.block_device
