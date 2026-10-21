@@ -25,6 +25,8 @@ pub enum OpenError {
     AlreadyExists,
     #[error("no space left to create the file")]
     NoSpace,
+    #[error("the file name is longer than the file system allows")]
+    NameTooLong,
     #[error("the file system cannot create files")]
     CreateUnsupported,
 }

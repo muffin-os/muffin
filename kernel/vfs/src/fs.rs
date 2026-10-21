@@ -29,6 +29,8 @@ pub trait FileSystem: Send + Sync {
     ///   and the file system cannot create files.
     /// - [`OpenError::NoSpace`] if the file would have to be created and the
     ///   file system has no room for it.
+    /// - [`OpenError::NameTooLong`] if the file would have to be created and
+    ///   its name is longer than the file system allows.
     /// - [`OpenError::OpenFailed`] for an underlying error, such as a hardware
     ///   error.
     fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError>;

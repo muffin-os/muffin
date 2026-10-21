@@ -6,7 +6,7 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_device::block::BlockDevice;
-use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile, Type};
+use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile};
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
 use kernel_vfs::{
@@ -22,7 +22,7 @@ pub struct VirtualExt2Fs<T> {
 
 struct OpenFile {
     path: AbsoluteOwnedPath,
-    inode: RwLock<VirtualExt2Inode>,
+    inode: RwLock<OpenInode>,
 }
 
 impl<T> From<Ext2Fs<T>> for VirtualExt2Fs<T> {
@@ -65,22 +65,18 @@ where
             return Ok(handle);
         }
 
-        let (found_num, found) = match (self.lookup(path)?, create) {
+        let inode = match (self.lookup(path)?, create) {
             (Some(_), CreateMode::Exclusive) => return Err(OpenError::AlreadyExists),
-            (Some(found), CreateMode::Never | CreateMode::IfMissing) => found,
+            (Some(found), CreateMode::Never | CreateMode::IfMissing) => {
+                OpenInode::try_new(found).ok_or(OpenError::NotFound)?
+            }
             (None, CreateMode::Never) => return Err(OpenError::NotFound),
             (None, CreateMode::IfMissing | CreateMode::Exclusive) => {
-                let parent = path.parent().ok_or(OpenError::NotFound)?;
-                // shortcut: ext2 cannot create files yet, until the ext2 create path is wired in here
-                return Err(match self.lookup(parent)? {
-                    Some(_) => OpenError::CreateUnsupported,
-                    None => OpenError::NotFound,
-                });
+                OpenInode::RegularFile(self.create(path)?)
             }
         };
 
         let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
-        let inode = VirtualExt2Inode::try_new(found_num, found).ok_or(OpenError::NotFound)?;
 
         self.handles.insert(
             handle,
@@ -113,12 +109,12 @@ where
             .inode;
 
         let guard = inode.read();
-        match &guard.inner {
-            Inner::RegularFile(file) => self
+        match &*guard {
+            OpenInode::RegularFile(file) => self
                 .ext2fs
                 .read_from_file(file, offset, buf)
                 .map_err(|_| ReadError::ReadFailed),
-            Inner::Directory(_) => Err(ReadError::NotReadable),
+            OpenInode::Directory(_) => Err(ReadError::NotReadable),
         }
     }
 
@@ -130,8 +126,8 @@ where
             .inode;
 
         let mut guard = inode.write();
-        match &mut guard.inner {
-            Inner::RegularFile(file) => {
+        match &mut *guard {
+            OpenInode::RegularFile(file) => {
                 self.ext2fs
                     .write_to_file(file, offset, buf)
                     .map_err(|e| match e {
@@ -157,7 +153,7 @@ where
                         | Error::NameTooLong => WriteError::WriteFailed,
                     })
             }
-            Inner::Directory(_) => Err(WriteError::NotWritable),
+            OpenInode::Directory(_) => Err(WriteError::NotWritable),
         }
     }
 
@@ -174,7 +170,7 @@ where
             .ok_or(FsError::InvalidHandle)?
             .inode;
 
-        stat.size = inode.read().inner.as_ref().len();
+        stat.size = inode.read().as_ref().len();
         Ok(())
     }
 
@@ -213,6 +209,39 @@ where
         })
     }
 
+    fn create(&mut self, path: &AbsolutePath) -> Result<RegularFile, OpenError> {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(OpenError::NotFound);
+        };
+        let mut parent = self
+            .lookup(parent)?
+            .and_then(|found| Directory::try_from(found).ok())
+            .ok_or(OpenError::NotFound)?;
+        self.create_regular_file(&mut parent, name)
+            .map_err(|e| match e {
+                // a parent whose direct blocks are full is out of room from the caller's view
+                Error::NoSpace | Error::NotSupported => OpenError::NoSpace,
+                Error::EntryExists => OpenError::AlreadyExists,
+                Error::NameTooLong => OpenError::NameTooLong,
+                Error::InvalidSuperblock
+                | Error::UnableToReadSuperblock
+                | Error::UnableToWriteSuperblock
+                | Error::UnableToReadBlockGroupDescriptorTable
+                | Error::UnableToWriteBlockGroupDescriptorTable
+                | Error::InvalidBlockGroupDescriptor(_)
+                | Error::NotDirectory
+                | Error::NotRegularFile
+                | Error::DeviceRead
+                | Error::DeviceWrite
+                | Error::InvalidInodeAddress(_)
+                | Error::InvalidBlockIndex(_)
+                | Error::InvalidDirEntryType(_)
+                | Error::InvalidDirEntry
+                | Error::InvalidBlockAddress(_)
+                | Error::FileTooLarge => OpenError::OpenFailed,
+            })
+    }
+
     fn find_inode(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, Error> {
         let root_inode = self.ext2fs.read_root_inode()?;
         self.find_inode_from(path, root_inode.into_inner())
@@ -240,38 +269,26 @@ where
     }
 }
 
-pub struct VirtualExt2Inode {
-    _inode_num: InodeAddress,
-    inner: Inner,
-}
-
-impl VirtualExt2Inode {
-    #[must_use]
-    #[expect(clippy::missing_panics_doc)] // see comments
-    pub fn try_new(inode_num: InodeAddress, inode: Inode) -> Option<Self> {
-        let inner = match inode.typ() {
-            // the unwraps don't actually panic, we check the type, try_into checks again
-            Some(Type::RegularFile) => Inner::RegularFile((inode_num, inode).try_into().unwrap()),
-            Some(Type::Directory) => Inner::Directory((inode_num, inode).try_into().unwrap()),
-            _ => return None,
-        };
-        Some(Self {
-            _inode_num: inode_num,
-            inner,
-        })
-    }
-}
-
-enum Inner {
+enum OpenInode {
     RegularFile(RegularFile),
     Directory(Directory),
 }
 
-impl AsRef<Inode> for Inner {
+impl OpenInode {
+    // None for every inode type the vfs cannot open, such as a symlink
+    fn try_new(found: (InodeAddress, Inode)) -> Option<Self> {
+        Some(match RegularFile::try_from(found) {
+            Ok(file) => Self::RegularFile(file),
+            Err(found) => Self::Directory(Directory::try_from(found).ok()?),
+        })
+    }
+}
+
+impl AsRef<Inode> for OpenInode {
     fn as_ref(&self) -> &Inode {
         match self {
-            Inner::RegularFile(f) => f,
-            Inner::Directory(d) => d,
+            Self::RegularFile(f) => f,
+            Self::Directory(d) => d,
         }
     }
 }

@@ -2,8 +2,8 @@ use alloc::sync::Arc;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
-    EACCES, EBADF, EEXIST, EFBIG, EINVAL, EIO, EISDIR, ENODEV, ENOENT, ENOMEM, ENOSPC, ENOTTY,
-    Errno, IoctlRequest, ProtFlags, Stat,
+    EACCES, EBADF, EEXIST, EFBIG, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV, ENOENT, ENOMEM,
+    ENOSPC, ENOTTY, Errno, IoctlRequest, ProtFlags, Stat,
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
@@ -68,6 +68,7 @@ impl FileAccess for KernelAccess {
             OpenError::AlreadyExists => EEXIST,
             OpenError::NoSpace => ENOSPC,
             OpenError::CreateUnsupported => EACCES,
+            OpenError::NameTooLong => ENAMETOOLONG,
         })?;
         Ok(FileInfo { node })
     }
