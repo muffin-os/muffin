@@ -711,3 +711,66 @@ fn directory_past_direct_blocks_is_not_supported_and_frees_the_inode() {
     assert_eq!(result, Error::NotSupported);
     assert_eq!(fs.read_root_inode().unwrap().len(), 12 * 1024);
 }
+
+/// Fails every write that lands in `failing_sectors`; reads pass through.
+struct FailingWrites<T> {
+    inner: T,
+    failing_sectors: std::ops::Range<usize>,
+}
+
+impl<T: BlockDevice<Error = ()>> BlockDevice for FailingWrites<T> {
+    type Error = ();
+
+    fn sector_size(&self) -> usize {
+        self.inner.sector_size()
+    }
+
+    fn sector_count(&self) -> usize {
+        self.inner.sector_count()
+    }
+
+    fn read_sector(&self, sector_index: usize, buf: &mut [u8]) -> Result<usize, ()> {
+        self.inner.read_sector(sector_index, buf)
+    }
+
+    fn write_sector(&mut self, sector_index: usize, buf: &[u8]) -> Result<usize, ()> {
+        if self.failing_sectors.contains(&sector_index) {
+            return Err(());
+        }
+        self.inner.write_sector(sector_index, buf)
+    }
+}
+
+// A live entry pointing at an inode that was never written is corruption, so
+// the entry must only exist once the inode does.
+#[test]
+fn failed_inode_write_leaves_no_directory_entry() {
+    const SUPERBLOCK_INODES_PER_GROUP: usize = 1024 + 40;
+    const SUPERBLOCK_INODE_SIZE: usize = 1024 + 88;
+    const BG_INODE_TABLE: usize = 2048 + 8;
+    let le_u32 = |image: &[u8], at: usize| {
+        u32::from_le_bytes([image[at], image[at + 1], image[at + 2], image[at + 3]]) as usize
+    };
+    let mut image = common::load_copy_of_image("kernel/ext2/tests/filesystems/empty.img");
+    let inode_table_begin = le_u32(&image, BG_INODE_TABLE) * 2;
+    let inode_table_bytes = le_u32(&image, SUPERBLOCK_INODES_PER_GROUP)
+        * usize::from(u16::from_le_bytes([
+            image[SUPERBLOCK_INODE_SIZE],
+            image[SUPERBLOCK_INODE_SIZE + 1],
+        ]));
+    let device = FailingWrites {
+        inner: MemoryBlockDevice::try_new(512, &mut image[..]).unwrap(),
+        failing_sectors: inode_table_begin..inode_table_begin + inode_table_bytes / 512,
+    };
+    let mut fs = Ext2Fs::try_new(device).unwrap();
+    let mut root = fs.read_root_inode().unwrap();
+    let free_inodes = fs.superblock().num_unallocated_inodes();
+
+    assert_eq!(
+        fs.create_regular_file(&mut root, "f").err(),
+        Some(Error::DeviceWrite)
+    );
+
+    assert!(!entry_names(&fs).contains(&"f".to_owned()));
+    assert_eq!(fs.superblock().num_unallocated_inodes(), free_inodes);
+}
