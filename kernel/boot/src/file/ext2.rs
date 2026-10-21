@@ -173,6 +173,7 @@ where
             | Error::InvalidInodeAddress(_)
             | Error::InvalidBlockIndex(_)
             | Error::InvalidDirEntryType(_)
+            | Error::InvalidDirEntry
             | Error::InvalidBlockAddress(_)
             | Error::FileTooLarge
             | Error::NoSpace

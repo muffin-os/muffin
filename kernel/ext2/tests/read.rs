@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Read;
 
 use kernel_device::block::MemoryBlockDevice;
-use kernel_ext2::{BlockAddress, DirType, Error, Ext2Fs, RegularFile, Type};
+use kernel_ext2::{BlockAddress, DirType, Error, Ext2Fs, Inode, InodeAddress, RegularFile, Type};
 
 #[test]
 fn test_list_directory() {
@@ -189,4 +189,58 @@ fn open_read_fs() -> Ext2Fs<kernel_device::block::MemoryBlockDevice<Vec<u8>>> {
         .unwrap();
     let device = MemoryBlockDevice::try_new(512, data).unwrap();
     Ext2Fs::try_new(device).unwrap()
+}
+
+#[test]
+fn read_inode_past_last_group_is_rejected() {
+    let fs = open_read_fs();
+    let address = InodeAddress::new(u32::MAX).unwrap();
+
+    assert_eq!(
+        fs.read_inode(address).err(),
+        Some(Error::InvalidInodeAddress(u32::MAX))
+    );
+}
+
+#[test]
+fn block_pointer_past_device_end_fails_the_read() {
+    let fs = open_read_fs();
+    let mut inode = Inode::new(Type::RegularFile);
+    inode.set_direct_ptr(0, BlockAddress::new(u32::MAX));
+    inode.set_len(10);
+    let file = RegularFile::try_from((InodeAddress::new(12).unwrap(), inode)).unwrap();
+
+    let mut buf = [0_u8; 10];
+    assert_eq!(
+        fs.read_from_file(&file, 0, &mut buf),
+        Err(Error::DeviceRead)
+    );
+}
+
+#[test]
+fn list_dir_rejects_records_that_do_not_fit() {
+    let mut fs = open_read_fs();
+    let root = fs.read_root_inode().unwrap();
+    let block = root.direct_ptrs().next().flatten().unwrap();
+    let block_size = fs.superblock().block_size() as usize;
+    let mut original = vec![0_u8; block_size];
+    fs.read_block(block, &mut original).unwrap();
+    let set_record = |data: &mut [u8], offset: usize, total_size: u16, name_length: u8| {
+        data[offset..offset + 4].copy_from_slice(&2_u32.to_le_bytes());
+        data[offset + 4..offset + 6].copy_from_slice(&total_size.to_le_bytes());
+        data[offset + 6] = name_length;
+    };
+
+    // a record at the block end whose name runs past it
+    let mut data = original.clone();
+    set_record(&mut data, 0, (block_size - 12) as u16, 1);
+    set_record(&mut data, block_size - 12, 12, 200);
+    fs.write_block(block, &data).unwrap();
+    assert_eq!(fs.list_dir(&root).err(), Some(Error::InvalidDirEntry));
+
+    // a zero length record, which would never advance to the next one
+    let mut data = original.clone();
+    set_record(&mut data, 0, 0, 1);
+    fs.write_block(block, &data).unwrap();
+    assert_eq!(fs.list_dir(&root).err(), Some(Error::InvalidDirEntry));
 }

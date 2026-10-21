@@ -23,6 +23,8 @@ pub enum Error {
     FileTooLarge,
     /// The block lies outside the filesystem's data blocks or is not marked allocated.
     InvalidBlockAddress(u32),
+    /// A directory record is shorter than its header and name, or runs past its block.
+    InvalidDirEntry,
 }
 
 impl Display for Error {

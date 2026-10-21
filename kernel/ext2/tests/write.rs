@@ -569,3 +569,39 @@ fn write_until_full_persists_every_allocated_block(block_size: usize) {
     assert_eq!(stored.len(), written);
     assert_eq!(stored.num_disk_sectors(), free_blocks * sectors_per_block);
 }
+
+generate_tests!(
+    list_dir_skips_deleted_entries:
+    1024 - list_dir_skips_deleted_entries_1k,
+    4096 - list_dir_skips_deleted_entries_4k,
+);
+
+fn list_dir_skips_deleted_entries(block_size: usize) {
+    let mut fs = empty_fs!(block_size);
+    create_file(&mut fs, "a");
+    create_file(&mut fs, "b");
+    let mut root = fs.read_root_inode().unwrap();
+    let block = root.direct_ptrs().next().flatten().unwrap();
+    let mut data = vec![0_u8; block_size];
+    fs.read_block(block, &mut data).unwrap();
+    let mut offset = 0;
+    while &data[offset + 8..offset + 8 + usize::from(data[offset + 6])] != b"a" {
+        offset += usize::from(u16::from_le_bytes([data[offset + 4], data[offset + 5]]));
+    }
+    data[offset..offset + 4].fill(0);
+    fs.write_block(block, &data).unwrap();
+
+    assert_eq!(entry_names(&fs), [".", "..", "lost+found", "b"]);
+
+    fs.create_regular_file(&mut root, "c").unwrap();
+    assert_eq!(entry_names(&fs), [".", "..", "lost+found", "c", "b"]);
+}
+
+fn entry_names<T: BlockDevice>(fs: &Ext2Fs<T>) -> Vec<String> {
+    let root = fs.read_root_inode().unwrap();
+    fs.list_dir(&root)
+        .unwrap()
+        .iter()
+        .map(|e| e.name().unwrap().to_owned())
+        .collect()
+}

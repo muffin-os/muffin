@@ -36,10 +36,12 @@ where
 
             let mut offset = 0;
             while offset < block_size - 8 {
-                let dir_entry = DirEntry::from(dir_entries_have_type, &data[offset..])?;
+                let record = DirRecord::parse(dir_entries_have_type, &data[offset..])?;
                 // we don't need to align the offset, as there must be no space between entries
-                offset += dir_entry.total_size as usize;
-                entries.push(dir_entry);
+                offset += usize::from(record.total_size());
+                if let DirRecord::Used(entry) = record {
+                    entries.push(entry);
+                }
             }
         }
 
@@ -99,25 +101,24 @@ where
             // carved out of the first entry whose slack can hold it.
             let mut offset = 0;
             while offset < block_size - 8 {
-                debug_assert_eq!(offset % 4, 0, "offset is not aligned");
-
-                let mut entry = DirEntry::from(dir_entries_have_type, &block_data[offset..])?;
-                let entry_size = DirEntry::size(entry.name_bytes.len() as u16);
-                if entry.total_size >= required_size + entry_size {
-                    let old_total_size = entry.total_size;
-                    entry.total_size = entry_size;
-
-                    let entry_serialized = entry.serialize();
-                    block_data[offset..offset + entry_serialized.len()]
-                        .copy_from_slice(&entry_serialized);
-
-                    let new_entry_total_size = old_total_size - entry_size;
-                    let new_entry_offset = offset + entry_size as usize;
-                    debug_assert_eq!(new_entry_offset % 4, 0, "new entry offset is not aligned");
-
+                let record = DirRecord::parse(dir_entries_have_type, &block_data[offset..])?;
+                let old_total_size = record.total_size();
+                // a deleted record is reused whole, a live one gives up its slack
+                let kept_size = match &record {
+                    DirRecord::Used(entry) => DirEntry::size(entry.name_bytes.len() as u16),
+                    DirRecord::Unused { .. } => 0,
+                };
+                if old_total_size >= required_size + kept_size {
+                    if let DirRecord::Used(mut entry) = record {
+                        entry.total_size = kept_size;
+                        let entry_serialized = entry.serialize();
+                        block_data[offset..offset + entry_serialized.len()]
+                            .copy_from_slice(&entry_serialized);
+                    }
+                    let new_entry_offset = offset + usize::from(kept_size);
                     let new_entry = DirEntry {
                         inode: inode_address,
-                        total_size: new_entry_total_size,
+                        total_size: old_total_size - kept_size,
                         type_indicator: if dir_entries_have_type {
                             Some(typ)
                         } else {
@@ -135,7 +136,7 @@ where
                     return Ok(());
                 }
 
-                offset += entry.total_size as usize;
+                offset += usize::from(old_total_size);
             }
         }
 
@@ -158,44 +159,6 @@ impl DirEntry {
             name_length;
         // align up to 4 byte
         (unaligned_size + 3) & !3
-    }
-
-    fn from(dir_entries_have_type: bool, value: &[u8]) -> Result<Self, Error> {
-        let required_size = Self::size(0);
-        debug_assert!(
-            value.len() >= required_size as usize,
-            "need at least {required_size} byte, but got {}",
-            value.len()
-        );
-
-        let arr = DirEntryNoName::try_from(&value[0..8].try_into().unwrap()).unwrap();
-        let name_length = if dir_entries_have_type {
-            arr.name_length_lsb as u16
-        } else {
-            arr.name_length_lsb as u16 | ((arr.type_indicator_or_name_length_msb as u16) << 8)
-        };
-        let type_indicator = if dir_entries_have_type {
-            let code = arr.type_indicator_or_name_length_msb;
-            Some(DirType::try_from(code).map_err(|()| Error::InvalidDirEntryType(code))?)
-        } else {
-            None
-        };
-
-        let required_size = Self::size(name_length);
-        debug_assert!(
-            value.len() >= Self::size(name_length) as usize,
-            "need at least {} byte, but have only {}",
-            required_size,
-            value.len()
-        );
-
-        let name_bytes = value[8..8 + name_length as usize].to_vec();
-        Ok(Self {
-            inode: InodeAddress::new(arr.inode).unwrap(),
-            total_size: arr.total_size,
-            type_indicator,
-            name_bytes,
-        })
     }
 
     pub fn serialize(self) -> Vec<u8> {
@@ -226,6 +189,63 @@ impl DirEntry {
 
     pub fn inode(&self) -> InodeAddress {
         self.inode
+    }
+}
+
+/// One record of a directory block.
+enum DirRecord {
+    Used(DirEntry),
+    /// A deleted entry, which still owns its bytes up to the next record.
+    Unused { total_size: u16 },
+}
+
+impl DirRecord {
+    fn total_size(&self) -> u16 {
+        match self {
+            Self::Used(entry) => entry.total_size,
+            Self::Unused { total_size } => *total_size,
+        }
+    }
+
+    /// Parses the record at the start of `value`, which runs to the end of its block.
+    ///
+    /// # Errors
+    /// - [`Error::InvalidDirEntry`] if the name is longer than [`MAX_NAME_LEN`]
+    ///   or the record length is not a multiple of 4, is shorter than its
+    ///   header and name, or runs past `value`.
+    /// - [`Error::InvalidDirEntryType`] if a live record has an unknown type code.
+    fn parse(dir_entries_have_type: bool, value: &[u8]) -> Result<Self, Error> {
+        let header = value.first_chunk().ok_or(Error::InvalidDirEntry)?;
+        let arr = DirEntryNoName::try_from(header).map_err(|()| Error::InvalidDirEntry)?;
+        let name_length = if dir_entries_have_type {
+            u16::from(arr.name_length_lsb)
+        } else {
+            u16::from(arr.name_length_lsb) | (u16::from(arr.type_indicator_or_name_length_msb) << 8)
+        };
+        let total_size = arr.total_size;
+        if usize::from(name_length) > MAX_NAME_LEN
+            || total_size % 4 != 0
+            || total_size < DirEntry::size(name_length)
+            || usize::from(total_size) > value.len()
+        {
+            return Err(Error::InvalidDirEntry);
+        }
+
+        let Some(inode) = InodeAddress::new(arr.inode) else {
+            return Ok(Self::Unused { total_size });
+        };
+        let type_indicator = if dir_entries_have_type {
+            let code = arr.type_indicator_or_name_length_msb;
+            Some(DirType::try_from(code).map_err(|()| Error::InvalidDirEntryType(code))?)
+        } else {
+            None
+        };
+        Ok(Self::Used(DirEntry {
+            inode,
+            total_size,
+            type_indicator,
+            name_bytes: value[8..8 + usize::from(name_length)].to_vec(),
+        }))
     }
 }
 
@@ -314,13 +334,20 @@ mod tests {
         12, 0, 0, 0, 16, 0, 5, 1, b'a', b'.', b't', b'x', b't', 0, 0, 0,
     ];
 
+    fn parse_used(dir_entries_have_type: bool, value: &[u8]) -> DirEntry {
+        match DirRecord::parse(dir_entries_have_type, value).unwrap() {
+            DirRecord::Used(entry) => entry,
+            DirRecord::Unused { total_size } => panic!("unused record of {total_size} bytes"),
+        }
+    }
+
     #[test]
     fn serialize_round_trips_both_layouts() {
-        let untyped = DirEntry::from(false, &UNTYPED).unwrap();
+        let untyped = parse_used(false, &UNTYPED);
         assert_eq!(None, untyped.typ());
         assert_eq!(&UNTYPED[..13], &untyped.serialize()[..]);
 
-        let typed = DirEntry::from(true, &TYPED).unwrap();
+        let typed = parse_used(true, &TYPED);
         assert_eq!(Some(DirType::RegularFile), typed.typ());
         assert_eq!(&TYPED[..13], &typed.serialize()[..]);
     }

@@ -106,16 +106,7 @@ where
         // shortcut: every call returns a fresh copy, so two live copies of one
         // inode overwrite each other's writes. Centralize inodes in a cache
         // before anything holds two handles to the same file.
-        let inodes_per_group = self.superblock.inodes_per_group();
-        let block_group_index = (addr.get() - 1) / inodes_per_group;
-        let block_group = &self.bgdt[block_group_index as usize];
-        let itable_start_block = block_group.inode_table_starting_block();
-
-        let index = (addr.get() - 1) % inodes_per_group;
-        let inode_size = self.superblock.inode_size();
-        let address =
-            self.resolve_block_offset(itable_start_block) + (index * inode_size as u32) as usize;
-
+        let address = self.inode_offset(addr)?;
         let mut inode_buffer = [0_u8; 128]; // inode size can vary, but the specified fields are always between 0 and 128, and we don't need more
         self.block_device
             .read_at(address, &mut inode_buffer)
@@ -125,16 +116,7 @@ where
     }
 
     pub fn write_inode(&mut self, addr: InodeAddress, inode: &Inode) -> Result<(), Error> {
-        let inodes_per_group = self.superblock.inodes_per_group();
-        let block_group_index = (addr.get() - 1) / inodes_per_group;
-        let block_group = &self.bgdt[block_group_index as usize];
-        let itable_start_block = block_group.inode_table_starting_block();
-
-        let index = (addr.get() - 1) % inodes_per_group;
-        let inode_size = self.superblock.inode_size();
-        let address =
-            self.resolve_block_offset(itable_start_block) + (index * inode_size as u32) as usize;
-
+        let address = self.inode_offset(addr)?;
         let inode_raw = InodeRawArray::from(inode);
         self.block_device
             .write_at(address, inode_raw.as_slice())
@@ -157,8 +139,23 @@ where
             .map_err(|_| Error::DeviceWrite)
     }
 
+    /// Byte offset of inode `addr` in its group's inode table.
+    fn inode_offset(&self, addr: InodeAddress) -> Result<usize, Error> {
+        let inodes_per_group = self.superblock.inodes_per_group();
+        let block_group_index = (addr.get() - 1) / inodes_per_group;
+        let block_group = self
+            .bgdt
+            .get(block_group_index as usize)
+            .ok_or(Error::InvalidInodeAddress(addr.get()))?;
+        let index = (addr.get() - 1) % inodes_per_group;
+        Ok(
+            self.resolve_block_offset(block_group.inode_table_starting_block())
+                + index as usize * usize::from(self.superblock.inode_size()),
+        )
+    }
+
     fn resolve_block_offset(&self, addr: BlockAddress) -> usize {
-        (addr.get() * self.superblock.block_size()) as usize
+        addr.get() as usize * self.superblock.block_size() as usize
     }
 
     pub fn allocate_block(&mut self) -> Result<Option<BlockAddress>, Error> {
