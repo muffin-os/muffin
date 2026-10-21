@@ -99,9 +99,38 @@ impl Vfs {
         P: AsRef<AbsolutePath>,
     {
         let path = path.as_ref().normalized();
-        let (mount_path, fs) = self.find_mount(path.as_ref()).ok_or(OpenError::NotFound)?;
+        let (relative_path, fs) = self.resolve(path.as_ref()).ok_or(OpenError::NotFound)?;
+        let mut guard = fs.write();
+        guard
+            .open(relative_path, create)
+            .map(|handle| VfsNode::new(path, handle, Arc::downgrade(&fs)))
+    }
+
+    /// Creates an empty directory at `path`, as [`FileSystem::create_directory`]
+    /// describes.
+    ///
+    /// # Errors
+    /// Returns [`MkdirError::NotFound`] if no file system is mounted at or
+    /// above `path`, [`MkdirError::AlreadyExists`] if `path` is a mount point,
+    /// and otherwise any error of [`FileSystem::create_directory`].
+    pub fn create_directory<P>(&self, path: P) -> Result<(), MkdirError>
+    where
+        P: AsRef<AbsolutePath>,
+    {
+        let path = path.as_ref().normalized();
+        let (relative_path, fs) = self.resolve(path.as_ref()).ok_or(MkdirError::NotFound)?;
+        if relative_path == ROOT {
+            return Err(MkdirError::AlreadyExists);
+        }
+        fs.write().create_directory(relative_path)
+    }
+
+    // the returned path is `path` with the mount point stripped, as the file
+    // system mounted there sees it
+    fn resolve<'a>(&self, path: &'a AbsolutePath) -> Option<(&'a AbsolutePath, Fs)> {
+        let (mount_path, fs) = self.find_mount(path)?;
         let relative_path = if mount_path == ROOT {
-            path.as_ref()
+            path
         } else {
             let rest = path.strip_prefix(&***mount_path).unwrap();
             if rest.is_empty() {
@@ -110,10 +139,7 @@ impl Vfs {
                 AbsolutePath::try_new(rest).unwrap()
             }
         };
-        let mut guard = fs.write();
-        guard
-            .open(relative_path, create)
-            .map(|handle| VfsNode::new(path, handle, Arc::downgrade(&fs)))
+        Some((relative_path, fs))
     }
 
     fn find_mount<'a>(&'a self, path: &'a AbsolutePath) -> Option<(&'a AbsolutePath, Fs)> {
@@ -134,7 +160,7 @@ mod tests {
 
     use crate::path::{AbsolutePath, ROOT};
     use crate::testing::TestFs;
-    use crate::{CreateMode, MountError, OpenError, Stat, UnmountError, Vfs};
+    use crate::{CreateMode, MkdirError, MountError, OpenError, Stat, UnmountError, Vfs};
 
     #[test]
     fn test_read() {
@@ -409,5 +435,71 @@ mod tests {
         let mut buf = [0_u8; 4];
         assert_eq!(Ok(4), node.read(&mut buf, 0));
         assert_eq!([0xAA; 4], buf);
+    }
+
+    #[test]
+    fn create_directory_then_create_and_read_a_file_inside_it() {
+        let vfs = vfs_with_hello();
+        let file = AbsolutePath::try_new("/dir/sub/f").unwrap();
+
+        assert_eq!(
+            Ok(()),
+            vfs.create_directory(AbsolutePath::try_new("/dir/sub").unwrap())
+        );
+        let node = vfs.open(file, CreateMode::IfMissing).unwrap();
+        assert_eq!(Ok(2), node.write([0xAB, 0xCD], 0));
+        let mut buf = [0_u8; 2];
+        assert_eq!(
+            Ok(2),
+            vfs.open(file, CreateMode::Never).unwrap().read(&mut buf, 0)
+        );
+        assert_eq!([0xAB, 0xCD], buf);
+    }
+
+    #[test]
+    fn create_directory_on_existing_entry_is_already_exists() {
+        let vfs = vfs_with_hello();
+        let dir = AbsolutePath::try_new("/dir/sub").unwrap();
+
+        vfs.create_directory(dir).unwrap();
+        assert_eq!(Err(MkdirError::AlreadyExists), vfs.create_directory(dir));
+        assert_eq!(
+            Err(MkdirError::AlreadyExists),
+            vfs.create_directory(AbsolutePath::try_new("/dir/hello").unwrap()),
+            "a file occupies the name"
+        );
+    }
+
+    #[test]
+    fn create_directory_in_missing_parent_is_not_found() {
+        let vfs = vfs_with_hello();
+
+        assert_eq!(
+            Err(MkdirError::NotFound),
+            vfs.create_directory(AbsolutePath::try_new("/nodir/sub").unwrap())
+        );
+    }
+
+    #[test]
+    fn create_directory_under_unmounted_prefix_is_not_found() {
+        let mut vfs = Vfs::new();
+        vfs.mount(AbsolutePath::try_new("/dev").unwrap(), TestFs::default())
+            .unwrap();
+
+        assert_eq!(
+            Err(MkdirError::NotFound),
+            vfs.create_directory(AbsolutePath::try_new("/sub").unwrap())
+        );
+    }
+
+    #[test]
+    fn create_directory_on_mount_point_is_already_exists() {
+        let mut vfs = Vfs::new();
+        vfs.mount(ROOT, TestFs::default()).unwrap();
+        let dev = AbsolutePath::try_new("/dev").unwrap();
+        vfs.mount(dev, TestFs::default()).unwrap();
+
+        assert_eq!(Err(MkdirError::AlreadyExists), vfs.create_directory(dev));
+        assert_eq!(Err(MkdirError::AlreadyExists), vfs.create_directory(ROOT));
     }
 }

@@ -209,6 +209,15 @@ ext2_image(
     files = {"//tests/bins:term_sleeper": "bin/term-sleeper"},
 )
 
+ext2_image(
+    name = "vfs_mkdir_disk",
+    contents = {
+        "spawn": "/bin/exit-code\n",
+        "vfs-mkdir": "1\n",
+    },
+    files = {"//tests/bins:exit_code": "bin/exit-code"},
+)
+
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
 # harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
 #
@@ -265,5 +274,6 @@ ext2_image(
         "sleep",
         "true_false",
         "unwind",
+        "vfs_mkdir",
     ]
 ]

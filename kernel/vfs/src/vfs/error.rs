@@ -114,3 +114,19 @@ pub enum TruncateError {
     #[error("truncate failed")]
     TruncateFailed,
 }
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
+pub enum MkdirError {
+    #[error("the parent directory does not exist")]
+    NotFound,
+    #[error("already exists")]
+    AlreadyExists,
+    #[error("no space left to create the directory")]
+    NoSpace,
+    #[error("the directory name is longer than the file system allows")]
+    NameTooLong,
+    #[error("the file system cannot create directories")]
+    NotSupported,
+    #[error("mkdir failed")]
+    MkdirFailed,
+}

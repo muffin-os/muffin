@@ -16,8 +16,8 @@ use kernel_abi::IoctlRequest;
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CloseError, CreateMode, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError,
-    Stat, StatError, TruncateError, WriteError,
+    CloseError, CreateMode, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion, OpenError,
+    ReadError, Stat, StatError, TruncateError, WriteError,
 };
 
 #[derive(Clone)]
@@ -50,6 +50,10 @@ impl Deref for ArcLockedDevFs {
 impl FileSystem for ArcLockedDevFs {
     fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError> {
         self.inner.write().open(path, create)
+    }
+
+    fn create_directory(&mut self, path: &AbsolutePath) -> Result<(), MkdirError> {
+        self.inner.write().create_directory(path)
     }
 
     fn close(&mut self, handle: FsHandle) -> Result<(), CloseError> {

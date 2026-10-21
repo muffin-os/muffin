@@ -10,7 +10,7 @@ use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile};
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, Path};
 use kernel_vfs::{
-    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError,
+    CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadError, Stat, StatError,
     TruncateError, WriteError,
 };
 use spin::RwLock;
@@ -86,6 +86,17 @@ where
             }),
         );
         Ok(handle)
+    }
+
+    fn create_directory(&mut self, path: &AbsolutePath) -> Result<(), MkdirError> {
+        let (mut parent, name) = self
+            .lookup_parent(path)
+            .map_err(mkdir_error)?
+            .ok_or(MkdirError::NotFound)?;
+        self.ext2fs
+            .create_directory(&mut parent, name)
+            .map(|_| ())
+            .map_err(mkdir_error)
     }
 
     fn close(&mut self, handle: FsHandle) -> Result<(), CloseError> {
@@ -224,36 +235,30 @@ where
     }
 
     fn create(&mut self, path: &AbsolutePath) -> Result<RegularFile, OpenError> {
-        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-            return Err(OpenError::NotFound);
-        };
-        let mut parent = self
-            .lookup(parent)?
-            .and_then(|found| Directory::try_from(found).ok())
+        let (mut parent, name) = self
+            .lookup_parent(path)
+            .map_err(create_error)?
             .ok_or(OpenError::NotFound)?;
         self.create_regular_file(&mut parent, name)
-            .map_err(|e| match e {
-                // a parent whose direct blocks are full is out of room from the caller's view
-                Error::NoSpace | Error::NotSupported => OpenError::NoSpace,
-                Error::EntryExists => OpenError::AlreadyExists,
-                Error::NameTooLong => OpenError::NameTooLong,
-                Error::InvalidSuperblock
-                | Error::UnableToReadSuperblock
-                | Error::UnableToWriteSuperblock
-                | Error::UnableToReadBlockGroupDescriptorTable
-                | Error::UnableToWriteBlockGroupDescriptorTable
-                | Error::InvalidBlockGroupDescriptor(_)
-                | Error::NotDirectory
-                | Error::NotRegularFile
-                | Error::DeviceRead
-                | Error::DeviceWrite
-                | Error::InvalidInodeAddress(_)
-                | Error::InvalidBlockIndex(_)
-                | Error::InvalidDirEntryType(_)
-                | Error::InvalidDirEntry
-                | Error::InvalidBlockAddress(_)
-                | Error::FileTooLarge => OpenError::OpenFailed,
-            })
+            .map_err(create_error)
+    }
+
+    // None when the parent is missing or not a directory, so nothing can be created below it
+    fn lookup_parent<'p>(
+        &self,
+        path: &'p AbsolutePath,
+    ) -> Result<Option<(Directory, &'p str)>, Error> {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Ok(None);
+        };
+        let found = match self.find_inode(parent) {
+            // a path component is a file, so nothing exists below it
+            Err(Error::NotDirectory) => None,
+            other => other?,
+        };
+        Ok(found
+            .and_then(|found| Directory::try_from(found).ok())
+            .map(|dir| (dir, name)))
     }
 
     fn find_inode(&self, path: &Path) -> Result<Option<(InodeAddress, Inode)>, Error> {
@@ -280,6 +285,56 @@ where
         }
 
         Ok(Some((current_num, current)))
+    }
+}
+
+fn create_error(e: Error) -> OpenError {
+    match e {
+        // a parent whose direct blocks are full is out of room from the caller's view
+        Error::NoSpace | Error::NotSupported => OpenError::NoSpace,
+        Error::EntryExists => OpenError::AlreadyExists,
+        Error::NameTooLong => OpenError::NameTooLong,
+        Error::InvalidSuperblock
+        | Error::UnableToReadSuperblock
+        | Error::UnableToWriteSuperblock
+        | Error::UnableToReadBlockGroupDescriptorTable
+        | Error::UnableToWriteBlockGroupDescriptorTable
+        | Error::InvalidBlockGroupDescriptor(_)
+        | Error::NotDirectory
+        | Error::NotRegularFile
+        | Error::DeviceRead
+        | Error::DeviceWrite
+        | Error::InvalidInodeAddress(_)
+        | Error::InvalidBlockIndex(_)
+        | Error::InvalidDirEntryType(_)
+        | Error::InvalidDirEntry
+        | Error::InvalidBlockAddress(_)
+        | Error::FileTooLarge => OpenError::OpenFailed,
+    }
+}
+
+fn mkdir_error(e: Error) -> MkdirError {
+    match e {
+        // a parent with full direct blocks or at its link limit is out of room from the caller's view
+        Error::NoSpace | Error::NotSupported => MkdirError::NoSpace,
+        Error::EntryExists => MkdirError::AlreadyExists,
+        Error::NameTooLong => MkdirError::NameTooLong,
+        Error::InvalidSuperblock
+        | Error::UnableToReadSuperblock
+        | Error::UnableToWriteSuperblock
+        | Error::UnableToReadBlockGroupDescriptorTable
+        | Error::UnableToWriteBlockGroupDescriptorTable
+        | Error::InvalidBlockGroupDescriptor(_)
+        | Error::NotDirectory
+        | Error::NotRegularFile
+        | Error::DeviceRead
+        | Error::DeviceWrite
+        | Error::InvalidInodeAddress(_)
+        | Error::InvalidBlockIndex(_)
+        | Error::InvalidDirEntryType(_)
+        | Error::InvalidDirEntry
+        | Error::InvalidBlockAddress(_)
+        | Error::FileTooLarge => MkdirError::MkdirFailed,
     }
 }
 

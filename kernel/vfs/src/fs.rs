@@ -2,8 +2,8 @@ use kernel_abi::IoctlRequest;
 
 use crate::path::AbsolutePath;
 use crate::{
-    CloseError, CreateMode, FsyncError, IoctlError, MmapError, MmapRegion, OpenError, ReadError,
-    Stat, StatError, TruncateError, WriteError,
+    CloseError, CreateMode, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion, OpenError,
+    ReadError, Stat, StatError, TruncateError, WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -34,6 +34,22 @@ pub trait FileSystem: Send + Sync {
     /// - [`OpenError::OpenFailed`] for an underlying error, such as a hardware
     ///   error.
     fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError>;
+
+    /// Creates an empty directory at `path`.
+    ///
+    /// # Errors
+    /// - [`MkdirError::NotFound`] if the parent of `path` does not exist or
+    ///   is not a directory.
+    /// - [`MkdirError::AlreadyExists`] if something exists at `path`.
+    /// - [`MkdirError::NotSupported`] if the file system cannot create
+    ///   directories.
+    /// - [`MkdirError::NoSpace`] if the file system has no room for the
+    ///   directory.
+    /// - [`MkdirError::NameTooLong`] if the directory name is longer than the
+    ///   file system allows.
+    /// - [`MkdirError::MkdirFailed`] for an underlying error, such as a
+    ///   hardware error.
+    fn create_directory(&mut self, path: &AbsolutePath) -> Result<(), MkdirError>;
 
     /// # Errors
     /// Returns an error if the handle is invalid or already closed,

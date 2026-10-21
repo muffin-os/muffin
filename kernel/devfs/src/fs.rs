@@ -8,8 +8,8 @@ use kernel_abi::IoctlRequest;
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CloseError, CreateMode, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError,
-    ReadError, Stat, StatError, TruncateError, WriteError,
+    CloseError, CreateMode, FsError, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion,
+    OpenError, ReadError, Stat, StatError, TruncateError, WriteError,
 };
 use thiserror::Error;
 
@@ -170,6 +170,10 @@ impl FileSystem for DevFs {
         Ok(handle)
     }
 
+    fn create_directory(&mut self, _path: &AbsolutePath) -> Result<(), MkdirError> {
+        Err(MkdirError::NotSupported)
+    }
+
     fn close(&mut self, handle: FsHandle) -> Result<(), CloseError> {
         self.open_files.remove(&handle).ok_or(CloseError::NotOpen)?;
         Ok(())
@@ -288,6 +292,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(Err(TruncateError::NotSupported), devfs.truncate(handle, 0));
+    }
+
+    #[test]
+    fn create_directory_is_not_supported() {
+        let mut devfs = DevFs::new();
+
+        assert_eq!(
+            Err(MkdirError::NotSupported),
+            devfs.create_directory(AbsolutePath::try_new("/sub").unwrap())
+        );
     }
 
     #[test]

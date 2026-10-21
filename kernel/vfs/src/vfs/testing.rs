@@ -1,5 +1,5 @@
 use alloc::borrow::ToOwned;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::iter::successors;
 use core::sync::atomic::AtomicU64;
@@ -10,7 +10,7 @@ use spin::RwLock;
 use crate::fs::{FileSystem, FsHandle};
 use crate::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use crate::{
-    CloseError, CreateMode, FsError, FsyncError, OpenError, ReadError, Stat, StatError,
+    CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadError, Stat, StatError,
     TruncateError, WriteError,
 };
 
@@ -18,6 +18,7 @@ use crate::{
 pub struct TestFs {
     handle_counter: AtomicU64,
     files: BTreeMap<AbsoluteOwnedPath, RwLock<Vec<u8>>>,
+    directories: BTreeSet<AbsoluteOwnedPath>,
     open_files: BTreeMap<FsHandle, AbsoluteOwnedPath>,
 }
 
@@ -27,9 +28,10 @@ impl TestFs {
             .insert(path.as_ref().to_owned(), RwLock::new(data));
     }
 
-    // Directories are implicit: the root and every ancestor of a file exist.
+    // Besides the created ones, the root and every ancestor of a file are directories.
     fn has_directory(&self, dir: &AbsolutePath) -> bool {
         dir == ROOT
+            || self.directories.contains(dir)
             || self
                 .files
                 .keys()
@@ -57,6 +59,20 @@ impl FileSystem for TestFs {
         let handle = FsHandle::from(self.handle_counter.fetch_add(1, Relaxed));
         self.open_files.insert(handle, path.to_owned());
         Ok(handle)
+    }
+
+    fn create_directory(&mut self, path: &AbsolutePath) -> Result<(), MkdirError> {
+        if self.files.contains_key(path) || self.has_directory(path) {
+            return Err(MkdirError::AlreadyExists);
+        }
+        if !path
+            .parent()
+            .is_some_and(|parent| self.has_directory(parent))
+        {
+            return Err(MkdirError::NotFound);
+        }
+        self.directories.insert(path.to_owned());
+        Ok(())
     }
 
     fn close(&mut self, handle: FsHandle) -> Result<(), CloseError> {

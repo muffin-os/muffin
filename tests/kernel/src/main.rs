@@ -3,8 +3,9 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::vec;
+use alloc::{format, vec};
 use core::ffi::c_void;
 use core::ptr;
 
@@ -116,6 +117,17 @@ unsafe extern "C" fn main() -> ! {
             past_end_mapped,
             last_page_reserved
         );
+    }
+
+    // Directory creation has no syscall yet, so the probe drives the vfs
+    // directly and leaves a file behind for the host to read back.
+    if AbsolutePath::try_new("/vfs-mkdir")
+        .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok())
+    {
+        match create_probe_directory_with_file() {
+            Ok(()) => kernel::serial_println!("test-kernel: vfs-mkdir ok"),
+            Err(e) => kernel::serial_println!("test-kernel: vfs-mkdir FAIL {}", e),
+        }
     }
 
     let attach_exec_sibling = AbsolutePath::try_new("/exec-sibling")
@@ -251,6 +263,21 @@ extern "C" fn overflow_kernel_stack(_: *mut c_void) {
     }
 
     core::hint::black_box(recurse(0));
+}
+
+fn create_probe_directory_with_file() -> Result<(), String> {
+    let vfs = vfs().read();
+    vfs.create_directory(AbsolutePath::try_new("/probe").expect("should be a valid path"))
+        .map_err(|e| format!("mkdir: {e}"))?;
+    let file = vfs
+        .open(
+            AbsolutePath::try_new("/probe/f").expect("should be a valid path"),
+            CreateMode::Exclusive,
+        )
+        .map_err(|e| format!("open: {e}"))?;
+    file.write(b"made by the test kernel\n", 0)
+        .map_err(|e| format!("write: {e}"))?;
+    Ok(())
 }
 
 /// Parks like a task blocked in a syscall, so the execve reaper must wake it
