@@ -32,6 +32,7 @@ use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
 mod signal;
+mod wait;
 
 pub struct KernelAccess {
     process: Arc<Process>,

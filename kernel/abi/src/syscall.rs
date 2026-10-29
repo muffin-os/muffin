@@ -67,4 +67,6 @@ n! {
     SYS_EXECVE = 53,
     SYS_SHUTDOWN = 54,
     SYS_FORK = 55,
+    SYS_GETPPID = 56,
+    SYS_WAITPID = 57,
 }

@@ -114,12 +114,7 @@ impl DerefMut for Signals {
 
 pub type SignalsWriteGuard<'a> = RwLockWriteGuard<'a, Signals>;
 
-/// How a process ended. Recorded once on the first terminating event.
-#[derive(Debug, Copy, Clone)]
-pub enum ExitOutcome {
-    Exited(usize),
-    Signaled(kernel_abi::Signal),
-}
+pub use kernel_syscall::access::ExitOutcome;
 
 #[must_use]
 pub enum ParkOutcome {

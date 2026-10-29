@@ -8,6 +8,7 @@ pub mod fcntl;
 pub mod mman;
 pub mod signal;
 pub mod unistd;
+pub mod wait;
 
 mod ptr;
 pub use ptr::*;

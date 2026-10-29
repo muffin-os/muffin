@@ -1,4 +1,4 @@
-use kernel_abi::ProcessId;
+use kernel_abi::{Errno, ProcessId, Signal};
 
 pub trait ProcessesAccess {
     type Process: ProcessAccess;
@@ -21,4 +21,35 @@ pub trait ProcessesAccess {
 pub trait ProcessAccess {
     fn process_id(&self) -> ProcessId;
     fn process_group_id(&self) -> ProcessId;
+}
+
+/// How a process ended. The first terminating event wins.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ExitOutcome {
+    Exited(usize),
+    Signaled(Signal),
+}
+
+impl ExitOutcome {
+    /// The status `waitpid` reports: the exit code, or 128 plus the signal
+    /// number for a signaled process.
+    #[must_use]
+    pub fn wait_status(self) -> i32 {
+        match self {
+            ExitOutcome::Exited(code) => code as i32,
+            ExitOutcome::Signaled(signal) => 128 + signal.number(),
+        }
+    }
+}
+
+/// Process table lookups for `getppid` and `waitpid`.
+pub trait WaitAccess {
+    /// `None` when no process has `pid`.
+    fn parent_id(&self, pid: ProcessId) -> Option<ProcessId>;
+    fn exit_outcome(&self, pid: ProcessId) -> Option<ExitOutcome>;
+    /// Removes `pid` from the process table after a parent collected its
+    /// status. This is not the task reap of exec.
+    fn remove_process(&self, pid: ProcessId);
+    /// Sleeps one poll interval. `EINTR` when a signal interrupts the sleep.
+    fn sleep_one_poll(&self) -> Result<(), Errno>;
 }

@@ -13,6 +13,7 @@ use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::unistd::{sys_fsync, sys_getcwd, sys_ioctl, sys_lseek, sys_read, sys_write};
+use kernel_syscall::wait::{sys_getppid, sys_waitpid};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use tracing::{debug, error};
 use x86_64::VirtAddr;
@@ -49,6 +50,8 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_WRITE => dispatch_sys_write(arg1, arg2, arg3),
         kernel_abi::SYS_EXIT => dispatch_sys_exit(arg1),
         kernel_abi::SYS_GETPID => dispatch_sys_getpid(),
+        kernel_abi::SYS_GETPPID => dispatch_sys_getppid(),
+        kernel_abi::SYS_WAITPID => dispatch_sys_waitpid(arg1, arg2),
         kernel_abi::SYS_KILL => dispatch_sys_kill(arg1, arg2),
         kernel_abi::SYS_SIGACTION => dispatch_sys_sigaction(arg1, arg2, arg3),
         kernel_abi::SYS_SIGPROCMASK => dispatch_sys_sigprocmask(arg1, arg2, arg3),
@@ -91,6 +94,25 @@ fn dispatch_sys_shutdown() -> Result<usize, Errno> {
 
 fn dispatch_sys_getpid() -> Result<usize, Errno> {
     Ok(Process::current().pid().as_u64() as usize)
+}
+
+fn dispatch_sys_getppid() -> Result<usize, Errno> {
+    sys_getppid(&KernelAccess::new())
+}
+
+fn dispatch_sys_waitpid(pid: usize, status: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    // POSIX allows a null status, which skips the status writeback.
+    let status = if status == 0 {
+        None
+    } else {
+        let ptr = UserspaceMutPtr::<i32>::try_from_usize(status).map_err(|_| EFAULT)?;
+        ptr.validate_range(size_of::<i32>()).map_err(|_| EFAULT)?;
+        make_user_range_resident(ptr.addr(), size_of::<i32>(), UserAccess::Write)?;
+        Some(ptr)
+    };
+    sys_waitpid(&cx, ProcessId::from(pid as u64), status)
 }
 
 fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {

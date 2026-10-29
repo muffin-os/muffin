@@ -21,10 +21,10 @@ pub use kernel_abi::{
     O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK,
     O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX,
     ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK,
-    SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP,
-    SYS_NANOSLEEP, SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
-    SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WRITE, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet,
-    Signal, Stat, StrSlice, Timespec, Whence,
+    SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK,
+    SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
+    SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WAITPID, SYS_WRITE, SaFlags, SigAction, SigHandler,
+    SigMaskHow, SigSet, Signal, Stat, StrSlice, Timespec, Whence,
 };
 pub use panic::catch_unwind;
 pub use start::{__muffin_start_inner, args, env};
@@ -155,6 +155,18 @@ pub fn getpid() -> i64 {
 /// Returns `Ok(0)` in the child and `Ok(child_pid)` in the parent.
 pub fn fork() -> Result<i64, Errno> {
     ret(unsafe { syscall0(SYS_FORK) }).map(|pid| pid as i64)
+}
+
+pub fn getppid() -> i64 {
+    unsafe { syscall0(SYS_GETPPID) as i64 }
+}
+
+/// Waits until the child `pid` exits and returns its status: the exit code,
+/// or 128 plus the signal number.
+pub fn waitpid(pid: i64) -> Result<i32, Errno> {
+    let mut status = 0i32;
+    ret(unsafe { syscall2(SYS_WAITPID, pid as usize, &raw mut status as usize) })?;
+    Ok(status)
 }
 
 /// Builds the action that runs `handler` with an empty mask and returns
