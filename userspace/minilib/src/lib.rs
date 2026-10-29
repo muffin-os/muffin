@@ -8,6 +8,7 @@ mod io;
 mod panic;
 mod start;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
@@ -15,16 +16,16 @@ use core::ffi::c_int;
 
 pub use io::{Stderr, Stdout};
 pub use kernel_abi::{
-    ARG_MAX, ClockId, DefaultAction, E2BIG, EACCES, EBADF, EEXIST, EFAULT, EINTR, EINVAL, EISDIR,
-    ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTDIR, ENOTTY, EOVERFLOW, EPERM, ERANGE,
-    ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, O_ACCMODE, O_APPEND, O_CLOEXEC,
-    O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK,
-    O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX,
-    ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK,
-    SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK,
-    SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
-    SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WAITPID, SYS_WRITE, SaFlags, SigAction, SigHandler,
-    SigMaskHow, SigSet, Signal, Stat, StrSlice, Timespec, Whence,
+    ARG_MAX, ClockId, DefaultAction, DirentHeader, E2BIG, EACCES, EBADF, EEXIST, EFAULT, EINTR,
+    EINVAL, EISDIR, ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTDIR, ENOTTY, EOVERFLOW,
+    EPERM, ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, O_ACCMODE, O_APPEND,
+    O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW,
+    O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY,
+    PATH_MAX, ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT,
+    SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL,
+    SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION,
+    SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WAITPID, SYS_WRITE, SaFlags, SigAction,
+    SigHandler, SigMaskHow, SigSet, Signal, Stat, StrSlice, Timespec, Whence,
 };
 pub use panic::catch_unwind;
 pub use start::{__muffin_start_inner, args, env};
@@ -57,6 +58,58 @@ pub fn read(fd: c_int, buf: &mut [u8]) -> Result<usize, Errno> {
 pub fn write(fd: c_int, buf: &[u8]) -> Result<usize, Errno> {
     // Safety: `buf` is a live slice for the whole call.
     ret(unsafe { syscall3(SYS_WRITE, fd as usize, buf.as_ptr() as usize, buf.len()) })
+}
+
+/// Fills `buf` with whole directory records and returns the number of bytes
+/// written. `Ok(0)` means no entries remain.
+///
+/// # Errors
+/// Returns the kernel's errno, such as `ENOTDIR` when `fd` is not a directory
+/// or `EINVAL` when `buf` cannot hold the next record.
+pub fn getdents(fd: c_int, buf: &mut [u8]) -> Result<usize, Errno> {
+    // Safety: `buf` is a live, exclusive slice for the whole call.
+    ret(unsafe {
+        syscall3(
+            SYS_GETDENTS,
+            fd as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+        )
+    })
+}
+
+/// Returns the names in the directory at `path`, including `.` and `..`, in
+/// the order the file system stores them.
+///
+/// # Errors
+/// Returns the errno of `open` or `getdents`, such as `ENOENT` or `ENOTDIR`.
+pub fn read_dir(path: &str) -> Result<Vec<String>, Errno> {
+    let fd = open(path, O_RDONLY)?;
+    let mut names = Vec::new();
+    let result = read_dir_fd(fd, &mut names);
+    let closed = close(fd);
+    result.and(closed).map(|()| names)
+}
+
+fn read_dir_fd(fd: c_int, names: &mut Vec<String>) -> Result<(), Errno> {
+    let mut buf = [0_u8; 1024];
+    loop {
+        let len = getdents(fd, &mut buf)?;
+        if len == 0 {
+            return Ok(());
+        }
+        let mut records = &buf[..len];
+        while !records.is_empty() {
+            let header = DirentHeader {
+                name_len: records[0],
+            };
+            let body = &records[size_of::<DirentHeader>()..];
+            let (name, rest) = body.split_at(header.name_len.into());
+            // The kernel only lists names that are valid UTF-8.
+            names.push(String::from_utf8_lossy(name).into_owned());
+            records = rest;
+        }
+    }
 }
 
 pub fn lseek(fd: c_int, offset: i64, whence: Whence) -> Result<u64, Errno> {

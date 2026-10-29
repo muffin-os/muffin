@@ -1,9 +1,11 @@
+use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
     EACCES, EBADF, EEXIST, EFBIG, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV, ENOENT, ENOMEM,
-    ENOSPC, ENOTTY, Errno, IoctlRequest, ProtFlags, Stat,
+    ENOSPC, ENOSYS, ENOTDIR, ENOTTY, Errno, IoctlRequest, ProtFlags, Stat,
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
@@ -12,8 +14,8 @@ use kernel_syscall::access::{
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CreateMode, FsError, FsyncError, IoctlError, MmapError, OpenError, ReadError, Stat as VfsStat,
-    TruncateError, WriteError,
+    CreateMode, FsError, FsyncError, IoctlError, MmapError, OpenError, ReadDirError, ReadError,
+    Stat as VfsStat, TruncateError, WriteError,
 };
 use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
@@ -164,6 +166,19 @@ impl FileAccess for KernelAccess {
                 TruncateError::FsError(FsError::FileSystemNotOpen)
                 | TruncateError::TruncateFailed => EIO,
             })
+    }
+
+    fn read_dir(&self, fd: Self::Fd) -> Result<Vec<String>, Errno> {
+        let fds = self.process.file_descriptors();
+        let guard = fds.read();
+
+        let desc = guard.get(&fd).ok_or(EBADF)?;
+        desc.file_description().read_dir().map_err(|e| match e {
+            ReadDirError::NotDirectory => ENOTDIR,
+            ReadDirError::NotSupported => ENOSYS,
+            ReadDirError::ReadFailed => EIO,
+            ReadDirError::FsError(_) => EBADF,
+        })
     }
 
     fn ioctl(&self, fd: Self::Fd, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, Errno> {

@@ -9,66 +9,67 @@ limine_iso(
 _HELLO = "muffin says hi\n"
 
 # The kernel cmdline in limine.conf names `/bin/init`, so every disk puts
-# `test-init` there. The `spawn` file is the manifest `test-init` forks and
-# execs, one line per process, in the order the assertions index them.
+# `test-init` there. `test-init` forks and execs every file in `/bin/tests` in
+# byte-wise sorted name order. The assertions index that order, so a disk that
+# runs several entries names them `0-`, `1-`, and so on.
 ext2_image(
     name = "mmap_disk",
-    contents = {"spawn": "/bin/mmap\n/bin/mmap\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:mmap": "bin/mmap",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-mmap": "//tests/bins:mmap",
+        "bin/tests/1-mmap": "//tests/bins:mmap",
     },
 )
 
 ext2_image(
     name = "signals_disk",
-    contents = {"spawn": "/bin/signals-init\n/bin/signals-init\n"},
     files = {
-        "//tests/bins:signals_init": "bin/signals-init",
-        "//tests/bins:test_init": "bin/init",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-signals-init": "//tests/bins:signals_init",
+        "bin/tests/1-signals-init": "//tests/bins:signals_init",
     },
 )
 
 ext2_image(
     name = "signals_edge_disk",
-    contents = {"spawn": "/bin/signals-edge\n" * 6},
     files = {
-        "//tests/bins:signals_edge": "bin/signals-edge",
-        "//tests/bins:test_init": "bin/init",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-signals-edge": "//tests/bins:signals_edge",
+        "bin/tests/1-signals-edge": "//tests/bins:signals_edge",
+        "bin/tests/2-signals-edge": "//tests/bins:signals_edge",
+        "bin/tests/3-signals-edge": "//tests/bins:signals_edge",
+        "bin/tests/4-signals-edge": "//tests/bins:signals_edge",
+        "bin/tests/5-signals-edge": "//tests/bins:signals_edge",
     },
+    # Six copies of a debug build do not fit into the 64M default.
+    image_size = "128M",
 )
 
 ext2_image(
     name = "sleep_disk",
-    contents = {"spawn": "/bin/sleep\n/bin/sleep\n"},
     files = {
-        "//tests/bins:sleep": "bin/sleep",
-        "//tests/bins:test_init": "bin/init",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-sleep": "//tests/bins:sleep",
+        "bin/tests/1-sleep": "//tests/bins:sleep",
     },
 )
 
 ext2_image(
     name = "exit_codes_disk",
-    contents = {
-        "data/hello.txt": _HELLO,
-        "spawn": "/bin/exit-code\n/bin/file-read\n",
-    },
+    contents = {"data/hello.txt": _HELLO},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:exit_code": "bin/exit-code",
-        "//tests/bins:file_read": "bin/file-read",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-exit-code": "//tests/bins:exit_code",
+        "bin/tests/1-file-read": "//tests/bins:file_read",
     },
 )
 
 ext2_image(
     name = "file_read_disk",
-    contents = {
-        "data/hello.txt": _HELLO,
-        "spawn": "/bin/file-read\n",
-    },
+    contents = {"data/hello.txt": _HELLO},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:file_read": "bin/file-read",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/file-read": "//tests/bins:file_read",
     },
 )
 
@@ -81,109 +82,90 @@ ext2_image(
         "data/over.txt": _SEED,
         "data/seed.txt": _SEED,
         "data/trunc.txt": _SEED,
-        "spawn": "/bin/file-write\n",
     },
     empty_dirs = ["data/dir"],
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:file_write": "bin/file-write",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/file-write": "//tests/bins:file_write",
     },
 )
 
 ext2_image(
     name = "floats_disk",
-    contents = {"spawn": "/bin/floats\n/bin/floats\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:floats": "bin/floats",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-floats": "//tests/bins:floats",
+        "bin/tests/1-floats": "//tests/bins:floats",
     },
 )
 
 ext2_image(
     name = "fb_ioctl_disk",
-    contents = {"spawn": "/bin/fb-ioctl\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:fb_ioctl": "bin/fb-ioctl",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/fb-ioctl": "//tests/bins:fb_ioctl",
     },
 )
 
 ext2_image(
     name = "fb_mmap_disk",
-    contents = {"spawn": "/bin/fb-mmap\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:fb_mmap": "bin/fb-mmap",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/fb-mmap": "//tests/bins:fb_mmap",
     },
 )
 
 ext2_image(
     name = "heap_bounds_disk",
-    contents = {
-        "heap-bounds": "1\n",
-        "spawn": "/bin/exit-code\n",
-    },
+    contents = {"heap-bounds": "1\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:exit_code": "bin/exit-code",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/exit-code": "//tests/bins:exit_code",
     },
 )
 
 ext2_image(
     name = "kstack_overflow_disk",
-    contents = {
-        "kernel-stack-overflow": "1\n",
-        "spawn": "/bin/exit-code\n",
-    },
+    contents = {"kernel-stack-overflow": "1\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:exit_code": "bin/exit-code",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/exit-code": "//tests/bins:exit_code",
     },
 )
 
 ext2_image(
     name = "map_range_rollback_disk",
-    contents = {
-        "map-range-rollback": "1\n",
-        "spawn": "/bin/exit-code\n",
-    },
+    contents = {"map-range-rollback": "1\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:exit_code": "bin/exit-code",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/exit-code": "//tests/bins:exit_code",
     },
 )
 
 ext2_image(
     name = "cow_clone_disk",
-    contents = {
-        "cow-clone": "1\n",
-        "spawn": "/bin/exit-code\n",
-    },
+    contents = {"cow-clone": "1\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:exit_code": "bin/exit-code",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/exit-code": "//tests/bins:exit_code",
     },
 )
 
 ext2_image(
     name = "posix_disk",
-    contents = {
-        "data/hello.txt": _HELLO,
-        "spawn": "/bin/posix\n",
-    },
+    contents = {"data/hello.txt": _HELLO},
     empty_dirs = ["data/dir"],
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:posix": "bin/posix",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/posix": "//tests/bins:posix",
     },
 )
 
 ext2_image(
     name = "unwind_disk",
-    contents = {"spawn": "/bin/unwind\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:unwind": "bin/unwind",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/unwind": "//tests/bins:unwind",
     },
 )
 
@@ -203,23 +185,23 @@ genrule(
           "' > $@",
 )
 
+# `exec-target` stays outside `/bin/tests` because the execve test execs it.
 ext2_image(
     name = "execve_disk",
     contents = {
         "data/hello.txt": _HELLO,
         "data/notelf.txt": "definitely not an ELF\n",
-        "spawn": "/bin/execve\n",
     },
     files = {
-        "//tests/bins:test_init": "bin/init",
-        ":noncanonical_entry_elf": "data/noncanonical-entry.elf",
-        "//tests/bins:exec_target": "bin/exec-target",
-        "//tests/bins:execve": "bin/execve",
+        "bin/init": "//tests/bins:test_init",
+        "data/noncanonical-entry.elf": ":noncanonical_entry_elf",
+        "bin/exec-target": "//tests/bins:exec_target",
+        "bin/tests/execve": "//tests/bins:execve",
     },
 )
 
 # The sibling task is attached by the kernel to the init process, so the
-# execve test itself is `/bin/init` here and no manifest is involved.
+# execve test itself is `/bin/init` here and `test-init` does not run.
 ext2_image(
     name = "execve_reap_disk",
     contents = {
@@ -228,77 +210,72 @@ ext2_image(
         "exec-sibling": "1\n",
     },
     files = {
-        ":noncanonical_entry_elf": "data/noncanonical-entry.elf",
-        "//tests/bins:exec_target": "bin/exec-target",
-        "//tests/bins:execve": "bin/init",
+        "data/noncanonical-entry.elf": ":noncanonical_entry_elf",
+        "bin/exec-target": "//tests/bins:exec_target",
+        "bin/init": "//tests/bins:execve",
     },
 )
 
+# `exit-code` stays outside `/bin/tests` because the fork test execs it.
 ext2_image(
     name = "fork_disk",
-    contents = {"spawn": "/bin/fork\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:exit_code": "bin/exit-code",
-        "//tests/bins:fork": "bin/fork",
+        "bin/init": "//tests/bins:test_init",
+        "bin/exit-code": "//tests/bins:exit_code",
+        "bin/tests/fork": "//tests/bins:fork",
     },
 )
 
 ext2_image(
     name = "true_false_disk",
-    contents = {"spawn": "/bin/true\n/bin/false\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//userspace/utilities/false": "bin/false",
-        "//userspace/utilities/true": "bin/true",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-true": "//userspace/utilities/true",
+        "bin/tests/1-false": "//userspace/utilities/false",
     },
 )
 
 ext2_image(
     name = "shutdown_disk",
-    contents = {"spawn": "/bin/shutdown\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//userspace/utilities/shutdown": "bin/shutdown",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/shutdown": "//userspace/utilities/shutdown",
     },
 )
 
 ext2_image(
     name = "shutdown_ignore_disk",
-    contents = {"spawn": "/bin/term-ignorer\n/bin/term-ignorer\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:term_ignorer": "bin/term-ignorer",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-term-ignorer": "//tests/bins:term_ignorer",
+        "bin/tests/1-term-ignorer": "//tests/bins:term_ignorer",
     },
 )
 
 ext2_image(
     name = "shutdown_sigterm_disk",
-    contents = {"spawn": "/bin/term-witness\n/bin/term-witness\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:term_witness": "bin/term-witness",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-term-witness": "//tests/bins:term_witness",
+        "bin/tests/1-term-witness": "//tests/bins:term_witness",
     },
 )
 
 ext2_image(
     name = "shutdown_sigterm_sleep_disk",
-    contents = {"spawn": "/bin/term-sleeper\n/bin/term-sleeper\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:term_sleeper": "bin/term-sleeper",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-term-sleeper": "//tests/bins:term_sleeper",
+        "bin/tests/1-term-sleeper": "//tests/bins:term_sleeper",
     },
 )
 
 ext2_image(
     name = "vfs_mkdir_disk",
-    contents = {
-        "spawn": "/bin/exit-code\n",
-        "vfs-mkdir": "1\n",
-    },
+    contents = {"vfs-mkdir": "1\n"},
     files = {
-        "//tests/bins:test_init": "bin/init",
-        "//tests/bins:exit_code": "bin/exit-code",
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/exit-code": "//tests/bins:exit_code",
     },
 )
 

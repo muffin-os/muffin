@@ -1,7 +1,7 @@
 //! End-to-end POSIX conformance test for the syscall surface.
 //!
-//! Boots the generic `test-kernel` under QEMU with `/bin/posix` in the
-//! `/spawn` manifest. The guest binary walks one group per syscall family,
+//! Boots the generic `test-kernel` under QEMU with `/bin/posix` as the only
+//! `/bin/tests` entry. The guest binary walks one group per syscall family,
 //! pinning return values, argument validation, and errno selection against
 //! the real kernel. Each group announces itself as `posix: group <name>`, and
 //! each failed check names itself as `posix: FAIL <group>/<case>`.

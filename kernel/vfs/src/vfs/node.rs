@@ -1,4 +1,6 @@
+use alloc::string::String;
 use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 use core::ops::Deref;
 
@@ -9,8 +11,8 @@ use crate::fs::{FileSystem, FsHandle};
 use crate::path::AbsoluteOwnedPath;
 use crate::vfs::stat::Stat;
 use crate::{
-    FsError, FsyncError, IoctlError, MmapError, MmapRegion, ReadError, StatError, TruncateError,
-    WriteError,
+    FsError, FsyncError, IoctlError, MmapError, MmapRegion, ReadDirError, ReadError, StatError,
+    TruncateError, WriteError,
 };
 
 #[derive(Clone)]
@@ -105,6 +107,19 @@ impl VfsNode {
 
         let mut guard = fs.write();
         guard.truncate(self.fs_handle, len_bytes)
+    }
+
+    /// Returns the entry names of this directory, as [`FileSystem::read_dir`]
+    /// describes.
+    ///
+    /// # Errors
+    /// Returns [`FsError::FileSystemNotOpen`] if the file system is no longer
+    /// mounted, and otherwise any error of [`FileSystem::read_dir`].
+    pub fn read_dir(&self) -> Result<Vec<String>, ReadDirError> {
+        let fs = self.fs.upgrade().ok_or(FsError::FileSystemNotOpen)?;
+
+        let mut guard = fs.write();
+        guard.read_dir(self.fs_handle)
     }
 
     pub fn stat(&self, stat: &mut Stat) -> Result<(), StatError> {

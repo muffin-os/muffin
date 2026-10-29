@@ -13,7 +13,7 @@ use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::unistd::{
-    sys_close, sys_fsync, sys_getcwd, sys_ioctl, sys_lseek, sys_read, sys_write,
+    sys_close, sys_fsync, sys_getcwd, sys_getdents, sys_ioctl, sys_lseek, sys_read, sys_write,
 };
 use kernel_syscall::wait::{sys_getppid, sys_waitpid};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
@@ -54,6 +54,7 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_GETPID => dispatch_sys_getpid(),
         kernel_abi::SYS_GETPPID => dispatch_sys_getppid(),
         kernel_abi::SYS_WAITPID => dispatch_sys_waitpid(arg1, arg2),
+        kernel_abi::SYS_GETDENTS => dispatch_sys_getdents(arg1, arg2, arg3),
         kernel_abi::SYS_KILL => dispatch_sys_kill(arg1, arg2),
         kernel_abi::SYS_SIGACTION => dispatch_sys_sigaction(arg1, arg2, arg3),
         kernel_abi::SYS_SIGPROCMASK => dispatch_sys_sigprocmask(arg1, arg2, arg3),
@@ -334,6 +335,17 @@ fn dispatch_sys_read(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno
     let slice = unsafe { slice_from_ptr_and_len_mut(buf, nbyte) }?;
     make_user_range_resident(buf, nbyte, UserAccess::Write)?;
     sys_read(&cx, fd, slice)
+}
+
+fn dispatch_sys_getdents(fd: usize, buf: usize, len: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    let fd = <KernelAccess as FileAccess>::Fd::from(fd);
+
+    let slice = unsafe { slice_from_ptr_and_len_mut(buf, len) }?;
+    make_user_range_resident(buf, len, UserAccess::Write)?;
+    sys_getdents(&cx, fd, slice)
 }
 
 fn dispatch_sys_write(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno> {

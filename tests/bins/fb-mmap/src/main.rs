@@ -58,7 +58,7 @@ fn main() -> i32 {
 
     // Shared mapping of a regular ext2 file is unsupported (FileSystem::mmap
     // default rejects it), so the syscall must fail.
-    let Ok(spawn_fd) = open("/spawn", O_RDONLY) else {
+    let Ok(file_fd) = open("/bin/init", O_RDONLY) else {
         println!("fb-mmap: FAIL shared-regular");
         return 1;
     };
@@ -67,7 +67,7 @@ fn main() -> i32 {
         4096,
         ProtFlags::READ | ProtFlags::WRITE,
         MapFlags::SHARED,
-        spawn_fd,
+        file_fd,
         0,
     )
     .is_ok()

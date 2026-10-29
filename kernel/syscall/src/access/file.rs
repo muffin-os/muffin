@@ -1,3 +1,5 @@
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::ffi::c_int;
 
 use kernel_abi::{EINVAL, ENOSYS, ENOTTY, Errno, IoctlRequest, Stat};
@@ -132,17 +134,30 @@ pub trait FileAccess {
         let _ = (fd, position);
         Err(ENOSYS)
     }
+
+    /// Returns the names of the entries of the open directory `fd`, including
+    /// `.` and `..`, in file system order.
+    ///
+    /// # Errors
+    /// Returns `EBADF` when `fd` is not open, `ENOTDIR` when it is not a
+    /// directory, `EIO` when the backing file system failed and `ENOSYS` when
+    /// the file system cannot list directories.
+    fn read_dir(&self, fd: Self::Fd) -> Result<Vec<String>, Errno> {
+        let _ = fd;
+        Err(ENOSYS)
+    }
 }
 
 #[cfg(test)]
 pub mod testing {
     use alloc::borrow::ToOwned;
-    use alloc::collections::BTreeMap;
+    use alloc::collections::{BTreeMap, BTreeSet};
+    use alloc::string::String;
     use alloc::sync::Arc;
     use alloc::vec::Vec;
     use core::ffi::c_int;
 
-    use kernel_abi::{EBADF, EEXIST, EINVAL, ENOENT, Errno, Stat};
+    use kernel_abi::{EBADF, EEXIST, EINVAL, ENOENT, ENOTDIR, Errno, Stat};
     use kernel_vfs::CreateMode;
     use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath};
     use spin::mutex::Mutex;
@@ -159,6 +174,22 @@ pub mod testing {
     impl MemoryFileAccess {
         fn open_fd(&mut self, fd: MemoryFd) -> Result<&mut OpenMemoryFile, Errno> {
             self.open_fds.get_mut(&fd).ok_or(EBADF)
+        }
+
+        /// Names of the direct children of `dir`. A directory exists when it
+        /// has a file below it, so an empty result means there is no directory.
+        fn children(&self, dir: &AbsolutePath) -> BTreeSet<String> {
+            let mut names = BTreeSet::new();
+            for file in self.files.keys() {
+                let mut entry: &AbsolutePath = file.as_ref();
+                while let Some(parent) = entry.parent() {
+                    if parent == dir {
+                        names.extend(entry.file_name().map(ToOwned::to_owned));
+                    }
+                    entry = parent;
+                }
+            }
+            names
         }
     }
 
@@ -185,6 +216,7 @@ pub mod testing {
     }
 
     struct OpenMemoryFile {
+        path: AbsoluteOwnedPath,
         file: Arc<MemoryFile>,
         position: u64,
         access: AccessMode,
@@ -222,7 +254,8 @@ pub mod testing {
             create: CreateMode,
         ) -> Result<Self::FileInfo, Errno> {
             let mut guard = self.lock();
-            match (guard.files.contains_key(path), create) {
+            let exists = guard.files.contains_key(path) || !guard.children(path).is_empty();
+            match (exists, create) {
                 (true, CreateMode::Exclusive) => return Err(EEXIST),
                 (true, CreateMode::Never | CreateMode::IfMissing) => {}
                 (false, CreateMode::Never) => return Err(ENOENT),
@@ -240,7 +273,12 @@ pub mod testing {
         fn open(&self, info: &Self::FileInfo, access: AccessMode, append: bool) -> Self::Fd {
             let mut guard = self.lock();
 
-            let file = guard.files[&info.path].clone();
+            // A directory has no entry in `files`. It opens as an empty file.
+            let file = guard
+                .files
+                .get(&info.path)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(MemoryFile::new(Vec::new())));
             let fd_num: c_int = guard
                 .open_fds
                 .keys()
@@ -249,6 +287,7 @@ pub mod testing {
             guard.open_fds.insert(
                 fd.clone(),
                 OpenMemoryFile {
+                    path: info.path.clone(),
                     file,
                     position: 0,
                     access,
@@ -333,6 +372,17 @@ pub mod testing {
             let mut guard = self.lock();
             guard.open_fd(fd)?.position = position;
             Ok(())
+        }
+
+        fn read_dir(&self, fd: Self::Fd) -> Result<Vec<String>, Errno> {
+            let mut guard = self.lock();
+            let path = guard.open_fd(fd)?.path.clone();
+            if guard.files.contains_key(&path) {
+                return Err(ENOTDIR);
+            }
+            let mut names = Vec::from([".".to_owned(), "..".to_owned()]);
+            names.extend(guard.children(path.as_ref()));
+            Ok(names)
         }
     }
 }

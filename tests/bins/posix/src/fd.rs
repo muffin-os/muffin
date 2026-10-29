@@ -1,7 +1,8 @@
 use minilib::{
-    EACCES, EBADF, EEXIST, EFAULT, EINVAL, EISDIR, ENOENT, ENOTTY, FbScreenInfo, IoctlRequest,
-    O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SYS_IOCTL, SYS_LSEEK, SYS_READ,
-    SYS_WRITE, Stat, Whence, close, fstat, fsync, ioctl, lseek, open, read, ret, write,
+    DirentHeader, EACCES, EBADF, EEXIST, EFAULT, EINVAL, EISDIR, ENOENT, ENOTDIR, ENOTTY,
+    FbScreenInfo, IoctlRequest, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SYS_IOCTL,
+    SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, close, fstat, fsync, getdents, ioctl, lseek,
+    open, read, ret, write,
 };
 
 use crate::check;
@@ -143,6 +144,39 @@ pub fn run() {
     check::expect_err("fd/read_dir", read(dir, &mut one), EISDIR);
     check::expect_ok("fd/fstat_dir", fstat(dir, &mut stat), ());
     check::require("fd/fstat_dir_size", stat.size == 1024);
+
+    let mut dents = [0u8; 256];
+    let n = check::unwrap_or_fail("fd/getdents_dir", getdents(dir, &mut dents));
+    check::require("fd/getdents_dir_nonempty", n > 0);
+    let mut names: [&[u8]; 2] = [&[], &[]];
+    let mut count = 0;
+    let mut at = 0;
+    while at < n {
+        let start = at + size_of::<DirentHeader>();
+        let end = start + dents[at] as usize;
+        if count < names.len() {
+            names[count] = &dents[start..end];
+        }
+        count += 1;
+        at = end;
+    }
+    check::require(
+        "fd/getdents_dot_entries",
+        count == 2 && names == [b".".as_slice(), b"..".as_slice()],
+    );
+    check::expect_ok("fd/getdents_eof", getdents(dir, &mut dents), 0);
+    check::expect_err(
+        "fd/getdents_regular_file",
+        getdents(fd, &mut dents),
+        ENOTDIR,
+    );
+    let fresh = check::unwrap_or_fail("fd/getdents_open", open("/data/dir", O_RDONLY));
+    check::expect_err(
+        "fd/getdents_short_buf",
+        getdents(fresh, &mut dents[..1]),
+        EINVAL,
+    );
+    check::expect_ok("fd/getdents_close", close(fresh), ());
 
     let via_dotdot =
         check::unwrap_or_fail("fd/open_dotdot", open("/data/dir/../hello.txt", O_RDONLY));

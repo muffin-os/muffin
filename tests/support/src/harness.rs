@@ -5,11 +5,11 @@
 //! against the ISO and disk its Bazel target declared, and collects the serial
 //! transcript. The kernel starts the `init=` executable from its cmdline as
 //! pid 1. The integration disks put `test-init` there. It forks and execs
-//! every line of the `/spawn` manifest, so a single boot can fan out into
+//! every file in `/bin/tests` in sorted name order, so one boot can fan out into
 //! several processes whose outcomes `test-init` reports after `waitpid`.
 //!
 //! The wire contract is four serial lines. `test-init` prints
-//! `test-init: spawned {path} pid={N}` per manifest entry, then
+//! `test-init: spawned {path} pid={N}` per `/bin/tests` entry, then
 //! `test-init: spawn complete count={N}`, then per child
 //! `test-init: outcome pid={N} exit={code}` or
 //! `test-init: outcome pid={N} signal={NAME}`. The test kernel prints
@@ -461,7 +461,7 @@ pub enum Outcome {
     Signaled(String),
 }
 
-/// A process `test-init` spawned from the manifest, with its final outcome.
+/// A process `test-init` spawned from `/bin/tests`, with its final outcome.
 pub struct SpawnedProcess {
     pub path: String,
     pub pid: u64,
@@ -469,7 +469,7 @@ pub struct SpawnedProcess {
 }
 
 /// The result of a completed boot: the full serial transcript and the outcome
-/// of every spawned process in manifest (and thus pid) order.
+/// of every spawned process in `/bin/tests` (and thus pid) order.
 pub struct RunReport {
     pub transcript: Vec<String>,
     pub processes: Vec<SpawnedProcess>,

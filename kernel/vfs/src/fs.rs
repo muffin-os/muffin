@@ -1,9 +1,12 @@
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use kernel_abi::IoctlRequest;
 
 use crate::path::AbsolutePath;
 use crate::{
     CloseError, CreateMode, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion, OpenError,
-    ReadError, Stat, StatError, TruncateError, WriteError,
+    ReadDirError, ReadError, Stat, StatError, TruncateError, WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -96,6 +99,23 @@ pub trait FileSystem: Send + Sync {
     /// - [`TruncateError::TruncateFailed`] for an underlying error, such as a
     ///   hardware error.
     fn truncate(&mut self, handle: FsHandle, len_bytes: u64) -> Result<(), TruncateError>;
+
+    /// Returns the names of the entries of the directory at `handle`,
+    /// including `.` and `..`, in file system order.
+    ///
+    /// The default impl rejects with [`ReadDirError::NotSupported`].
+    ///
+    /// # Errors
+    /// - [`ReadDirError::FsError`] if the handle is invalid or already closed.
+    /// - [`ReadDirError::NotDirectory`] if the file at `handle` is not a
+    ///   directory.
+    /// - [`ReadDirError::NotSupported`] if the file system cannot list
+    ///   directories.
+    /// - [`ReadDirError::ReadFailed`] for an underlying error, such as a
+    ///   hardware error.
+    fn read_dir(&mut self, _handle: FsHandle) -> Result<Vec<String>, ReadDirError> {
+        Err(ReadDirError::NotSupported)
+    }
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError>;
 

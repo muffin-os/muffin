@@ -32,11 +32,11 @@ ext2_image(
         "var/tmp",
     ],
     files = {
-        "//userspace/fbdemo": "bin/fbdemo",
-        "//userspace/init": "bin/init",
-        "//userspace/utilities/false": "bin/false",
-        "//userspace/utilities/true": "bin/true",
-        "//userspace/utilities/shutdown": "bin/shutdown",
+        "bin/fbdemo": "//userspace/fbdemo",
+        "bin/init": "//userspace/init",
+        "bin/false": "//userspace/utilities/false",
+        "bin/true": "//userspace/utilities/true",
+        "bin/shutdown": "//userspace/utilities/shutdown",
     },
 )
 

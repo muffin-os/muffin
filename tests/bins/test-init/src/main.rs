@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
-//! The init process of the integration tests. It reads `/spawn`, one absolute
-//! path per line, forks one child per line and execs the path in the child.
+//! The init process of the integration tests. It lists `/bin/tests`, sorts the
+//! names byte-wise, forks one child per file and execs the file in the child.
 //! Then it reaps every child and prints the wire-contract lines the host
 //! harness parses: `spawned`, `spawn complete` and `outcome`.
 
@@ -11,25 +11,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use minilib::{O_RDONLY, Signal, close, execve, exit, fork, open, println, read, waitpid, write};
+use minilib::{Signal, execve, exit, fork, println, read_dir, waitpid, write};
 
 minilib::entry!(main);
-
-/// The children inherit every open fd across fork and exec, so the manifest
-/// fd is closed before the first fork.
-fn read_manifest() -> Result<Vec<u8>, &'static str> {
-    let fd = open("/spawn", O_RDONLY).map_err(|_| "open")?;
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 512];
-    loop {
-        let n = read(fd, &mut chunk).map_err(|_| "read")?;
-        if n == 0 {
-            close(fd).map_err(|_| "close")?;
-            return Ok(buf);
-        }
-        buf.extend_from_slice(&chunk[..n]);
-    }
-}
 
 /// The children print concurrently and the serial port is shared, so a
 /// wire-contract line goes out in one write syscall, which holds the serial
@@ -45,20 +29,21 @@ fn report(line: fmt::Arguments) {
 }
 
 fn main() -> i32 {
-    let manifest = match read_manifest() {
-        Ok(manifest) => manifest,
-        Err(what) => {
-            println!("test-init: FAIL {what} /spawn");
+    let mut names = match read_dir("/bin/tests") {
+        Ok(names) => names,
+        Err(e) => {
+            println!("test-init: FAIL read_dir /bin/tests {e}");
             return 1;
         }
     };
-    let Ok(manifest) = core::str::from_utf8(&manifest) else {
-        println!("test-init: FAIL /spawn is not UTF-8");
-        return 1;
-    };
+    names.retain(|name| name != "." && name != "..");
+    // The assertions index the spawn order, so it must not depend on the disk order.
+    names.sort();
 
     let mut children = Vec::new();
-    for path in manifest.lines().filter(|line| !line.is_empty()) {
+    for name in names {
+        let path = alloc::format!("/bin/tests/{name}");
+        let path = path.as_str();
         match fork() {
             Ok(0) => {
                 let errno = execve(path, &[path], &[]);

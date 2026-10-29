@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(negative_impls)]
 
+mod dirent;
 mod errno;
 mod fcntl;
 mod ioctl;
@@ -14,6 +15,7 @@ mod time;
 
 pub mod gfx;
 
+pub use dirent::*;
 pub use errno::*;
 pub use fcntl::*;
 pub use ioctl::*;

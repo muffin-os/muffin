@@ -4,7 +4,7 @@ use minilib::{
 
 use crate::check;
 
-const EXE_PATH: &[u8] = b"/bin/posix";
+const EXE_PATH: &[u8] = b"/bin/tests/posix";
 
 const KERNEL_ADDR: usize = 0xFFFF_8000_0000_0000;
 
@@ -21,7 +21,7 @@ pub fn run() {
 
 fn identity() {
     let pid = getpid();
-    check::require("process/getpid_first_manifest_entry", pid == 2);
+    check::require("process/getpid_first_entry", pid == 2);
     check::require("process/getpid_stable", getpid() == pid);
 }
 

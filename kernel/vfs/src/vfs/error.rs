@@ -60,6 +60,22 @@ pub enum ReadError {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
+pub enum ReadDirError {
+    #[error("{0}")]
+    FsError(
+        #[from]
+        #[source]
+        FsError,
+    ),
+    #[error("file is not a directory")]
+    NotDirectory,
+    #[error("the file system cannot list directories")]
+    NotSupported,
+    #[error("read dir failed")]
+    ReadFailed,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
 pub enum WriteError {
     #[error("{0}")]
     FsError(

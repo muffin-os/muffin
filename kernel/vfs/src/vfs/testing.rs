@@ -1,5 +1,6 @@
 use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::iter::successors;
 use core::sync::atomic::AtomicU64;
@@ -10,8 +11,8 @@ use spin::RwLock;
 use crate::fs::{FileSystem, FsHandle};
 use crate::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use crate::{
-    CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadError, Stat, StatError,
-    TruncateError, WriteError,
+    CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadDirError, ReadError,
+    Stat, StatError, TruncateError, WriteError,
 };
 
 #[derive(Default)]
@@ -41,7 +42,9 @@ impl TestFs {
 
 impl FileSystem for TestFs {
     fn open(&mut self, path: &AbsolutePath, create: CreateMode) -> Result<FsHandle, OpenError> {
-        let exists = self.files.contains_key(path);
+        // shortcut: read, write, truncate and stat panic on a directory handle;
+        // return errors once a test needs them.
+        let exists = self.files.contains_key(path) || self.has_directory(path);
         match (exists, create) {
             (true, CreateMode::Exclusive) => return Err(OpenError::AlreadyExists),
             (true, CreateMode::Never | CreateMode::IfMissing) => {}
@@ -130,6 +133,31 @@ impl FileSystem for TestFs {
         Ok(())
     }
 
+    fn read_dir(&mut self, handle: FsHandle) -> Result<Vec<String>, ReadDirError> {
+        let dir: &AbsolutePath = self
+            .open_files
+            .get(&handle)
+            .ok_or(FsError::InvalidHandle)?
+            .as_ref();
+        if self.files.contains_key(dir) {
+            return Err(ReadDirError::NotDirectory);
+        }
+        let children: BTreeSet<&str> = self
+            .files
+            .keys()
+            .chain(&self.directories)
+            .filter_map(|path| {
+                successors(Some(path.as_ref()), |p| p.parent()).find(|p| p.parent() == Some(dir))
+            })
+            .filter_map(|child| child.file_name())
+            .collect();
+        Ok([".", ".."]
+            .into_iter()
+            .chain(children)
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {
         let path = self.open_files.get(&handle).ok_or(FsError::InvalidHandle)?;
         stat.size = self.files[path].read().len();
@@ -143,10 +171,14 @@ impl FileSystem for TestFs {
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::ToOwned;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use crate::fs::{FileSystem, FsHandle};
     use crate::path::{AbsoluteOwnedPath, AbsolutePath};
     use crate::testing::TestFs;
-    use crate::{CloseError, CreateMode, FsError, TruncateError};
+    use crate::{CloseError, CreateMode, FsError, ReadDirError, TruncateError};
 
     #[test]
     fn test_open_close() {
@@ -185,5 +217,29 @@ mod tests {
             Err(TruncateError::FsError(FsError::InvalidHandle)),
             fs.truncate(FsHandle::from(u64::MAX), 0)
         );
+    }
+
+    #[test]
+    fn read_dir_lists_only_direct_children() {
+        let mut fs = TestFs::default();
+        fs.insert_file(AbsolutePath::try_new("/d/a").unwrap(), Vec::new());
+        fs.insert_file(AbsolutePath::try_new("/d/sub/nested").unwrap(), Vec::new());
+        let dir = fs
+            .open(AbsolutePath::try_new("/d").unwrap(), CreateMode::Never)
+            .unwrap();
+        let file = fs
+            .open(AbsolutePath::try_new("/d/a").unwrap(), CreateMode::Never)
+            .unwrap();
+
+        assert_eq!(
+            Ok(vec![
+                ".".to_owned(),
+                "..".to_owned(),
+                "a".to_owned(),
+                "sub".to_owned()
+            ]),
+            fs.read_dir(dir)
+        );
+        assert_eq!(Err(ReadDirError::NotDirectory), fs.read_dir(file));
     }
 }

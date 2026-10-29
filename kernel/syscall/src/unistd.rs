@@ -1,6 +1,6 @@
 use core::slice::from_raw_parts_mut;
 
-use kernel_abi::{EINVAL, EOVERFLOW, ERANGE, Errno, IoctlRequest, Whence};
+use kernel_abi::{DirentHeader, EINVAL, EIO, EOVERFLOW, ERANGE, Errno, IoctlRequest, Whence};
 use tracing::{Level, instrument};
 
 use crate::access::{CwdAccess, FileAccess};
@@ -92,12 +92,59 @@ pub fn sys_lseek<Cx: FileAccess>(
     usize::try_from(target).map_err(Into::into)
 }
 
+/// Writes whole directory records into `buf`, starting at the entry the
+/// position of `fildes` names, and moves the position past them. Returns the
+/// number of bytes written. `Ok(0)` means no entries remain.
+///
+/// # Errors
+/// `EINVAL` when the first record does not fit `buf`. Any error of
+/// [`FileAccess::read_dir`], [`FileAccess::position`] or
+/// [`FileAccess::set_position`], such as `EBADF`, `ENOTDIR` or `ENOSYS`, is
+/// passed through.
+#[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
+pub fn sys_getdents<Cx: FileAccess>(
+    cx: &Cx,
+    fildes: Cx::Fd,
+    buf: &mut [u8],
+) -> Result<usize, Errno> {
+    let names = cx.read_dir(fildes.clone())?;
+    let first = usize::try_from(cx.position(fildes.clone())?).unwrap_or(usize::MAX);
+
+    let mut written = 0;
+    let mut count = 0;
+    for name in names.iter().skip(first) {
+        let header = DirentHeader {
+            name_len: u8::try_from(name.len()).map_err(|_| EIO)?,
+        };
+        let header_len = size_of::<DirentHeader>();
+        let end = written + header_len + name.len();
+        if end > buf.len() {
+            break;
+        }
+        // Safety: `DirentHeader` is `repr(C)` and has no padding.
+        let header_bytes = unsafe {
+            core::slice::from_raw_parts(core::ptr::from_ref(&header).cast::<u8>(), header_len)
+        };
+        buf[written..written + header_len].copy_from_slice(header_bytes);
+        buf[written + header_len..end].copy_from_slice(name.as_bytes());
+        written = end;
+        count += 1;
+    }
+
+    if count == 0 && first < names.len() {
+        return Err(EINVAL);
+    }
+    cx.set_position(fildes, (first + count) as u64)?;
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
     use alloc::vec;
+    use alloc::vec::Vec;
 
-    use kernel_abi::{EBADF, EINVAL, EOVERFLOW, ERANGE, Whence};
+    use kernel_abi::{EBADF, EINVAL, ENOTDIR, EOVERFLOW, ERANGE, Whence};
     use kernel_vfs::CreateMode;
     use kernel_vfs::path::AbsoluteOwnedPath;
     use spin::mutex::Mutex;
@@ -105,7 +152,7 @@ mod tests {
 
     use crate::access::testing::{MemoryFd, MemoryFile, MemoryFileAccess};
     use crate::access::{AccessMode, CwdAccess, FileAccess};
-    use crate::unistd::{sys_getcwd, sys_lseek, sys_read, sys_write};
+    use crate::unistd::{sys_getcwd, sys_getdents, sys_lseek, sys_read, sys_write};
 
     struct Cwd(RwLock<AbsoluteOwnedPath>);
 
@@ -279,5 +326,63 @@ mod tests {
             Err(EOVERFLOW),
             "a SEEK_CUR result past the largest representable offset must be rejected"
         );
+    }
+
+    /// Opens `/d`, which holds the files `a` and `bb`.
+    fn getdents_fixture() -> (Mutex<MemoryFileAccess>, MemoryFd) {
+        let mut file_access = MemoryFileAccess::default();
+        for path in ["/d/a", "/d/bb"] {
+            file_access.files.insert(
+                AbsoluteOwnedPath::try_from(path).unwrap(),
+                Arc::new(MemoryFile::new(Vec::new())),
+            );
+        }
+        let cx = Mutex::new(file_access);
+
+        let info = cx
+            .file_info("/d".try_into().unwrap(), CreateMode::Never)
+            .expect("fixture directory must exist");
+        let fd = cx.open(&info, AccessMode::ReadOnly, false);
+        (cx, fd)
+    }
+
+    const GETDENTS_RECORDS: [&[u8]; 4] = [b"\x01.", b"\x02..", b"\x01a", b"\x02bb"];
+
+    #[test]
+    fn sys_getdents_writes_all_records_that_fit() {
+        let (cx, fd) = getdents_fixture();
+        let mut buf = [0xFF_u8; 16];
+
+        assert_eq!(Ok(10), sys_getdents(&cx, fd.clone(), &mut buf));
+        assert_eq!(GETDENTS_RECORDS.concat(), &buf[..10]);
+        assert_eq!(Ok(4), cx.position(fd.clone()));
+        assert_eq!(Ok(0), sys_getdents(&cx, fd, &mut buf));
+    }
+
+    #[test]
+    fn sys_getdents_resumes_after_a_full_buffer() {
+        let (cx, fd) = getdents_fixture();
+        let mut buf = [0_u8; 3];
+
+        for record in GETDENTS_RECORDS {
+            assert_eq!(Ok(record.len()), sys_getdents(&cx, fd.clone(), &mut buf));
+            assert_eq!(record, &buf[..record.len()]);
+        }
+        assert_eq!(Ok(0), sys_getdents(&cx, fd, &mut buf));
+    }
+
+    #[test]
+    fn sys_getdents_rejects_a_buffer_too_small_for_the_first_record() {
+        let (cx, fd) = getdents_fixture();
+
+        assert_eq!(Err(EINVAL), sys_getdents(&cx, fd.clone(), &mut [0_u8; 1]));
+        assert_eq!(Ok(0), cx.position(fd));
+    }
+
+    #[test]
+    fn sys_getdents_rejects_a_regular_file() {
+        let (cx, fd) = lseek_fixture();
+
+        assert_eq!(Err(ENOTDIR), sys_getdents(&cx, fd, &mut [0_u8; 16]));
     }
 }

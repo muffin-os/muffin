@@ -4,7 +4,7 @@
 //! prints its pid and parent pid, increments a stack local and a static,
 //! which the parent must not see, and execs `/bin/exit-code`, which exits
 //! 42. The parent waits for the child with `waitpid`, prints the status 42
-//! and exits 42. The child's pid is not in the `/spawn` tracker, so only its
+//! and exits 42. `test-init` does not announce the child's pid, so only its
 //! transcript lines are asserted.
 
 use test_support::{KernelTest, host_env};

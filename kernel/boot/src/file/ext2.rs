@@ -1,5 +1,7 @@
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
@@ -9,8 +11,8 @@ use kernel_ext2::{Directory, Error, Ext2Fs, Inode, InodeAddress, RegularFile};
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsolutePath, Path};
 use kernel_vfs::{
-    CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadError, Stat, StatError,
-    TruncateError, WriteError,
+    CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadDirError, ReadError,
+    Stat, StatError, TruncateError, WriteError,
 };
 use spin::RwLock;
 
@@ -176,6 +178,31 @@ where
                 .truncate_file(file, len_bytes)
                 .map_err(|_| TruncateError::TruncateFailed),
             OpenInode::Directory(_) => Err(TruncateError::NotSupported),
+        }
+    }
+
+    fn read_dir(&mut self, handle: FsHandle) -> Result<Vec<String>, ReadDirError> {
+        let inode = &self
+            .handles
+            .get(&handle)
+            .ok_or(FsError::InvalidHandle)?
+            .inode;
+
+        let guard = inode.read();
+        match &*guard {
+            OpenInode::Directory(dir) => self
+                .ext2fs
+                .list_dir(dir)
+                .map_err(|_| ReadDirError::ReadFailed)?
+                .iter()
+                .map(|entry| {
+                    entry
+                        .name()
+                        .map(String::from)
+                        .ok_or(ReadDirError::ReadFailed)
+                })
+                .collect(),
+            OpenInode::RegularFile(_) => Err(ReadDirError::NotDirectory),
         }
     }
 

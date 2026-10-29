@@ -69,4 +69,5 @@ n! {
     SYS_FORK = 55,
     SYS_GETPPID = 56,
     SYS_WAITPID = 57,
+    SYS_GETDENTS = 58,
 }

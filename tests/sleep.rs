@@ -1,7 +1,7 @@
 //! End-to-end nanosleep test.
 //!
-//! Boots the shared generic `test-kernel` under QEMU with a two-line `/spawn`
-//! manifest that launches two instances of `/bin/sleep`. The victim first
+//! Boots the shared generic `test-kernel` under QEMU with two `/bin/tests`
+//! entries that run two instances of `/bin/sleep`. The victim first
 //! proves the happy path, a 200ms sleep that
 //! parks the task and returns 0 only after the monotonic clock moved at least
 //! 200ms. It then parks in a 10s sleep with a SIGURG handler installed, and

@@ -1,7 +1,7 @@
 //! End-to-end signal delivery test.
 //!
-//! Boots the shared generic `test-kernel` under QEMU with a two-line `/spawn`
-//! manifest that launches two instances of `/bin/signals-init` (a driver and
+//! Boots the shared generic `test-kernel` under QEMU with two `/bin/tests`
+//! entries that run two instances of `/bin/signals-init` (a driver and
 //! a victim). The harness boots the images its Bazel target declared and
 //! parses the serial transcript.
 //!

@@ -1,8 +1,8 @@
 //! End-to-end test for x87 and SSE save and restore across context switches
 //! and signal delivery.
 //!
-//! Boots the shared generic `test-kernel` under QEMU with a `/spawn` manifest
-//! that launches `/bin/floats` twice. Each instance loads known x87 and SSE
+//! Boots the shared generic `test-kernel` under QEMU with two `/bin/tests`
+//! entries that both run `/bin/floats`. Each instance loads known x87 and SSE
 //! state derived from its own pid, spins so the scheduler preempts it, then
 //! compares the registers bit exactly. It also raises `SIGUSR1` on itself with
 //! a handler that clobbers every XMM register, so `sigreturn` must restore the

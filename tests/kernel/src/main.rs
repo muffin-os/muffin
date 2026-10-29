@@ -54,8 +54,8 @@ static COW_PROBE_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Boots the real kernel, mounts the root ext2 filesystem, then starts the
 /// `init=` executable from the kernel cmdline as pid 1 and waits for it to
-/// exit. The integration disks put `test-init` there, which spawns the
-/// `/spawn` manifest and reports every outcome.
+/// exit. The integration disks put `test-init` there, which spawns every file
+/// in `/bin/tests` and reports every outcome.
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
     assert!(BASE_REVISION.is_supported());

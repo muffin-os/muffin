@@ -45,7 +45,7 @@ def _ext2_image_impl(ctx):
     for directory in ctx.attr.empty_dirs:
         cmds.append('mkdir -p "$root/{}"'.format(directory))
 
-    for target, dest in ctx.attr.files.items():
+    for dest, target in ctx.attr.files.items():
         staged = _single_file(target)
         inputs.append(staged)
         cmds.extend(_stage(dest, staged.path))
@@ -79,9 +79,9 @@ ext2_image = rule(
         "empty_dirs": attr.string_list(
             doc = "Directories to create inside the image with no contents.",
         ),
-        "files": attr.label_keyed_string_dict(
+        "files": attr.string_keyed_label_dict(
             allow_files = True,
-            doc = "Single-file target to its destination path inside the image.",
+            doc = "Destination path inside the image to a single-file target. One target may fill several destinations.",
         ),
         # Not `size`: Bazel reserves that attribute name for test targets.
         "image_size": attr.string(
