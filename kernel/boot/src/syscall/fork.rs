@@ -1,4 +1,3 @@
-use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::arch::x86_64::_fxsave64;
@@ -45,7 +44,7 @@ pub fn dispatch_sys_fork(
         unsafe { _fxsave64(fx.start().as_mut_ptr()) };
     }
 
-    let child = Process::create_new(&parent, parent.name().to_owned(), parent.executable_path());
+    let child = Process::create_new(&parent, parent.name(), parent.executable_path());
 
     if parent
         .memory_regions()

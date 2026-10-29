@@ -15,6 +15,6 @@ fn sigterm_handler_runs_during_nanosleep() {
         transcript
             .iter()
             .any(|line| line.contains("term-sleeper: sigterm received")),
-        "SIGTERM handler never ran while victim slept, transcript: {transcript:#?}"
+        "SIGTERM handler never ran while victim slept"
     );
 }

@@ -9,9 +9,9 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::fmt;
+use core::fmt::{self, Write};
 
-use minilib::{Signal, execve, exit, fork, println, read_dir, waitpid, write};
+use minilib::{Signal, Stdout, execve, exit, fork, println, read_dir, waitpid};
 
 minilib::entry!(main);
 
@@ -19,13 +19,7 @@ minilib::entry!(main);
 /// wire-contract line goes out in one write syscall, which holds the serial
 /// lock for the whole line.
 fn report(line: fmt::Arguments) {
-    let line = alloc::fmt::format(line);
-    let mut rest = line.as_bytes();
-    while let Ok(n) = write(1, rest)
-        && n > 0
-    {
-        rest = &rest[n..];
-    }
+    let _ = Stdout.write_str(&alloc::fmt::format(line));
 }
 
 fn main() -> i32 {

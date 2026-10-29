@@ -226,6 +226,16 @@ ext2_image(
     },
 )
 
+# The same binary is the driver in `/bin/tests` and the exec target outside it.
+ext2_image(
+    name = "exec_identity_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/exec-identity-target": "//tests/bins:exec_identity",
+        "bin/tests/exec-identity": "//tests/bins:exec_identity",
+    },
+)
+
 ext2_image(
     name = "true_false_disk",
     files = {
@@ -314,6 +324,7 @@ ext2_image(
     )
     for name in [
         "cow_clone",
+        "exec_identity",
         "exit_codes",
         "execve",
         "execve_reap",

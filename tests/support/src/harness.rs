@@ -18,6 +18,10 @@
 //! below tolerates a leading log prefix (timestamp, level, target) by
 //! anchoring on a substring inside the payload rather than matching from the
 //! start.
+//!
+//! The harness writes every serial line to stderr when it arrives. The Rust
+//! test framework captures stderr and shows it only for a failed test. Run
+//! with `--test_arg=--nocapture` to see the serial lines of a passing test.
 
 use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::fs::PermissionsExt;
@@ -173,9 +177,9 @@ impl KernelTest {
     /// and per-process outcomes.
     ///
     /// # Panics
-    /// Panics (after dumping the serial transcript) if QEMU exits before the
-    /// init process reports its outcome, if the deadline expires first, or if
-    /// any serial line contains `kernel panicked`.
+    /// Panics if QEMU exits before the init process reports its outcome, if the
+    /// deadline expires first, or if any serial line contains `kernel
+    /// panicked`.
     #[must_use]
     pub fn run(self) -> RunReport {
         let mut child = self.boot();
@@ -205,19 +209,17 @@ impl KernelTest {
                 None => deadline - now,
             };
             match rx.recv_timeout(timeout) {
-                Ok(Err(e)) => fail(&transcript, &mut child, format!("serial read failed: {e}")),
+                Ok(Err(e)) => fail(&mut child, format!("serial read failed: {e}")),
                 Ok(Ok(line)) => {
+                    eprintln!("{line}");
                     if line.contains("kernel panicked") {
-                        transcript.push(line.clone());
                         fail(
-                            &transcript,
                             &mut child,
                             format!("kernel panicked during the run: {line:?}"),
                         );
                     }
                     if let Err(message) = tracker.observe(&line) {
-                        transcript.push(line);
-                        fail(&transcript, &mut child, message);
+                        fail(&mut child, message);
                     }
                     transcript.push(line);
 
@@ -243,7 +245,6 @@ impl KernelTest {
 
         if child_exited_early {
             fail(
-                &transcript,
                 &mut child,
                 "QEMU exited before the init process reported an outcome; kernel likely \
                      panicked or triple-faulted"
@@ -252,7 +253,6 @@ impl KernelTest {
         }
         if complete_at.is_none() {
             fail(
-                &transcript,
                 &mut child,
                 "deadline expired before the init process reported an outcome".to_owned(),
             );
@@ -297,18 +297,16 @@ impl KernelTest {
             let now = Instant::now();
             if now >= deadline {
                 fail(
-                    &transcript,
                     &mut child,
                     "deadline expired before the guest powered off".to_owned(),
                 );
             }
             match rx.recv_timeout(deadline - now) {
-                Ok(Err(e)) => fail(&transcript, &mut child, format!("serial read failed: {e}")),
+                Ok(Err(e)) => fail(&mut child, format!("serial read failed: {e}")),
                 Ok(Ok(line)) => {
+                    eprintln!("{line}");
                     if line.contains("kernel panicked") {
-                        transcript.push(line.clone());
                         fail(
-                            &transcript,
                             &mut child,
                             format!("kernel panicked during the run: {line:?}"),
                         );
@@ -317,7 +315,6 @@ impl KernelTest {
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     fail(
-                        &transcript,
                         &mut child,
                         "deadline expired before the guest powered off".to_owned(),
                     );
@@ -329,10 +326,10 @@ impl KernelTest {
         let status = child.wait().expect("should be able to wait on qemu");
         let _ = reader.join();
 
-        if !status.success() {
-            dump_transcript(&transcript);
-            panic!("QEMU exited with {status}, expected a guest-initiated poweroff with status 0");
-        }
+        assert!(
+            status.success(),
+            "QEMU exited with {status}, expected a guest-initiated poweroff with status 0"
+        );
 
         transcript
     }
@@ -531,14 +528,13 @@ impl RunReport {
     /// Asserts the `index`-th spawned process exited with `expected`.
     ///
     /// # Panics
-    /// Dumps the transcript and panics if the process is missing, was signaled,
-    /// or exited with a different code.
+    /// Panics if the process is missing, was signaled, or exited with a
+    /// different code.
     pub fn assert_exit_code(&self, index: usize, expected: u64) {
         match self.processes.get(index).map(|p| &p.outcome) {
             Some(Outcome::Exited(code)) if *code == expected => {}
             other => {
-                self.dump();
-                panic!("process index {index} outcome was {other:?}, expected Exited({expected})");
+                panic!("process index {index} outcome was {other:?}, expected Exited({expected})")
             }
         }
     }
@@ -547,8 +543,8 @@ impl RunReport {
     /// the previous one's line.
     ///
     /// # Panics
-    /// Dumps the transcript and panics naming the first marker index not found
-    /// at or after its predecessor.
+    /// Panics naming the first marker index not found at or after its
+    /// predecessor.
     pub fn assert_markers_in_order(&self, markers: &[&str]) {
         let mut search_from = 0usize;
         for (i, marker) in markers.iter().enumerate() {
@@ -558,8 +554,7 @@ impl RunReport {
             {
                 Some(offset) => search_from += offset,
                 None => {
-                    self.dump();
-                    panic!("marker {i} ({marker:?}) not found at or after the previous marker");
+                    panic!("marker {i} ({marker:?}) not found at or after the previous marker")
                 }
             }
         }
@@ -568,46 +563,27 @@ impl RunReport {
     /// Asserts some transcript line contains `needle`.
     ///
     /// # Panics
-    /// Dumps the transcript and panics if no line contains `needle`.
+    /// Panics if no line contains `needle`.
     pub fn assert_line_contains(&self, needle: &str) {
-        if !self.transcript.iter().any(|line| line.contains(needle)) {
-            self.dump();
-            panic!("no transcript line contained {needle:?}");
-        }
+        assert!(
+            self.transcript.iter().any(|line| line.contains(needle)),
+            "no transcript line contained {needle:?}"
+        );
     }
 
     /// Asserts no transcript line contains `needle`.
     ///
     /// # Panics
-    /// Dumps the transcript and panics if any line contains `needle`.
+    /// Panics if any line contains `needle`.
     pub fn assert_no_line_contains(&self, needle: &str) {
         if let Some(line) = self.transcript.iter().find(|line| line.contains(needle)) {
-            self.dump();
             panic!("found forbidden line containing {needle:?}: {line:?}");
         }
     }
-
-    /// Prints the whole transcript to stderr, for a test that fails on its own
-    /// assertion.
-    pub fn dump(&self) {
-        dump_transcript(&self.transcript);
-    }
 }
 
-fn dump_transcript(transcript: &[String]) {
-    eprintln!(
-        "===== QEMU serial transcript ({} lines) =====",
-        transcript.len()
-    );
-    for line in transcript {
-        eprintln!("{line}");
-    }
-    eprintln!("===== end transcript =====");
-}
-
-/// Dumps the transcript, kills the child, then fails the test.
-fn fail(transcript: &[String], child: &mut Child, message: String) -> ! {
-    dump_transcript(transcript);
+/// Kills the child, then fails the test.
+fn fail(child: &mut Child, message: String) -> ! {
     let _ = child.kill();
     let _ = child.wait();
     panic!("{message}");

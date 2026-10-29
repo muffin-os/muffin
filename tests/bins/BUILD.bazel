@@ -11,6 +11,7 @@ package(default_visibility = ["//visibility:public"])
         deps = ["//userspace/minilib"],
     )
     for name, directory in {
+        "exec_identity": "exec-identity",
         "exec_target": "exec-target",
         "execve": "execve",
         "exit_code": "exit-code",

@@ -19,6 +19,6 @@ fn sigterm_ignorer_cannot_block_poweroff() {
         transcript
             .iter()
             .any(|line| line.contains("term-ignorer: ignoring sigterm")),
-        "SIGTERM was never set to ignore, transcript: {transcript:#?}"
+        "SIGTERM was never set to ignore"
     );
 }

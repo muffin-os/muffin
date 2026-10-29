@@ -148,7 +148,7 @@ impl SoleLiveTask<'_> {
 
 pub struct Process {
     pid: ProcessId,
-    name: String,
+    name: RwLock<String>,
 
     ppid: ProcessId,
 
@@ -193,7 +193,7 @@ impl Process {
             let pid = new_process_id();
             let root = Arc::new(Self {
                 pid,
-                name: "root".to_string(),
+                name: RwLock::new("root".to_string()),
                 ppid: pid,
                 executable_path: RwLock::new(None),
                 executable_segments: RwLock::new(vec![]),
@@ -234,7 +234,7 @@ impl Process {
 
         let process = Self {
             pid,
-            name,
+            name: RwLock::new(name),
             ppid: parent_pid,
             executable_path: RwLock::new(executable_path.map(|x| x.as_ref().to_owned())),
             executable_segments: RwLock::new(vec![]),
@@ -307,8 +307,8 @@ impl Process {
         self.ppid
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> String {
+        self.name.read().clone()
     }
 
     pub fn file_descriptors(&self) -> &RwLock<BTreeMap<FdNum, FileDescriptor>> {
@@ -342,7 +342,9 @@ impl Process {
         self.executable_path.read().clone()
     }
 
-    pub(crate) fn set_executable_path(&self, path: AbsoluteOwnedPath) {
+    /// Fork copies the parent name, so exec must replace it.
+    pub(crate) fn set_executable(&self, path: AbsoluteOwnedPath) {
+        *self.name.write() = path.to_string();
         *self.executable_path.write() = Some(path);
     }
 
@@ -506,7 +508,7 @@ impl Debug for Process {
         f.debug_struct("Process")
             .field("pid", &self.pid)
             .field("ppid", &self.ppid)
-            .field("name", &self.name)
+            .field("name", &*self.name.read())
             .field("address_space", self.address_space())
             .finish_non_exhaustive()
     }

@@ -49,7 +49,6 @@ fn signal_delivery_end_to_end() {
             .iter()
             .find(|line| line.contains("A: report "))
     {
-        report.dump();
         panic!(
             "report line did not match {:?}, found {actual:?}",
             MARKERS[3]

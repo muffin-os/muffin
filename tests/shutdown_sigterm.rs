@@ -19,6 +19,6 @@ fn sigterm_handler_runs_before_poweroff() {
         transcript
             .iter()
             .any(|line| line.contains("term-witness: sigterm received")),
-        "SIGTERM handler never ran before poweroff, transcript: {transcript:#?}"
+        "SIGTERM handler never ran before poweroff"
     );
 }

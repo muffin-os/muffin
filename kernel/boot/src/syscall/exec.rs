@@ -72,7 +72,7 @@ pub fn dispatch_sys_execve(
         terminate_current(Signal::Kill);
     };
 
-    process.set_executable_path(path);
+    process.set_executable(path);
     sole.finish_reap();
     process.signals_write().exec_reset();
 
