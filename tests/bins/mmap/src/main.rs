@@ -64,8 +64,8 @@ fn read_only() -> i32 {
 
 fn main() -> i32 {
     match getpid() {
-        1 => read_write(),
-        2 => read_only(),
+        2 => read_write(),
+        3 => read_only(),
         _ => {
             println!("mmap: unexpected pid");
             1

@@ -28,6 +28,7 @@ package(default_visibility = ["//visibility:public"])
         "term_ignorer": "term-ignorer",
         "term_sleeper": "term-sleeper",
         "term_witness": "term-witness",
+        "test_init": "test-init",
         "unwind": "unwind",
     }.items()
 ]

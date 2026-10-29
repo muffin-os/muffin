@@ -1,13 +1,13 @@
 //! End-to-end test that SIGTERM is not a shutdown veto.
 //!
-//! pid 1 sets the SIGTERM disposition to ignore and never exits. pid 2 issues
+//! pid 2 sets the SIGTERM disposition to ignore and never exits. pid 3 issues
 //! SYS_SHUTDOWN. The kernel's SIGTERM sweep therefore has a survivor, so the
 //! bounded grace expires, the APs are halted, and ACPI power-off happens
 //! anyway. QEMU exiting 0 before the harness deadline proves an ignoring
 //! process can delay shutdown by at most the grace, never block it. The
-//! marker proves the ignore was installed, and the missing SIGTERM outcome
-//! for pid 1 proves it was honoured. Wall-clock timing is deliberately not
-//! asserted because TCG makes it flaky.
+//! marker proves the ignore was installed. The same SIGTERM kills test-init,
+//! so no outcome line can prove the ignore was honoured. Wall-clock timing is
+//! deliberately not asserted because TCG makes it flaky.
 
 use test_support::{KernelTest, host_env};
 
@@ -20,11 +20,5 @@ fn sigterm_ignorer_cannot_block_poweroff() {
             .iter()
             .any(|line| line.contains("term-ignorer: ignoring sigterm")),
         "SIGTERM was never set to ignore, transcript: {transcript:#?}"
-    );
-    assert!(
-        !transcript
-            .iter()
-            .any(|line| line.contains("outcome pid=1 signal=SIGTERM")),
-        "the ignoring process was killed by SIGTERM, transcript: {transcript:#?}"
     );
 }

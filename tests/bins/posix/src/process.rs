@@ -21,7 +21,7 @@ pub fn run() {
 
 fn identity() {
     let pid = getpid();
-    check::require("process/getpid_first_manifest_entry", pid == 1);
+    check::require("process/getpid_first_manifest_entry", pid == 2);
     check::require("process/getpid_stable", getpid() == pid);
 }
 

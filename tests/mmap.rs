@@ -1,7 +1,7 @@
 //! End-to-end test for the anonymous `mmap` syscall.
 //!
-//! Pid 1 reports `mmap: ok` only if a pattern written across two anonymous
-//! pages reads back. Pid 2 writes to a `PROT_READ` page, which must kill it
+//! Pid 2 reports `mmap: ok` only if a pattern written across two anonymous
+//! pages reads back. Pid 3 writes to a `PROT_READ` page, which must kill it
 //! with SIGSEGV before it can report the write survived.
 
 use test_support::{KernelTest, host_env};
@@ -15,5 +15,5 @@ fn mmap_anon() {
 
     report.assert_line_contains("mmap: readonly write next");
     report.assert_no_line_contains("mmap: readonly write survived");
-    report.assert_line_contains("outcome pid=2 signal=SIGSEGV");
+    report.assert_line_contains("outcome pid=3 signal=SIGSEGV");
 }

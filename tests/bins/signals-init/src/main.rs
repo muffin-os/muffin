@@ -8,11 +8,11 @@ use minilib::{
     println, sigpending, sigprocmask, syscall3,
 };
 
-/// Spawn order fixes the pid, so the pid picks the role.
+/// Spawn order fixes the pid, so the pid picks the role. pid 1 is test-init.
 #[derive(Clone, Copy)]
 enum Role {
-    Driver = 1,
-    Victim = 2,
+    Driver = 2,
+    Victim = 3,
 }
 
 impl Role {
@@ -198,8 +198,8 @@ fn role_a() {
 }
 
 fn role_b() -> ! {
-    // `main` armed the ping handler before the role was known. pid 1 is created
-    // before pid 2, so the driver always exists to receive this announcement.
+    // `main` armed the ping handler before the role was known. The driver is
+    // forked before the victim, so it always exists to receive this announcement.
     let _ = kill(Role::Driver.pid(), ACK);
     println!("B: running");
 

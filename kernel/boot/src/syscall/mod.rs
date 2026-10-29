@@ -12,7 +12,9 @@ use kernel_syscall::access::{FileAccess, MemoryRegionAccess, PermissionAccess, P
 use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
-use kernel_syscall::unistd::{sys_fsync, sys_getcwd, sys_ioctl, sys_lseek, sys_read, sys_write};
+use kernel_syscall::unistd::{
+    sys_close, sys_fsync, sys_getcwd, sys_ioctl, sys_lseek, sys_read, sys_write,
+};
 use kernel_syscall::wait::{sys_getppid, sys_waitpid};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use tracing::{debug, error};
@@ -58,6 +60,7 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_SIGPENDING => dispatch_sys_sigpending(arg1),
         kernel_abi::SYS_IOCTL => dispatch_sys_ioctl(arg1, arg2, arg3),
         kernel_abi::SYS_FSYNC => dispatch_sys_fsync(arg1),
+        kernel_abi::SYS_CLOSE => dispatch_sys_close(arg1),
         kernel_abi::SYS_FSTAT => dispatch_sys_fstat(arg1, arg2),
         kernel_abi::SYS_LSEEK => dispatch_sys_lseek(arg1, arg2, arg3),
         kernel_abi::SYS_CLOCK_GETTIME => dispatch_sys_clock_gettime(arg1, arg2),
@@ -368,6 +371,15 @@ fn dispatch_sys_fsync(fd: usize) -> Result<usize, Errno> {
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     sys_fsync(&cx, fd)
+}
+
+fn dispatch_sys_close(fd: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    let fd = <KernelAccess as FileAccess>::Fd::from(fd);
+
+    sys_close(&cx, fd)
 }
 
 fn dispatch_sys_fstat(fd: usize, buf: usize) -> Result<usize, Errno> {

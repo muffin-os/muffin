@@ -59,6 +59,10 @@ pub fn sys_fsync<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd) -> Result<usize, Errno
     cx.fsync(fildes).map(|()| 0)
 }
 
+pub fn sys_close<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd) -> Result<usize, Errno> {
+    cx.close(fildes).map(|()| 0)
+}
+
 /// Moves an open file's offset and returns the new absolute offset.
 ///
 /// An offset beyond the end of the file is legal and is not clamped. A read

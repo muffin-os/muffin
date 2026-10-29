@@ -9,11 +9,11 @@ use minilib::{
     println, shutdown, sigaction,
 };
 
-/// Spawn order fixes the pid, so the pid picks the role.
+/// Spawn order fixes the pid, so the pid picks the role. pid 1 is test-init.
 #[derive(Clone, Copy)]
 enum Role {
-    Victim = 1,
-    Driver = 2,
+    Victim = 2,
+    Driver = 3,
 }
 
 impl Role {

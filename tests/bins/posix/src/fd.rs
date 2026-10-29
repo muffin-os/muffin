@@ -1,8 +1,7 @@
 use minilib::{
-    EACCES, EBADF, EEXIST, EFAULT, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTTY, FbScreenInfo,
-    IoctlRequest, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SYS_CLOSE, SYS_IOCTL,
-    SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, fstat, fsync, ioctl, lseek, open, read, ret,
-    write,
+    EACCES, EBADF, EEXIST, EFAULT, EINVAL, EISDIR, ENOENT, ENOTTY, FbScreenInfo, IoctlRequest,
+    O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SYS_IOCTL, SYS_LSEEK, SYS_READ,
+    SYS_WRITE, Stat, Whence, close, fstat, fsync, ioctl, lseek, open, read, ret, write,
 };
 
 use crate::check;
@@ -156,12 +155,11 @@ pub fn run() {
         ENOENT,
     );
 
-    check::expect_err(
-        "fd/close_unimplemented",
-        ret(unsafe { minilib::syscall1(SYS_CLOSE, fd as usize) }),
-        ENOSYS,
-    );
+    check::expect_ok("fd/close", close(fd), ());
+    check::expect_err("fd/close_twice", close(fd), EBADF);
+    check::expect_err("fd/read_closed", read(fd, &mut one), EBADF);
     let null = check::unwrap_or_fail("fd/open_dev_null", open("/dev/null", O_RDWR));
+    check::require("fd/open_reuses_closed", null == fd);
     check::expect_ok("fd/read_dev_null", read(null, &mut one), 0);
     check::expect_ok("fd/write_dev_null", write(null, HELLO), HELLO.len());
 

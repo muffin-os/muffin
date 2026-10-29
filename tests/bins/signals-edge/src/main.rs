@@ -18,15 +18,15 @@ static URGENT_RUNS: AtomicU32 = AtomicU32::new(0);
 static WINCH_RUNS: AtomicU32 = AtomicU32::new(0);
 static CHILD_RUNS: AtomicU32 = AtomicU32::new(0);
 
-/// Spawn order fixes the pid, so the pid picks the role.
+/// Spawn order fixes the pid, so the pid picks the role. pid 1 is test-init.
 #[derive(Clone, Copy)]
 enum Role {
-    A = 1,
-    B = 2,
-    C = 3,
-    D = 4,
-    E = 5,
-    F = 6,
+    A = 2,
+    B = 3,
+    C = 4,
+    D = 5,
+    E = 6,
+    F = 7,
 }
 
 impl Role {

@@ -3,13 +3,14 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::{format, vec};
 use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use kernel::cmdline::cmdline;
 use kernel::driver::block::BlockDevices;
 use kernel::file::ext2::VirtualExt2Fs;
 use kernel::file::vfs;
@@ -24,8 +25,8 @@ use kernel::mem::heap::Heap;
 use kernel::mem::phys::PhysicalMemory;
 use kernel::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use kernel_ext2::Ext2Fs;
+use kernel_vfs::CreateMode;
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use kernel_vfs::{CreateMode, Stat};
 use kernel_virtual_memory::Segment;
 use tracing::info;
 use x86_64::VirtAddr;
@@ -51,10 +52,10 @@ static COW_READER_DONE: AtomicBool = AtomicBool::new(false);
 static COW_CLONE_DONE: AtomicBool = AtomicBool::new(false);
 static COW_PROBE_DONE: AtomicBool = AtomicBool::new(false);
 
-/// Boots the real kernel, mounts the root ext2 filesystem, then spawns one
-/// process per line of the `/spawn` manifest baked into the disk image. Each
-/// manifest line is an absolute in-OS path spawned in order, so the first
-/// entry becomes pid 1.
+/// Boots the real kernel, mounts the root ext2 filesystem, then starts the
+/// `init=` executable from the kernel cmdline as pid 1 and waits for it to
+/// exit. The integration disks put `test-init` there, which spawns the
+/// `/spawn` manifest and reports every outcome.
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
     assert!(BASE_REVISION.is_supported());
@@ -176,87 +177,43 @@ unsafe extern "C" fn main() -> ! {
     let attach_exec_sibling = AbsolutePath::try_new("/exec-sibling")
         .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok());
 
-    {
-        info!("reading spawn manifest");
-        let manifest_path = AbsolutePath::try_new("/spawn").expect("should be a valid path");
-        let node = vfs()
-            .write()
-            .open(manifest_path, CreateMode::Never)
-            .expect("should be able to open /spawn manifest");
-        let stat = {
-            let mut stat = Stat::default();
-            node.stat(&mut stat)
-                .expect("should be able to stat /spawn manifest");
-            stat
-        };
+    let init_path = cmdline()
+        .init()
+        .expect("should have init argument on cmdline");
+    let path = AbsolutePath::try_new(init_path).expect("init path should be absolute");
+    let init = if attach_exec_sibling {
+        let (proc, main_task) = Process::create_unscheduled(Process::root(), path)
+            .expect("should be able to create init process");
+        let sibling = Task::create_new(&proc, exec_sibling, ptr::null_mut())
+            .expect("should be able to create the exec sibling task");
+        GlobalTaskQueue::enqueue(Box::pin(sibling));
+        kernel::serial_println!("test-kernel: sibling attached pid={}", proc.pid());
+        GlobalTaskQueue::enqueue(Box::pin(main_task));
+        proc
+    } else {
+        Process::create_from_executable(Process::root(), path)
+            .expect("should be able to create init process")
+    };
+    kernel::serial_println!("test-kernel: init {} pid={}", init_path, init.pid());
 
-        let mut buf = vec![0u8; stat.size];
-        let mut offset = 0;
-        loop {
-            let read = node
-                .read(&mut buf[offset..], offset)
-                .expect("should be able to read /spawn manifest");
-            if read == 0 {
-                break;
-            }
-            offset += read;
+    // The other CPUs run the scheduler, so CPU 0 can poll here without
+    // stalling user tasks.
+    let outcome = loop {
+        if let Some(outcome) = init.exit_outcome() {
+            break outcome;
         }
-
-        let manifest = core::str::from_utf8(&buf).expect("/spawn manifest should be valid UTF-8");
-        let mut pending: alloc::vec::Vec<Arc<Process>> = vec![];
-        for line in manifest.lines() {
-            if line.is_empty() {
-                continue;
-            }
-            let path = AbsolutePath::try_new(line).expect("manifest entry should be a valid path");
-            let proc = if attach_exec_sibling && pending.is_empty() {
-                let (proc, main_task) = Process::create_unscheduled(Process::root(), path)
-                    .expect("should be able to spawn manifest entry");
-                let sibling = Task::create_new(&proc, exec_sibling, ptr::null_mut())
-                    .expect("should be able to create the exec sibling task");
-                GlobalTaskQueue::enqueue(Box::pin(sibling));
-                kernel::serial_println!("test-kernel: sibling attached pid={}", proc.pid());
-                GlobalTaskQueue::enqueue(Box::pin(main_task));
-                proc
-            } else {
-                Process::create_from_executable(Process::root(), path)
-                    .expect("should be able to spawn manifest entry")
-            };
-            kernel::serial_println!("test-kernel: spawned {} pid={}", line, proc.pid());
-            pending.push(proc);
-        }
-        kernel::serial_println!("test-kernel: spawn complete count={}", pending.len());
-
-        // The other CPUs run the scheduler, so CPU 0 can poll here without
-        // stalling user tasks.
-        while !pending.is_empty() {
-            pending.retain(|proc| {
-                let Some(outcome) = proc.exit_outcome() else {
-                    return true;
-                };
-                // the harness pulls the plug once every outcome is printed, so
-                // the disk the host inspects must be complete before that
-                vfs()
-                    .read()
-                    .sync_all()
-                    .expect("should be able to sync file systems");
-                match outcome {
-                    ExitOutcome::Exited(code) => kernel::serial_println!(
-                        "test-kernel: outcome pid={} exit={}",
-                        proc.pid(),
-                        code
-                    ),
-                    ExitOutcome::Signaled(signo) => kernel::serial_println!(
-                        "test-kernel: outcome pid={} signal={}",
-                        proc.pid(),
-                        signo.name()
-                    ),
-                }
-                false
-            });
-            if !pending.is_empty() {
-                x86_64::instructions::hlt();
-            }
+        x86_64::instructions::hlt();
+    };
+    // the harness pulls the plug once the init outcome is printed, so the
+    // disk the host inspects must be complete before that
+    vfs()
+        .read()
+        .sync_all()
+        .expect("should be able to sync file systems");
+    match outcome {
+        ExitOutcome::Exited(code) => kernel::serial_println!("test-kernel: init exit={}", code),
+        ExitOutcome::Signaled(signo) => {
+            kernel::serial_println!("test-kernel: init signal={}", signo.name());
         }
     }
 

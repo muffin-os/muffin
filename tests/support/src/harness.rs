@@ -3,19 +3,21 @@
 //!
 //! A test names a [`KernelTest`], boots the shared `test-kernel` under QEMU
 //! against the ISO and disk its Bazel target declared, and collects the serial
-//! transcript. The disk carries a `/spawn` manifest of absolute paths. The
-//! kernel spawns every manifest entry as its own process, so a single boot can
-//! fan out into several processes whose outcomes the test kernel prints
-//! directly.
+//! transcript. The kernel starts the `init=` executable from its cmdline as
+//! pid 1. The integration disks put `test-init` there. It forks and execs
+//! every line of the `/spawn` manifest, so a single boot can fan out into
+//! several processes whose outcomes `test-init` reports after `waitpid`.
 //!
-//! The wire contract with `test-kernel` is four serial lines the test kernel
-//! prints itself, so it is independent of the active log filter. Spawns are
-//! announced by `test-kernel: spawned {path} pid={N}` and closed by
-//! `test-kernel: spawn complete count={N}`. Process termination surfaces as
-//! `test-kernel: outcome pid={N} exit={code}` or
-//! `test-kernel: outcome pid={N} signal={NAME}`. Every parser below tolerates a
-//! leading log prefix (timestamp, level, target) by anchoring on a substring
-//! inside the payload rather than matching from the start.
+//! The wire contract is four serial lines. `test-init` prints
+//! `test-init: spawned {path} pid={N}` per manifest entry, then
+//! `test-init: spawn complete count={N}`, then per child
+//! `test-init: outcome pid={N} exit={code}` or
+//! `test-init: outcome pid={N} signal={NAME}`. The test kernel prints
+//! `test-kernel: init exit={code}` or `test-kernel: init signal={NAME}` after
+//! pid 1 ended and the disk is synced, which completes the run. Every parser
+//! below tolerates a leading log prefix (timestamp, level, target) by
+//! anchoring on a substring inside the payload rather than matching from the
+//! start.
 
 use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::fs::PermissionsExt;
@@ -171,8 +173,8 @@ impl KernelTest {
     /// and per-process outcomes.
     ///
     /// # Panics
-    /// Panics (after dumping the serial transcript) if QEMU exits before every
-    /// spawned process reports an outcome, if the deadline expires first, or if
+    /// Panics (after dumping the serial transcript) if QEMU exits before the
+    /// init process reports its outcome, if the deadline expires first, or if
     /// any serial line contains `kernel panicked`.
     #[must_use]
     pub fn run(self) -> RunReport {
@@ -219,9 +221,9 @@ impl KernelTest {
                     }
                     transcript.push(line);
 
-                    // Completion requires every announced process to have
-                    // terminated, so the transcript is guaranteed to carry all
-                    // outcomes before we stop reading.
+                    // Completion is the init outcome. `observe` guarantees
+                    // every announced process has an outcome by then, so the
+                    // transcript carries all outcomes before we stop reading.
                     if complete_at.is_none() && tracker.complete() {
                         complete_at = Some(Instant::now());
                     }
@@ -243,8 +245,8 @@ impl KernelTest {
             fail(
                 &transcript,
                 &mut child,
-                "QEMU exited before every spawned process reported an outcome; kernel likely \
-                 panicked or triple-faulted"
+                "QEMU exited before the init process reported an outcome; kernel likely \
+                     panicked or triple-faulted"
                     .to_owned(),
             );
         }
@@ -252,7 +254,7 @@ impl KernelTest {
             fail(
                 &transcript,
                 &mut child,
-                "deadline expired before every spawned process reported an outcome".to_owned(),
+                "deadline expired before the init process reported an outcome".to_owned(),
             );
         }
 
@@ -395,16 +397,16 @@ struct PendingProcess {
 #[derive(Default)]
 struct SpawnTracker {
     pending: Vec<PendingProcess>,
-    all_announced: bool,
+    init_done: bool,
 }
 
 impl SpawnTracker {
     /// Records `line` if it is one of the wire-contract lines, ignoring every
     /// other line. A contract line that does not parse, a spawn count that
-    /// disagrees with the announcements, or an outcome for an unannounced pid
-    /// is an error.
+    /// disagrees with the announcements, an outcome for an unannounced pid, or
+    /// an init outcome while a child still has none is an error.
     fn observe(&mut self, line: &str) -> Result<(), String> {
-        if let Some(rest) = anchor_after(line, "test-kernel: spawned ") {
+        if let Some(rest) = anchor_after(line, "test-init: spawned ") {
             let (path, pid) =
                 parse_spawned(rest).ok_or_else(|| format!("garbled spawned line {line:?}"))?;
             self.pending.push(PendingProcess {
@@ -412,7 +414,7 @@ impl SpawnTracker {
                 pid,
                 outcome: None,
             });
-        } else if let Some(rest) = anchor_after(line, "test-kernel: spawn complete count=") {
+        } else if let Some(rest) = anchor_after(line, "test-init: spawn complete count=") {
             let count: usize = rest
                 .trim()
                 .parse()
@@ -423,8 +425,7 @@ impl SpawnTracker {
                     self.pending.len()
                 ));
             }
-            self.all_announced = true;
-        } else if let Some(rest) = anchor_after(line, "test-kernel: outcome pid=") {
+        } else if let Some(rest) = anchor_after(line, "test-init: outcome pid=") {
             let (pid, outcome) =
                 parse_outcome(rest).ok_or_else(|| format!("garbled outcome line {line:?}"))?;
             let proc = self
@@ -433,13 +434,23 @@ impl SpawnTracker {
                 .find(|p| p.pid == pid)
                 .ok_or_else(|| format!("outcome for a pid never announced {line:?}"))?;
             proc.outcome = Some(outcome);
+        } else if line.contains("test-kernel: init exit=")
+            || line.contains("test-kernel: init signal=")
+        {
+            if let Some(p) = self.pending.iter().find(|p| p.outcome.is_none()) {
+                return Err(format!(
+                    "init ended before pid {} ({}) reported an outcome",
+                    p.pid, p.path
+                ));
+            }
+            self.init_done = true;
         }
         Ok(())
     }
 
-    /// True once every announced process has an outcome.
+    /// True once the init process has ended.
     fn complete(&self) -> bool {
-        self.all_announced && self.pending.iter().all(|p| p.outcome.is_some())
+        self.init_done
     }
 }
 
@@ -450,7 +461,7 @@ pub enum Outcome {
     Signaled(String),
 }
 
-/// A process the kernel spawned from the manifest, with its final outcome.
+/// A process `test-init` spawned from the manifest, with its final outcome.
 pub struct SpawnedProcess {
     pub path: String,
     pub pid: u64,
@@ -660,9 +671,9 @@ mod tests {
     #[test]
     fn garbled_outcome_line_is_an_error() {
         let result = observe_all(&[
-            "test-kernel: spawned /bin/init pid=1",
-            "test-kernel: spawn complete count=1",
-            "test-kernel: outcome pid=1 exit=4\u{fffd}",
+            "test-init: spawned /bin/init pid=2",
+            "test-init: spawn complete count=1",
+            "test-init: outcome pid=2 exit=4\u{fffd}",
         ]);
         assert!(result.is_err(), "garbled outcome was accepted");
     }
@@ -670,8 +681,8 @@ mod tests {
     #[test]
     fn spawn_complete_count_must_match_the_spawned_lines() {
         let result = observe_all(&[
-            "test-kernel: spawned /bin/init pid=1",
-            "test-kernel: spawn complete count=2",
+            "test-init: spawned /bin/init pid=2",
+            "test-init: spawn complete count=2",
         ]);
         assert!(result.is_err(), "count mismatch was accepted");
     }
@@ -679,26 +690,35 @@ mod tests {
     #[test]
     fn outcome_for_an_unknown_pid_is_an_error() {
         let result = observe_all(&[
-            "test-kernel: spawned /bin/init pid=1",
-            "test-kernel: spawn complete count=1",
-            "test-kernel: outcome pid=7 exit=0",
+            "test-init: spawned /bin/init pid=2",
+            "test-init: spawn complete count=1",
+            "test-init: outcome pid=7 exit=0",
         ]);
         assert!(result.is_err(), "outcome for an unspawned pid was accepted");
     }
 
     #[test]
-    fn completes_once_every_spawned_process_has_an_outcome() {
+    fn init_ending_before_a_child_outcome_is_an_error() {
+        let result = observe_all(&[
+            "test-init: spawned /bin/a pid=2",
+            "test-init: spawn complete count=1",
+            "test-kernel: init exit=0",
+        ]);
+        assert!(result.is_err(), "missing child outcome was accepted");
+    }
+
+    #[test]
+    fn completes_on_the_init_outcome() {
         let mut tracker = observe_all(&[
-            "test-kernel: spawned /bin/a pid=1",
-            "[INFO] test-kernel: spawned /bin/b pid=2",
-            "test-kernel: spawn complete count=2",
-            "test-kernel: outcome pid=2 signal=SIGSEGV",
+            "test-init: spawned /bin/a pid=2",
+            "[INFO] test-init: spawned /bin/b pid=3",
+            "test-init: spawn complete count=2",
+            "test-init: outcome pid=3 signal=SIGSEGV",
+            "test-init: outcome pid=2 exit=0",
         ])
         .unwrap();
         assert!(!tracker.complete());
-        tracker
-            .observe("test-kernel: outcome pid=1 exit=0")
-            .unwrap();
+        tracker.observe("test-kernel: init exit=0").unwrap();
         assert!(tracker.complete());
         assert_eq!(tracker.pending[0].outcome, Some(Outcome::Exited(0)));
     }

@@ -8,30 +8,43 @@ limine_iso(
 
 _HELLO = "muffin says hi\n"
 
-# The `spawn` file is the manifest the test kernel reads. One line per process,
-# in the order the assertions index them.
+# The kernel cmdline in limine.conf names `/bin/init`, so every disk puts
+# `test-init` there. The `spawn` file is the manifest `test-init` forks and
+# execs, one line per process, in the order the assertions index them.
 ext2_image(
     name = "mmap_disk",
     contents = {"spawn": "/bin/mmap\n/bin/mmap\n"},
-    files = {"//tests/bins:mmap": "bin/mmap"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:mmap": "bin/mmap",
+    },
 )
 
 ext2_image(
     name = "signals_disk",
-    contents = {"spawn": "/bin/init\n/bin/init\n"},
-    files = {"//tests/bins:signals_init": "bin/init"},
+    contents = {"spawn": "/bin/signals-init\n/bin/signals-init\n"},
+    files = {
+        "//tests/bins:signals_init": "bin/signals-init",
+        "//tests/bins:test_init": "bin/init",
+    },
 )
 
 ext2_image(
     name = "signals_edge_disk",
-    contents = {"spawn": "/bin/init\n/bin/init\n/bin/init\n/bin/init\n/bin/init\n/bin/init\n"},
-    files = {"//tests/bins:signals_edge": "bin/init"},
+    contents = {"spawn": "/bin/signals-edge\n" * 6},
+    files = {
+        "//tests/bins:signals_edge": "bin/signals-edge",
+        "//tests/bins:test_init": "bin/init",
+    },
 )
 
 ext2_image(
     name = "sleep_disk",
-    contents = {"spawn": "/bin/init\n/bin/init\n"},
-    files = {"//tests/bins:sleep": "bin/init"},
+    contents = {"spawn": "/bin/sleep\n/bin/sleep\n"},
+    files = {
+        "//tests/bins:sleep": "bin/sleep",
+        "//tests/bins:test_init": "bin/init",
+    },
 )
 
 ext2_image(
@@ -41,6 +54,7 @@ ext2_image(
         "spawn": "/bin/exit-code\n/bin/file-read\n",
     },
     files = {
+        "//tests/bins:test_init": "bin/init",
         "//tests/bins:exit_code": "bin/exit-code",
         "//tests/bins:file_read": "bin/file-read",
     },
@@ -52,7 +66,10 @@ ext2_image(
         "data/hello.txt": _HELLO,
         "spawn": "/bin/file-read\n",
     },
-    files = {"//tests/bins:file_read": "bin/file-read"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:file_read": "bin/file-read",
+    },
 )
 
 _SEED = "muffin seed data\n"
@@ -67,25 +84,37 @@ ext2_image(
         "spawn": "/bin/file-write\n",
     },
     empty_dirs = ["data/dir"],
-    files = {"//tests/bins:file_write": "bin/file-write"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:file_write": "bin/file-write",
+    },
 )
 
 ext2_image(
     name = "floats_disk",
     contents = {"spawn": "/bin/floats\n/bin/floats\n"},
-    files = {"//tests/bins:floats": "bin/floats"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:floats": "bin/floats",
+    },
 )
 
 ext2_image(
     name = "fb_ioctl_disk",
     contents = {"spawn": "/bin/fb-ioctl\n"},
-    files = {"//tests/bins:fb_ioctl": "bin/fb-ioctl"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:fb_ioctl": "bin/fb-ioctl",
+    },
 )
 
 ext2_image(
     name = "fb_mmap_disk",
     contents = {"spawn": "/bin/fb-mmap\n"},
-    files = {"//tests/bins:fb_mmap": "bin/fb-mmap"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:fb_mmap": "bin/fb-mmap",
+    },
 )
 
 ext2_image(
@@ -94,7 +123,10 @@ ext2_image(
         "heap-bounds": "1\n",
         "spawn": "/bin/exit-code\n",
     },
-    files = {"//tests/bins:exit_code": "bin/exit-code"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:exit_code": "bin/exit-code",
+    },
 )
 
 ext2_image(
@@ -103,7 +135,10 @@ ext2_image(
         "kernel-stack-overflow": "1\n",
         "spawn": "/bin/exit-code\n",
     },
-    files = {"//tests/bins:exit_code": "bin/exit-code"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:exit_code": "bin/exit-code",
+    },
 )
 
 ext2_image(
@@ -112,7 +147,10 @@ ext2_image(
         "map-range-rollback": "1\n",
         "spawn": "/bin/exit-code\n",
     },
-    files = {"//tests/bins:exit_code": "bin/exit-code"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:exit_code": "bin/exit-code",
+    },
 )
 
 ext2_image(
@@ -121,7 +159,10 @@ ext2_image(
         "cow-clone": "1\n",
         "spawn": "/bin/exit-code\n",
     },
-    files = {"//tests/bins:exit_code": "bin/exit-code"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:exit_code": "bin/exit-code",
+    },
 )
 
 ext2_image(
@@ -131,13 +172,19 @@ ext2_image(
         "spawn": "/bin/posix\n",
     },
     empty_dirs = ["data/dir"],
-    files = {"//tests/bins:posix": "bin/posix"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:posix": "bin/posix",
+    },
 )
 
 ext2_image(
     name = "unwind_disk",
     contents = {"spawn": "/bin/unwind\n"},
-    files = {"//tests/bins:unwind": "bin/unwind"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:unwind": "bin/unwind",
+    },
 )
 
 # A well-formed ELF64 EXEC header with no program headers and e_entry = 1 << 48,
@@ -164,24 +211,26 @@ ext2_image(
         "spawn": "/bin/execve\n",
     },
     files = {
+        "//tests/bins:test_init": "bin/init",
         ":noncanonical_entry_elf": "data/noncanonical-entry.elf",
         "//tests/bins:exec_target": "bin/exec-target",
         "//tests/bins:execve": "bin/execve",
     },
 )
 
+# The sibling task is attached by the kernel to the init process, so the
+# execve test itself is `/bin/init` here and no manifest is involved.
 ext2_image(
     name = "execve_reap_disk",
     contents = {
         "data/hello.txt": _HELLO,
         "data/notelf.txt": "definitely not an ELF\n",
         "exec-sibling": "1\n",
-        "spawn": "/bin/execve\n",
     },
     files = {
         ":noncanonical_entry_elf": "data/noncanonical-entry.elf",
         "//tests/bins:exec_target": "bin/exec-target",
-        "//tests/bins:execve": "bin/execve",
+        "//tests/bins:execve": "bin/init",
     },
 )
 
@@ -189,6 +238,7 @@ ext2_image(
     name = "fork_disk",
     contents = {"spawn": "/bin/fork\n"},
     files = {
+        "//tests/bins:test_init": "bin/init",
         "//tests/bins:exit_code": "bin/exit-code",
         "//tests/bins:fork": "bin/fork",
     },
@@ -198,6 +248,7 @@ ext2_image(
     name = "true_false_disk",
     contents = {"spawn": "/bin/true\n/bin/false\n"},
     files = {
+        "//tests/bins:test_init": "bin/init",
         "//userspace/utilities/false": "bin/false",
         "//userspace/utilities/true": "bin/true",
     },
@@ -206,25 +257,37 @@ ext2_image(
 ext2_image(
     name = "shutdown_disk",
     contents = {"spawn": "/bin/shutdown\n"},
-    files = {"//userspace/utilities/shutdown": "bin/shutdown"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//userspace/utilities/shutdown": "bin/shutdown",
+    },
 )
 
 ext2_image(
     name = "shutdown_ignore_disk",
     contents = {"spawn": "/bin/term-ignorer\n/bin/term-ignorer\n"},
-    files = {"//tests/bins:term_ignorer": "bin/term-ignorer"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:term_ignorer": "bin/term-ignorer",
+    },
 )
 
 ext2_image(
     name = "shutdown_sigterm_disk",
     contents = {"spawn": "/bin/term-witness\n/bin/term-witness\n"},
-    files = {"//tests/bins:term_witness": "bin/term-witness"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:term_witness": "bin/term-witness",
+    },
 )
 
 ext2_image(
     name = "shutdown_sigterm_sleep_disk",
     contents = {"spawn": "/bin/term-sleeper\n/bin/term-sleeper\n"},
-    files = {"//tests/bins:term_sleeper": "bin/term-sleeper"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:term_sleeper": "bin/term-sleeper",
+    },
 )
 
 ext2_image(
@@ -233,7 +296,10 @@ ext2_image(
         "spawn": "/bin/exit-code\n",
         "vfs-mkdir": "1\n",
     },
-    files = {"//tests/bins:exit_code": "bin/exit-code"},
+    files = {
+        "//tests/bins:test_init": "bin/init",
+        "//tests/bins:exit_code": "bin/exit-code",
+    },
 )
 
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The

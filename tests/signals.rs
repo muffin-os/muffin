@@ -1,9 +1,9 @@
 //! End-to-end signal delivery test.
 //!
 //! Boots the shared generic `test-kernel` under QEMU with a two-line `/spawn`
-//! manifest that launches two instances of a dedicated test init (a driver and
-//! a victim) at `/bin/init`. The harness boots the images its Bazel target
-//! declared and parses the serial transcript.
+//! manifest that launches two instances of `/bin/signals-init` (a driver and
+//! a victim). The harness boots the images its Bazel target declared and
+//! parses the serial transcript.
 //!
 //! The two processes coordinate with a ping/ack handshake over SIGWINCH and
 //! SIGURG instead of racing on wall-clock delays. The driver pings the victim
@@ -57,6 +57,6 @@ fn signal_delivery_end_to_end() {
     }
 
     report.assert_markers_in_order(&MARKERS);
-    report.assert_line_contains("outcome pid=2 signal=SIGTERM");
+    report.assert_line_contains("outcome pid=3 signal=SIGTERM");
     report.assert_no_line_contains("A: UNREACHABLE");
 }

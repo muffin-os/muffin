@@ -35,9 +35,10 @@ fn driver() -> ! {
 minilib::entry!(main);
 
 fn main() -> i32 {
+    // pid 1 is test-init.
     match getpid() {
-        1 => victim(),
-        2 => driver(),
+        2 => victim(),
+        3 => driver(),
         _ => {
             println!("term-sleeper: unexpected pid");
             1

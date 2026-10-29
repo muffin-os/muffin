@@ -85,6 +85,10 @@ pub fn fsync(fd: c_int) -> Result<(), Errno> {
     ret(unsafe { syscall1(SYS_FSYNC, fd as usize) }).map(|_| ())
 }
 
+pub fn close(fd: c_int) -> Result<(), Errno> {
+    ret(unsafe { syscall1(SYS_CLOSE, fd as usize) }).map(|_| ())
+}
+
 pub fn clock_gettime(clockid: ClockId, tp: &mut Timespec) -> Result<(), Errno> {
     // Safety: `tp` is a live, exclusive reference for the whole call.
     ret(unsafe {
