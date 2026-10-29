@@ -27,6 +27,7 @@ pub enum InterruptIndex {
     Timer = 0x20,
     Halt = 0x30,
     LapicErr = 0x31,
+    TlbShootdown = 0x32,
     Syscall = 0x80,
     Spurious = 0xff,
 }
@@ -93,6 +94,7 @@ pub fn create_idt() -> InterruptDescriptorTable {
     }
     idt[InterruptIndex::LapicErr.as_u8()].set_handler_fn(lapic_err_interrupt_handler);
     idt[InterruptIndex::Halt.as_u8()].set_handler_fn(halt_ipi_handler);
+    idt[InterruptIndex::TlbShootdown.as_u8()].set_handler_fn(tlb_shootdown_handler);
     idt[InterruptIndex::Spurious.as_u8()].set_handler_fn(spurious_interrupt_handler);
 
     unsafe {
@@ -233,6 +235,17 @@ extern "x86-interrupt" fn halt_ipi_handler(_: InterruptStackFrame) {
     loop {
         hlt();
     }
+}
+
+extern "x86-interrupt" fn tlb_shootdown_handler(_: InterruptStackFrame) {
+    unsafe {
+        end_of_interrupt();
+    }
+    // Safety: interrupts are off in an interrupt handler, so the context is
+    // this CPU's.
+    unsafe { ExecutionContext::load() }
+        .shootdown_slot()
+        .acknowledge();
 }
 
 extern "x86-interrupt" fn spurious_interrupt_handler(stack_frame: InterruptStackFrame) {

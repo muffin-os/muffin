@@ -223,7 +223,10 @@ impl Process {
         })
     }
 
-    fn create_new(
+    /// Creates a process with a fresh address space, an empty lower-half
+    /// allocator and no memory regions. It inserts the process into the
+    /// process tree. The process has no task yet.
+    pub fn create_new(
         parent: &Arc<Process>,
         name: String,
         executable_path: Option<impl AsRef<AbsolutePath>>,

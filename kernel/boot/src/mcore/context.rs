@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 
 use kernel_abi::ProcessId;
@@ -13,11 +14,13 @@ use crate::arch::gdt::Selectors;
 use crate::mcore::lapic::Lapic;
 use crate::mcore::mtask::scheduler::Scheduler;
 use crate::mcore::mtask::task::Task;
+use crate::mem::address_space::shootdown::CpuSlot;
 
 #[derive(Debug)]
 pub struct ExecutionContext {
     cpu_id: usize,
     lapic_id: usize,
+    shootdown_slot: Arc<CpuSlot>,
 
     lapic: Mutex<Lapic>,
 
@@ -41,6 +44,7 @@ impl ExecutionContext {
         ExecutionContext {
             cpu_id: cpu.id as usize,
             lapic_id: cpu.lapic_id as usize,
+            shootdown_slot: CpuSlot::register(cpu.id as usize, cpu.lapic_id),
             lapic: Mutex::new(lapic),
             _gdt: gdt,
             sel,
@@ -108,6 +112,10 @@ impl ExecutionContext {
     #[must_use]
     pub fn lapic(&self) -> &Mutex<Lapic> {
         &self.lapic
+    }
+
+    pub fn shootdown_slot(&self) -> &CpuSlot {
+        &self.shootdown_slot
     }
 
     pub fn selectors(&self) -> &Selectors {

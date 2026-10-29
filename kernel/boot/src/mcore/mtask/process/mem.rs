@@ -6,7 +6,7 @@ use core::sync::atomic::{Ordering, fence};
 use core::{mem, slice};
 
 use kernel_vfs::node::VfsNode;
-use kernel_virtual_memory::Segment;
+use kernel_virtual_memory::{AlreadyReserved, Segment};
 use spin::mutex::Mutex;
 use thiserror::Error;
 use tracing::trace;
@@ -103,6 +103,32 @@ impl MemoryRegions {
                 continue;
             };
             region.handle_fault(address_space, page, caused_by_write)?;
+        }
+        Ok(())
+    }
+
+    /// Adds a counterpart of every region of this process to `target`. The
+    /// counterparts share the frames copy-on-write. See
+    /// [`MemoryRegion::clone_into`].
+    ///
+    /// # Errors
+    /// Returns the first error of [`MemoryRegion::clone_into`]. `target`
+    /// keeps the regions cloned before the failure.
+    ///
+    /// # Panics
+    /// In debug builds, panics if `address_space` is not active on this CPU.
+    pub fn clone_into(
+        &self,
+        address_space: &AddressSpace,
+        target: &MemoryRegions,
+        target_vmm: &impl VirtualMemoryAllocator,
+    ) -> Result<(), CloneRegionError> {
+        debug_assert!(address_space.is_active());
+        // A CPU that waits for the regions lock has interrupts off. The
+        // snapshot keeps the shootdown outside the lock.
+        let regions = interrupts::without_interrupts(|| self.regions.lock().clone());
+        for region in regions {
+            target.add_region(region.clone_into(address_space, target_vmm)?);
         }
         Ok(())
     }
@@ -221,6 +247,40 @@ impl MemoryRegion {
             MemoryRegion::Shared(_) => Err(SetProtectionError::UnsupportedRegion),
         }
     }
+
+    /// Creates the counterpart of this region for another process. Private
+    /// and file-backed regions share their frames copy-on-write. Shared
+    /// regions share the device frames as they are.
+    ///
+    /// # Errors
+    /// Returns `SegmentReserved` when `target_vmm` already holds the region's
+    /// address range. Returns `RemapFailed` when a resident page of a private
+    /// or file-backed region cannot become read-only.
+    pub fn clone_into(
+        &self,
+        address_space: &AddressSpace,
+        target_vmm: &impl VirtualMemoryAllocator,
+    ) -> Result<MemoryRegion, CloneRegionError> {
+        match self {
+            MemoryRegion::Private(r) => Ok(MemoryRegion::Private(
+                r.clone_into(address_space, target_vmm)?,
+            )),
+            MemoryRegion::FileBacked(r) => Ok(MemoryRegion::FileBacked(FileBackedMemoryRegion {
+                region: r.region.clone_into(address_space, target_vmm)?,
+                node: r.node.clone(),
+                file_offset: r.file_offset,
+                file_len: r.file_len,
+            })),
+            MemoryRegion::Shared(r) => Ok(MemoryRegion::Shared(SharedMemoryRegion {
+                segment: target_vmm
+                    .mark_as_reserved(*r.segment)
+                    .map_err(|AlreadyReserved| CloneRegionError::SegmentReserved)?,
+                size: r.size,
+                frames: r.frames,
+                _node: r._node.clone(),
+            })),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -240,6 +300,14 @@ pub enum SetProtectionError {
     #[error("region does not support protection changes")]
     UnsupportedRegion,
     #[error("failed to remap a mapped page")]
+    RemapFailed,
+}
+
+#[derive(Debug, Error)]
+pub enum CloneRegionError {
+    #[error("the region's address range is already reserved in the target")]
+    SegmentReserved,
+    #[error("failed to make a shared page read-only")]
     RemapFailed,
 }
 
@@ -422,39 +490,123 @@ impl PrivateMemoryRegion {
 
     /// Replaces the logical flags and remaps every currently mapped page.
     /// Pages governed by shared backings get the new flags minus WRITABLE.
-    /// Unmapped backings are left for the fault handler.
+    /// Unmapped backings are left for the fault handler. When a mapped page
+    /// loses write access, every other CPU drops its TLB entries for this
+    /// address space.
+    ///
+    /// # Panics
+    /// Panics if a mapped page loses write access while interrupts are
+    /// disabled.
     fn set_protection(
         &self,
         address_space: &AddressSpace,
         new_flags: PageTableFlags,
     ) -> Result<(), SetProtectionError> {
-        let mut state = self.state.lock();
-        state.flags = new_flags;
-
-        let remap = |page: Page<Size4KiB>, shared: bool| {
+        let mut demoted = false;
+        let mut remap = |page: Page<Size4KiB>, shared: bool| {
             let flags = if shared {
                 new_flags - PageTableFlags::WRITABLE
             } else {
                 new_flags
             };
             match address_space.remap::<Size4KiB, _>(page, move |_| flags) {
-                Ok(()) | Err(FlagUpdateError::PageNotMapped) => Ok(()),
+                Ok(()) => {
+                    demoted |= !flags.contains(PageTableFlags::WRITABLE);
+                    Ok(())
+                }
+                Err(FlagUpdateError::PageNotMapped) => Ok(()),
                 Err(_) => Err(SetProtectionError::RemapFailed),
             }
         };
 
+        let mut state = self.state.lock();
+        state.flags = new_flags;
         // Ranges first and pages second, so the more specific shadow entry
         // applies its flags last.
-        for (first, backing) in &state.ranges {
-            let shared = Arc::strong_count(backing) > 1;
-            for i in 0..backing.len() {
-                remap(*first + i, shared)?;
+        let result = state
+            .ranges
+            .iter()
+            .try_for_each(|(first, backing)| {
+                let shared = Arc::strong_count(backing) > 1;
+                (0..backing.len()).try_for_each(|i| remap(*first + i, shared))
+            })
+            .and_then(|()| {
+                state
+                    .pages
+                    .iter()
+                    .try_for_each(|(page, backing)| remap(*page, Arc::strong_count(backing) > 1))
+            });
+        // See `AddressSpace::flush_on_all_cpus` for the lock rule.
+        drop(state);
+        if demoted {
+            address_space.flush_on_all_cpus();
+        }
+        result
+    }
+
+    /// Creates a region for another address space. The new region shares
+    /// every backing frame of this region. Every resident writable page of
+    /// this region becomes read-only on every CPU before this call returns.
+    /// Until then, other tasks of this process can write through a stale
+    /// TLB entry. The new region sees those writes. No task uses the new
+    /// region before this call returns. The fault handler of each side maps
+    /// the pages that are not resident.
+    ///
+    /// # Errors
+    /// Returns `SegmentReserved` when `target_vmm` already holds the region's
+    /// address range. Returns `RemapFailed` when a resident page cannot
+    /// become read-only. The pages that became read-only before the failure
+    /// stay read-only. The next write fault restores each of them.
+    ///
+    /// # Panics
+    /// Panics if a resident page becomes read-only while interrupts are
+    /// disabled.
+    fn clone_into(
+        &self,
+        address_space: &AddressSpace,
+        target_vmm: &impl VirtualMemoryAllocator,
+    ) -> Result<Self, CloneRegionError> {
+        let segment = target_vmm
+            .mark_as_reserved(*self._segment)
+            .map_err(|AlreadyReserved| CloneRegionError::SegmentReserved)?;
+
+        let mut demoted = false;
+        let state = {
+            let state = self.state.lock();
+            if state.flags.contains(PageTableFlags::WRITABLE) {
+                let demote = |page: Page<Size4KiB>| match address_space
+                    .remap::<Size4KiB, _>(page, |flags| flags - PageTableFlags::WRITABLE)
+                {
+                    Ok(()) => Ok(true),
+                    Err(FlagUpdateError::PageNotMapped) => Ok(false),
+                    Err(_) => Err(CloneRegionError::RemapFailed),
+                };
+                for (first, backing) in &state.ranges {
+                    for i in 0..backing.len() {
+                        demoted |= demote(*first + i)?;
+                    }
+                }
+                for page in state.pages.keys() {
+                    demoted |= demote(*page)?;
+                }
             }
+            PrivateRegionState {
+                flags: state.flags,
+                pages: state.pages.clone(),
+                ranges: state.ranges.clone(),
+            }
+        };
+        // See `AddressSpace::flush_on_all_cpus` for the lock rule.
+        if demoted {
+            address_space.flush_on_all_cpus();
         }
-        for (page, backing) in &state.pages {
-            remap(*page, Arc::strong_count(backing) > 1)?;
-        }
-        Ok(())
+
+        Ok(Self {
+            _segment: segment,
+            start: self.start,
+            size: self.size,
+            state: Mutex::new(state),
+        })
     }
 
     pub fn start(&self) -> VirtAddr {
@@ -519,6 +671,11 @@ impl PrivateMemoryRegion {
                     // A shadowed range frame stays retained until the range
                     // Arc drops.
                     state.pages.insert(page, Arc::new(owned));
+                    // See `AddressSpace::flush_on_all_cpus` for the lock rule.
+                    drop(state);
+                    // Other CPUs that run this process can still translate
+                    // `page` to the shared frame.
+                    address_space.flush_on_all_cpus();
                 }
                 Ok(())
             }

@@ -22,6 +22,7 @@ use crate::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use crate::{U64Ext, UsizeExt};
 
 mod mapper;
+pub mod shootdown;
 
 static KERNEL_ADDRESS_SPACE: OnceCell<AddressSpace> = OnceCell::uninit();
 pub static RECURSIVE_INDEX: OnceCell<usize> = OnceCell::uninit();
@@ -320,6 +321,17 @@ impl AddressSpace {
 
     pub fn is_active(&self) -> bool {
         self.inner.read().is_active()
+    }
+
+    /// Invalidates this address space's TLB entries on every other online
+    /// CPU. Returns after every CPU acknowledged. The caller must not hold
+    /// a lock that another CPU can wait for with interrupts disabled. Such a
+    /// CPU cannot acknowledge.
+    ///
+    /// # Panics
+    /// Panics if interrupts are disabled.
+    pub fn flush_on_all_cpus(&self) {
+        shootdown::flush_on_all_cpus(self.level4_frame);
     }
 
     /// Returns `true` only if every byte of `[addr, addr + len)` is mapped,

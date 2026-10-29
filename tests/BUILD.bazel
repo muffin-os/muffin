@@ -116,6 +116,15 @@ ext2_image(
 )
 
 ext2_image(
+    name = "cow_clone_disk",
+    contents = {
+        "cow-clone": "1\n",
+        "spawn": "/bin/exit-code\n",
+    },
+    files = {"//tests/bins:exit_code": "bin/exit-code"},
+)
+
+ext2_image(
     name = "posix_disk",
     contents = {
         "data/hello.txt": _HELLO,
@@ -252,6 +261,7 @@ ext2_image(
         deps = ["//tests/support"],
     )
     for name in [
+        "cow_clone",
         "exit_codes",
         "execve",
         "execve_reap",

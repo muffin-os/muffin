@@ -8,12 +8,14 @@ use alloc::sync::Arc;
 use alloc::{format, vec};
 use core::ffi::c_void;
 use core::ptr;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kernel::driver::block::BlockDevices;
 use kernel::file::ext2::VirtualExt2Fs;
 use kernel::file::vfs;
 use kernel::limine::BASE_REVISION;
 use kernel::mcore;
+use kernel::mcore::mtask::process::mem::{MemoryRegion, PrivateMemoryRegion};
 use kernel::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use kernel::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use kernel::mcore::mtask::task::Task;
@@ -26,7 +28,28 @@ use kernel_vfs::path::{AbsolutePath, ROOT};
 use kernel_vfs::{CreateMode, Stat};
 use kernel_virtual_memory::Segment;
 use tracing::info;
+use x86_64::VirtAddr;
+use x86_64::registers::control::{Cr8, PriorityClass};
 use x86_64::structures::paging::{Page, PageSize, PageTableFlags, Size4KiB};
+
+const COW_PAGE_COUNT: usize = 3;
+const PAGE_SIZE: usize = Size4KiB::SIZE as usize;
+const ORIGIN_PATTERN: [u8; COW_PAGE_COUNT] = [0xA5, 0x5A, 0xC3];
+const ORIGIN_WRITER_BYTE: u8 = 0x11;
+const CLONE_BYTE: u8 = 0x22;
+const ORIGIN_BREAK_BYTE: u8 = 0x33;
+const ORIGIN_RECLAIM_BYTE: u8 = 0x44;
+
+static COW_REGION_BASE: AtomicU64 = AtomicU64::new(0);
+static COW_REGION_READY: AtomicBool = AtomicBool::new(false);
+static COW_WRITER_STARTED: AtomicBool = AtomicBool::new(false);
+static COW_CLONED: AtomicBool = AtomicBool::new(false);
+static COW_WRITER_DONE: AtomicBool = AtomicBool::new(false);
+static COW_READER_STARTED: AtomicBool = AtomicBool::new(false);
+static COW_CLONE_WROTE: AtomicBool = AtomicBool::new(false);
+static COW_READER_DONE: AtomicBool = AtomicBool::new(false);
+static COW_CLONE_DONE: AtomicBool = AtomicBool::new(false);
+static COW_PROBE_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Boots the real kernel, mounts the root ext2 filesystem, then spawns one
 /// process per line of the `/spawn` manifest baked into the disk image. Each
@@ -128,6 +151,26 @@ unsafe extern "C" fn main() -> ! {
             Ok(()) => kernel::serial_println!("test-kernel: vfs-mkdir ok"),
             Err(e) => kernel::serial_println!("test-kernel: vfs-mkdir FAIL {}", e),
         }
+    }
+
+    // No syscall clones the memory regions of a process yet, so the probe
+    // drives the clone directly. Only a task of pid 0 can map task stacks
+    // and page tables, so this task creates every process and task.
+    if AbsolutePath::try_new("/cow-clone")
+        .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok())
+    {
+        let origin =
+            Process::create_new(Process::root(), "cow-origin".into(), None::<&AbsolutePath>);
+        let clone = Process::create_new(Process::root(), "cow-clone".into(), None::<&AbsolutePath>);
+        spawn_task(
+            &origin,
+            cow_origin,
+            Arc::into_raw(clone.clone()).cast_mut().cast(),
+        );
+        spawn_task(&origin, cow_origin_writer, ptr::null_mut());
+        spawn_task(&clone, cow_clone_task, ptr::null_mut());
+        spawn_task(&clone, cow_clone_reader, ptr::null_mut());
+        wait_for(&COW_PROBE_DONE);
     }
 
     let attach_exec_sibling = AbsolutePath::try_new("/exec-sibling")
@@ -283,6 +326,210 @@ fn create_probe_directory_with_file() -> Result<(), String> {
     file.write(b"made by the test kernel\n", 0)
         .map_err(|e| format!("write: {e}"))?;
     Ok(())
+}
+
+fn wait_for(flag: &AtomicBool) {
+    while !flag.load(Ordering::Acquire) {
+        x86_64::instructions::hlt();
+    }
+}
+
+/// Runs `f` with the timer interrupt masked on this CPU. The timer vector
+/// (`InterruptIndex::Timer`) is in priority class 2. The shootdown vector
+/// (`InterruptIndex::TlbShootdown`) is in class 3 and still arrives.
+/// Without the timer the scheduler never switches this CPU. The task stays
+/// on this CPU. The CPU keeps its TLB entries.
+fn with_timer_masked<R>(f: impl FnOnce() -> R) -> R {
+    Cr8::write(Some(PriorityClass::PriorityClass2));
+    let result = f();
+    Cr8::write(None);
+    result
+}
+
+fn page_ptr(index: usize) -> *mut u8 {
+    (COW_REGION_BASE.load(Ordering::Acquire) as usize + index * PAGE_SIZE) as *mut u8
+}
+
+fn read_page(index: usize) -> u8 {
+    // Safety: `page_ptr` points into a region of the current process.
+    unsafe { ptr::read_volatile(page_ptr(index)) }
+}
+
+fn write_page(index: usize, byte: u8) {
+    // Safety: see `read_page`.
+    unsafe { ptr::write_volatile(page_ptr(index), byte) }
+}
+
+// The lookup reads the active page table, so each task calls it for its
+// own process only.
+fn page_frame(index: usize) -> String {
+    let frame = Process::current()
+        .address_space()
+        .translate(VirtAddr::new(page_ptr(index) as u64));
+    format!("{frame:?}")
+}
+
+fn spawn_task(process: &Arc<Process>, entry: extern "C" fn(*mut c_void), arg: *mut c_void) {
+    let task =
+        Task::create_new(process, entry, arg).expect("should be able to create a cow probe task");
+    GlobalTaskQueue::enqueue(Box::pin(task));
+}
+
+extern "C" fn cow_origin(clone: *mut c_void) {
+    // Safety: the main task created `clone` with `Arc::into_raw` for this
+    // task alone.
+    let clone = unsafe { Arc::from_raw(clone.cast_const().cast::<Process>()) };
+    let process = Task::current().process().clone();
+    let segment = process
+        .vmm()
+        .reserve(COW_PAGE_COUNT)
+        .expect("should be able to reserve the cow pages");
+    let region = PrivateMemoryRegion::new(
+        segment,
+        COW_PAGE_COUNT * PAGE_SIZE,
+        PageTableFlags::PRESENT
+            | PageTableFlags::WRITABLE
+            | PageTableFlags::USER_ACCESSIBLE
+            | PageTableFlags::NO_EXECUTE,
+    );
+    let region = process
+        .memory_regions()
+        .add_region(MemoryRegion::Private(region));
+    COW_REGION_BASE.store(region.addr().as_u64(), Ordering::Release);
+    for (index, byte) in ORIGIN_PATTERN.iter().enumerate() {
+        write_page(index, *byte);
+    }
+
+    COW_REGION_READY.store(true, Ordering::Release);
+    wait_for(&COW_WRITER_STARTED);
+
+    let clone_vmm = clone.vmm();
+    process
+        .memory_regions()
+        .clone_into(process.address_space(), clone.memory_regions(), &clone_vmm)
+        .expect("should be able to clone the regions");
+    COW_CLONED.store(true, Ordering::Release);
+    wait_for(&COW_CLONE_DONE);
+
+    let pages = [read_page(0), read_page(1), read_page(2)];
+    if pages == [ORIGIN_WRITER_BYTE, ORIGIN_PATTERN[1], ORIGIN_PATTERN[2]] {
+        kernel::serial_println!("test-kernel: cow origin isolated=ok");
+    } else {
+        kernel::serial_println!(
+            "test-kernel: cow origin isolated=FAIL p0={:#x} p1={:#x} p2={:#x}",
+            pages[0],
+            pages[1],
+            pages[2]
+        );
+    }
+
+    let shared_frame = page_frame(2);
+    write_page(2, ORIGIN_BREAK_BYTE);
+    let page2 = read_page(2);
+    let private_frame = page_frame(2);
+    if page2 == ORIGIN_BREAK_BYTE {
+        kernel::serial_println!(
+            "test-kernel: cow origin break=ok frame_changed={}",
+            shared_frame != private_frame
+        );
+    } else {
+        kernel::serial_println!("test-kernel: cow origin break=FAIL p2={:#x}", page2);
+    }
+
+    let released_frame = page_frame(1);
+    write_page(1, ORIGIN_RECLAIM_BYTE);
+    let page1 = read_page(1);
+    let reclaimed_frame = page_frame(1);
+    if page1 == ORIGIN_RECLAIM_BYTE {
+        kernel::serial_println!(
+            "test-kernel: cow origin reclaim=ok frame_same={}",
+            released_frame == reclaimed_frame
+        );
+    } else {
+        kernel::serial_println!("test-kernel: cow origin reclaim=FAIL p1={:#x}", page1);
+    }
+
+    COW_PROBE_DONE.store(true, Ordering::Release);
+}
+
+/// This task keeps a writable TLB entry for page 0 until the clone exists.
+/// Then it writes one time. The write must fault, because the clone demoted
+/// the page.
+extern "C" fn cow_origin_writer(_: *mut c_void) {
+    wait_for(&COW_REGION_READY);
+    with_timer_masked(|| {
+        COW_WRITER_STARTED.store(true, Ordering::Release);
+        while !COW_CLONED.load(Ordering::Acquire) {
+            write_page(0, ORIGIN_PATTERN[0]);
+        }
+        write_page(0, ORIGIN_WRITER_BYTE);
+    });
+    COW_WRITER_DONE.store(true, Ordering::Release);
+}
+
+/// This task stays alive until the probe ends, so the origin's break of
+/// page 2 finds the shared backing.
+extern "C" fn cow_clone_task(_: *mut c_void) {
+    wait_for(&COW_WRITER_DONE);
+    wait_for(&COW_READER_STARTED);
+
+    let pages = [read_page(0), read_page(1), read_page(2)];
+    if pages == ORIGIN_PATTERN {
+        kernel::serial_println!("test-kernel: cow clone shared_read=ok");
+    } else {
+        kernel::serial_println!(
+            "test-kernel: cow clone shared_read=FAIL p0={:#x} p1={:#x} p2={:#x}",
+            pages[0],
+            pages[1],
+            pages[2]
+        );
+    }
+
+    let shared_frame = page_frame(1);
+    write_page(1, CLONE_BYTE);
+    let pages = [read_page(0), read_page(1), read_page(2)];
+    let private_frame = page_frame(1);
+    if pages == [ORIGIN_PATTERN[0], CLONE_BYTE, ORIGIN_PATTERN[2]] {
+        kernel::serial_println!(
+            "test-kernel: cow clone private_write=ok frame_changed={}",
+            shared_frame != private_frame
+        );
+    } else {
+        kernel::serial_println!(
+            "test-kernel: cow clone private_write=FAIL p0={:#x} p1={:#x} p2={:#x}",
+            pages[0],
+            pages[1],
+            pages[2]
+        );
+    }
+
+    COW_CLONE_WROTE.store(true, Ordering::Release);
+    wait_for(&COW_READER_DONE);
+    COW_CLONE_DONE.store(true, Ordering::Release);
+    wait_for(&COW_PROBE_DONE);
+}
+
+/// This task keeps a read-only TLB entry for page 1 until the clone wrote
+/// the page. Then it reads one time. Without the shootdown this CPU reads
+/// the old frame.
+extern "C" fn cow_clone_reader(_: *mut c_void) {
+    wait_for(&COW_WRITER_DONE);
+    let page1 = with_timer_masked(|| {
+        COW_READER_STARTED.store(true, Ordering::Release);
+        while !COW_CLONE_WROTE.load(Ordering::Acquire) {
+            read_page(1);
+        }
+        read_page(1)
+    });
+    if page1 == CLONE_BYTE {
+        kernel::serial_println!("test-kernel: cow clone reader_sees_write=ok");
+    } else {
+        kernel::serial_println!(
+            "test-kernel: cow clone reader_sees_write=FAIL p1={:#x}",
+            page1
+        );
+    }
+    COW_READER_DONE.store(true, Ordering::Release);
 }
 
 /// Parks like a task blocked in a syscall, so the execve reaper must wake it
