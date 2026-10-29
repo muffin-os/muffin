@@ -26,6 +26,7 @@ use crate::mcore::mtask::task::Task;
 
 pub(crate) mod access;
 mod exec;
+mod fork;
 
 #[must_use]
 pub(crate) fn dispatch_syscall(
@@ -62,6 +63,7 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_EXECVE => {
             exec::dispatch_sys_execve(arg1, arg2, arg3, arg4, arg5, arg6, frame, regs)
         }
+        kernel_abi::SYS_FORK => fork::dispatch_sys_fork(frame, regs),
         kernel_abi::SYS_SHUTDOWN => dispatch_sys_shutdown(),
         _ => Err(ENOSYS),
     };

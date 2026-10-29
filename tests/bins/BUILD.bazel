@@ -19,6 +19,7 @@ package(default_visibility = ["//visibility:public"])
         "file_read": "file-read",
         "file_write": "file-write",
         "floats": "floats",
+        "fork": "fork",
         "mmap": "mmap",
         "posix": "posix",
         "signals_edge": "signals-edge",

@@ -9,7 +9,9 @@ use tracing::{error, warn};
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::Cr2;
 use x86_64::registers::debug::{Dr6, Dr7};
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::structures::idt::{
+    InterruptDescriptorTable, InterruptStackFrame, InterruptStackFrameValue, PageFaultErrorCode,
+};
 use x86_64::structures::paging::{Page, Size4KiB};
 use x86_64::{PrivilegeLevel, VirtAddr};
 
@@ -112,18 +114,24 @@ pub fn create_idt() -> InterruptDescriptorTable {
 
 macro_rules! wrap {
     ($fn:ident => $w:ident) => {
-        wrap!(@asm $fn => $w, "add rdi, 9 * 8", "", "");
+        wrap!(@asm $fn => $w, "add rdi, 15 * 8", "", "");
     };
     // The CPU pushes an error code below the frame for #GP, #NP and #SS. The
     // wrapper passes it as the third argument and drops it before iretq.
     ($fn:ident => $w:ident, error_code) => {
-        wrap!(@asm $fn => $w, "add rdi, 10 * 8", "mov rdx, [rsp + 9 * 8]", "add rsp, 8");
+        wrap!(@asm $fn => $w, "add rdi, 16 * 8", "mov rdx, [rsp + 15 * 8]", "add rsp, 8");
     };
     (@asm $fn:ident => $w:ident, $frame:literal, $load_error:literal, $drop_error:literal) => {
         #[allow(clippy::missing_safety_doc)] // expect is incompatible with #[unsafe(naked)]
         #[unsafe(naked)]
         pub unsafe extern "sysv64" fn $w() {
             core::arch::naked_asm!(
+                "push r15",
+                "push r14",
+                "push r13",
+                "push r12",
+                "push rbp",
+                "push rbx",
                 "push rax",
                 "push rcx",
                 "push rdx",
@@ -147,6 +155,12 @@ macro_rules! wrap {
                 "pop rdx",
                 "pop rcx",
                 "pop rax",
+                "pop rbx",
+                "pop rbp",
+                "pop r12",
+                "pop r13",
+                "pop r14",
+                "pop r15",
                 $drop_error,
                 "iretq",
                 sym $fn
@@ -174,6 +188,52 @@ pub(crate) struct SyscallRegisters {
     pub rdx: usize,
     pub rcx: usize,
     pub rax: usize,
+    pub rbx: usize,
+    pub rbp: usize,
+    pub r12: usize,
+    pub r13: usize,
+    pub r14: usize,
+    pub r15: usize,
+}
+
+/// The memory a `wrap!` handler sees from `rsp` upward: the register list
+/// and then the hardware frame. `resume_user_frame` pops it the same way.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct UserFrame {
+    pub regs: SyscallRegisters,
+    pub frame: InterruptStackFrameValue,
+}
+
+const _: () = {
+    assert!(160 == size_of::<UserFrame>());
+    assert!(120 == offset_of!(UserFrame, frame));
+};
+
+/// Enters Ring 3 with every register of `frame`. `frame` must stay valid
+/// until `iretq`, so callers pass a local on the current kernel stack.
+#[allow(clippy::missing_safety_doc)] // expect is incompatible with #[unsafe(naked)]
+#[unsafe(naked)]
+pub(crate) unsafe extern "sysv64" fn resume_user_frame(_frame: *const UserFrame) -> ! {
+    core::arch::naked_asm!(
+        "mov rsp, rdi",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+        "pop rbx",
+        "pop rbp",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+        "iretq",
+    );
 }
 
 pub extern "sysv64" fn syscall_handler_impl(
@@ -286,19 +346,8 @@ extern "x86-interrupt" fn invalid_tss_handler(stack_frame: InterruptStackFrame, 
 }
 
 #[repr(C)]
-pub(crate) struct CalleeSavedRegisters {
-    pub rbx: usize,
-    pub rbp: usize,
-    pub r12: usize,
-    pub r13: usize,
-    pub r14: usize,
-    pub r15: usize,
-}
-
-#[repr(C)]
 pub(crate) struct FaultBlock {
     pub regs: SyscallRegisters,
-    pub callee: CalleeSavedRegisters,
     pub error_code: u64,
     pub frame: InterruptStackFrame,
 }

@@ -109,7 +109,9 @@ impl MemoryRegions {
 
     /// Adds a counterpart of every region of this process to `target`. The
     /// counterparts share the frames copy-on-write. See
-    /// [`MemoryRegion::clone_into`].
+    /// [`MemoryRegion::clone_into`]. `CopyEager` regions get private copies;
+    /// the counterpart's pages are unmapped until `populate_eager_copies`
+    /// runs in the target address space.
     ///
     /// # Errors
     /// Returns the first error of [`MemoryRegion::clone_into`]. `target`
@@ -129,6 +131,25 @@ impl MemoryRegions {
         let regions = interrupts::without_interrupts(|| self.regions.lock().clone());
         for region in regions {
             target.add_region(region.clone_into(address_space, target_vmm)?);
+        }
+        Ok(())
+    }
+
+    /// Maps every eager copy in the active address space. The child of a
+    /// fork calls it before its first user instruction, because the
+    /// scheduler and signal delivery write these pages with interrupts off
+    /// and cannot page them in.
+    ///
+    /// # Errors
+    /// Returns the first error of [`MemoryRegion::handle_fault`].
+    pub fn populate_eager_copies(&self, address_space: &AddressSpace) -> Result<(), PageInError> {
+        let regions = interrupts::without_interrupts(|| self.regions.lock().clone());
+        for region in regions {
+            if let MemoryRegion::Private(r) = &*region
+                && r.fork == ForkPolicy::CopyEager
+            {
+                self.populate(address_space, r.start, r.size, true)?;
+            }
         }
         Ok(())
     }
@@ -309,6 +330,10 @@ pub enum CloneRegionError {
     SegmentReserved,
     #[error("failed to make a shared page read-only")]
     RemapFailed,
+    #[error("out of physical memory")]
+    OutOfMemory,
+    #[error("failed to map a copied page")]
+    MapFailed,
 }
 
 /// Maps `frame` at a transient higher-half address of the active address
@@ -396,6 +421,15 @@ impl PrivateRegionState {
     }
 }
 
+/// How `clone_into` treats the region's resident pages.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ForkPolicy {
+    /// Share the frames and demote writable pages to read-only.
+    CopyOnWrite,
+    /// Copy the pages into private frames. The region's pages stay as they are.
+    CopyEager,
+}
+
 #[derive(Debug)]
 pub struct PrivateMemoryRegion {
     /// Held only to release the virtual reservation with the region.
@@ -409,6 +443,7 @@ pub struct PrivateMemoryRegion {
     /// is page aligned and for guarded regions also covers the surrounding
     /// guard pages.
     size: usize,
+    fork: ForkPolicy,
     /// Serializes all backing mutations, all flags changes, and all fault
     /// resolution for this region.
     state: Mutex<PrivateRegionState>,
@@ -420,6 +455,7 @@ impl PrivateMemoryRegion {
             start: segment.start,
             _segment: segment,
             size,
+            fork: ForkPolicy::CopyOnWrite,
             state: Mutex::new(PrivateRegionState {
                 flags,
                 pages: BTreeMap::new(),
@@ -438,6 +474,7 @@ impl PrivateMemoryRegion {
         start: VirtAddr,
         page_count: usize,
         flags: PageTableFlags,
+        fork: ForkPolicy,
         address_space: &AddressSpace,
     ) -> Result<Self, PageInError> {
         debug_assert!(flags.contains(PageTableFlags::WRITABLE));
@@ -448,6 +485,7 @@ impl PrivateMemoryRegion {
             start,
             _segment: segment,
             size,
+            fork,
             state: Mutex::new(PrivateRegionState {
                 flags,
                 pages: BTreeMap::new(),
@@ -544,19 +582,23 @@ impl PrivateMemoryRegion {
         result
     }
 
-    /// Creates a region for another address space. The new region shares
-    /// every backing frame of this region. Every resident writable page of
-    /// this region becomes read-only on every CPU before this call returns.
-    /// Until then, other tasks of this process can write through a stale
-    /// TLB entry. The new region sees those writes. No task uses the new
-    /// region before this call returns. The fault handler of each side maps
-    /// the pages that are not resident.
+    /// Creates a region for another address space. A `CopyOnWrite` region
+    /// shares every backing frame with the new region. Every resident
+    /// writable page of this region becomes read-only on every CPU before
+    /// this call returns. Until then, other tasks of this process can write
+    /// through a stale TLB entry. The new region sees those writes. No task
+    /// uses the new region before this call returns. The fault handler of
+    /// each side maps the pages that are not resident.
+    ///
+    /// A `CopyEager` region gets private copies of every resident page and
+    /// no page of this region changes.
     ///
     /// # Errors
     /// Returns `SegmentReserved` when `target_vmm` already holds the region's
     /// address range. Returns `RemapFailed` when a resident page cannot
     /// become read-only. The pages that became read-only before the failure
-    /// stay read-only. The next write fault restores each of them.
+    /// stay read-only. The next write fault restores each of them. Returns
+    /// `OutOfMemory` or `MapFailed` when a `CopyEager` page cannot be copied.
     ///
     /// # Panics
     /// Panics if a resident page becomes read-only while interrupts are
@@ -569,6 +611,9 @@ impl PrivateMemoryRegion {
         let segment = target_vmm
             .mark_as_reserved(*self._segment)
             .map_err(|AlreadyReserved| CloneRegionError::SegmentReserved)?;
+        if self.fork == ForkPolicy::CopyEager {
+            return self.copy_into(address_space, segment);
+        }
 
         let mut demoted = false;
         let state = {
@@ -605,7 +650,54 @@ impl PrivateMemoryRegion {
             _segment: segment,
             start: self.start,
             size: self.size,
+            fork: self.fork,
             state: Mutex::new(state),
+        })
+    }
+
+    /// Copies every resident page into a private frame of the new region.
+    /// The new region has no mapping until its address space pages it in.
+    /// On failure the frames copied so far drop with the partial map.
+    fn copy_into(
+        &self,
+        address_space: &AddressSpace,
+        segment: OwnedSegment<'static>,
+    ) -> Result<Self, CloneRegionError> {
+        let state = self.state.lock();
+        let range_pages = state.ranges.iter().flat_map(|(first, backing)| {
+            (0..backing.len())
+                .map(|i| (*first + i, backing.start + i))
+                .filter(|(page, _)| !state.pages.contains_key(page))
+        });
+        let single_pages = state
+            .pages
+            .iter()
+            .map(|(page, backing)| (*page, backing.start));
+
+        let mut pages = BTreeMap::new();
+        for (page, source) in range_pages.chain(single_pages) {
+            let frame = PhysicalMemory::allocate_frame::<Size4KiB>()
+                .ok_or(CloneRegionError::OutOfMemory)?;
+            let owned = OwnedPhysicalMemory::from_physical_frame(frame);
+            // `with_frame_mapped` takes the kernel half lock, so the two
+            // mappings run one after the other.
+            let bytes = with_frame_mapped(address_space, source, |src| *src)
+                .map_err(|_| CloneRegionError::MapFailed)?;
+            with_frame_mapped(address_space, frame, |dst| *dst = bytes)
+                .map_err(|_| CloneRegionError::MapFailed)?;
+            pages.insert(page, Arc::new(owned));
+        }
+
+        Ok(Self {
+            _segment: segment,
+            start: self.start,
+            size: self.size,
+            fork: self.fork,
+            state: Mutex::new(PrivateRegionState {
+                flags: state.flags,
+                pages,
+                ranges: BTreeMap::new(),
+            }),
         })
     }
 

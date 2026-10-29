@@ -305,6 +305,18 @@ impl SignalState {
     pub fn set_stopped(&mut self, stopped: bool) {
         self.stopped = stopped;
     }
+
+    /// The state a forked child starts with: the actions and the mask of the
+    /// parent, nothing pending, not stopped (POSIX.1-2024 fork).
+    #[must_use]
+    pub fn fork_inherit(&self) -> Self {
+        Self {
+            actions: self.actions,
+            pending: SigSet::EMPTY,
+            blocked: self.blocked,
+            stopped: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1867,5 +1879,33 @@ mod tests {
             Signal::Terminate.bit(),
             "pending signals survive exec"
         );
+    }
+
+    #[test]
+    fn fork_inherit_keeps_actions_and_mask_drops_pending() {
+        let mut state = SignalState::default();
+        let action = custom_action(0x1000);
+        state.sigaction(Signal::Usr1, Some(action)).unwrap();
+        state.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
+        state.set_pending(Signal::Terminate);
+        state.set_stopped(true);
+
+        let mut child = state.fork_inherit();
+        assert_eq!(
+            child.sigaction(Signal::Usr1, None).unwrap(),
+            action,
+            "the child keeps the parent's handler"
+        );
+        assert_eq!(
+            child.blocked(),
+            Signal::Interrupt.bit(),
+            "the child keeps the parent's mask"
+        );
+        assert_eq!(
+            child.take_next_deliverable(),
+            None,
+            "the child starts with nothing pending"
+        );
+        assert!(!child.stopped(), "the child is not stopped");
     }
 }

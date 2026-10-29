@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use conquer_once::spin::OnceCell;
 use kernel_abi::ProcessId;
-use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
+use kernel_memapi::{Guarded, Location, MemoryApi};
 use kernel_syscall::access::AccessMode;
 use kernel_syscall::exec::build_initial_stack;
 use kernel_syscall::signal::SignalState;
@@ -45,7 +45,9 @@ use crate::mcore::mtask::wait::{
     TaskUnparkTicket, TaskWaker, block_current, reserve, sleep_until, unpark_and_enqueue, wake,
 };
 use crate::mem::address_space::AddressSpace;
-use crate::mem::memapi::{LowerHalfAllocation, LowerHalfMemoryApi, Writable};
+use crate::mem::memapi::{
+    LowerHalfAllocOptions, LowerHalfAllocation, LowerHalfMemoryApi, Writable,
+};
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
@@ -233,7 +235,7 @@ impl Process {
     ) -> Arc<Self> {
         let pid = new_process_id();
         let parent_pid = parent.pid;
-        let address_space = AddressSpace::new();
+        let address_space = AddressSpace::new(parent.address_space());
 
         let process = Self {
             pid,
@@ -656,7 +658,7 @@ pub(crate) fn setup_user_image(
                 Size4KiB::SIZE.into_usize(),
             )
             .map_err(|_| elf::LoadExecutableError::InvalidSizeOrAlign)?,
-            UserAccessible::Yes,
+            LowerHalfAllocOptions::USER_ACCESSIBLE | LowerHalfAllocOptions::FORK_COPY_EAGER,
             Guarded::Yes,
         )
         .ok_or(elf::LoadExecutableError::AllocationFailed)?;
@@ -676,7 +678,7 @@ pub(crate) fn setup_user_image(
         .allocate(
             Location::Anywhere,
             Layout::new::<FxArea>(),
-            UserAccessible::Yes,
+            LowerHalfAllocOptions::USER_ACCESSIBLE | LowerHalfAllocOptions::FORK_COPY_EAGER,
             Guarded::No,
         )
         .ok_or(elf::LoadExecutableError::AllocationFailed)?;

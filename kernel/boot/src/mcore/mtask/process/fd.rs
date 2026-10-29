@@ -74,6 +74,10 @@ impl FileDescriptor {
         self.num
     }
 
+    pub fn flags(&self) -> FileDescriptorFlags {
+        *self._flags.read()
+    }
+
     pub fn file_description(&self) -> &Arc<OpenFileDescription> {
         &self.file_description
     }

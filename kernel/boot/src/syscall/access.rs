@@ -109,9 +109,8 @@ impl FileAccess for KernelAccess {
             ReadError::NotReadable => EISDIR,
             ReadError::FsError(_) | ReadError::ReadFailed => EIO,
         })?;
-        // The load and the store are separate, which is sound only while a
-        // single task reaches a file description. Nothing forks and no
-        // thread-spawn syscall is dispatched.
+        // The load and the store are separate. A fork shares the description
+        // between processes, so a concurrent read can lose an offset update.
         ofd.position().store(offset + read.into_u64(), Relaxed);
         Ok(read)
     }

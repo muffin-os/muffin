@@ -38,7 +38,7 @@ const USER_RFLAGS: RFlags = RFlags::CARRY_FLAG
 #[derive(Debug, Clone, Copy)]
 struct SigFrame {
     // First so the whole frame keeps the 16 byte alignment fxsave64 needs.
-    // Callee saved GPRs need no slots because they survive the handler call chain.
+    // `regs` holds every general purpose register, so sigreturn restores the full set.
     fx: [u8; 512],
     regs: SyscallRegisters,
     rip: u64,

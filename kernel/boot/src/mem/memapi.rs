@@ -3,19 +3,33 @@ use core::alloc::Layout;
 use core::fmt::{Debug, Formatter};
 use core::marker::PhantomData;
 use core::ops::Deref;
+use core::ptr;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
 
-use kernel_memapi::{Allocation, Guarded, Location, MemoryApi, UserAccessible, WritableAllocation};
+use bitflags::bitflags;
+use kernel_memapi::{Allocation, Guarded, Location, MemoryApi, WritableAllocation};
 use kernel_virtual_memory::Segment;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
 
 use crate::mcore::mtask::process::Process;
-use crate::mcore::mtask::process::mem::{MemoryRegion, PrivateMemoryRegion};
+use crate::mcore::mtask::process::mem::{ForkPolicy, MemoryRegion, PrivateMemoryRegion};
+use crate::mcore::mtask::task::Task;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::phys::PhysicalMemory;
 use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use crate::{U64Ext, UsizeExt};
+
+bitflags! {
+    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+    pub struct LowerHalfAllocOptions: u8 {
+        const USER_ACCESSIBLE = 1;
+        /// fork copies the pages into private frames and maps them in the
+        /// child before it runs. Required for memory the kernel writes with
+        /// interrupts off (FX area) or during signal delivery (user stack).
+        const FORK_COPY_EAGER = 2;
+    }
+}
 
 #[derive(Clone)]
 pub struct LowerHalfMemoryApi {
@@ -29,7 +43,7 @@ impl LowerHalfMemoryApi {
 }
 
 impl MemoryApi for LowerHalfMemoryApi {
-    type AllocOptions = UserAccessible;
+    type AllocOptions = LowerHalfAllocOptions;
     type ReadonlyAllocation = LowerHalfAllocation<Readonly>;
     type WritableAllocation = LowerHalfAllocation<Writable>;
     type ExecutableAllocation = LowerHalfAllocation<Executable>;
@@ -38,7 +52,7 @@ impl MemoryApi for LowerHalfMemoryApi {
         &mut self,
         location: Location,
         layout: Layout,
-        user_accessible: UserAccessible,
+        options: LowerHalfAllocOptions,
         guarded: Guarded,
     ) -> Option<Self::WritableAllocation> {
         assert!(layout.align() <= Size4KiB::SIZE.into_usize());
@@ -84,17 +98,23 @@ impl MemoryApi for LowerHalfMemoryApi {
         let base_flags = PageTableFlags::PRESENT
             | PageTableFlags::WRITABLE
             | PageTableFlags::NO_EXECUTE
-            | if user_accessible == UserAccessible::Yes {
+            | if options.contains(LowerHalfAllocOptions::USER_ACCESSIBLE) {
                 PageTableFlags::USER_ACCESSIBLE
             } else {
                 PageTableFlags::empty()
             };
+        let fork = if options.contains(LowerHalfAllocOptions::FORK_COPY_EAGER) {
+            ForkPolicy::CopyEager
+        } else {
+            ForkPolicy::CopyOnWrite
+        };
 
         let region = PrivateMemoryRegion::new_populated(
             segment,
             window_start,
             (window_len / Size4KiB::SIZE).into_usize(),
             base_flags,
+            fork,
             self.process.address_space(),
         )
         .ok()?;
@@ -210,6 +230,22 @@ impl<T: AllocationType> LowerHalfAllocation<T> {
     pub fn len(&self) -> usize {
         self.layout.size()
     }
+
+    /// The handle of this allocation's counterpart in `process`, found by its
+    /// start address. `None` when `process` holds no region there.
+    pub(crate) fn counterpart(&self, process: &Arc<Process>) -> Option<Self> {
+        let region = process.memory_regions().region_for(self.start)?;
+        Some(Self {
+            start: self.start,
+            layout: self.layout,
+            inner: Inner {
+                region,
+                base_flags: self.base_flags,
+                process: process.clone(),
+            },
+            _typ: PhantomData,
+        })
+    }
 }
 
 pub struct Inner {
@@ -315,21 +351,32 @@ impl MemoryApi for HigherHalfMemoryApi {
 
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
 
-        match contiguity {
-            FrameContiguity::NonContiguous => AddressSpace::kernel()
+        let map = |space: &AddressSpace| match contiguity {
+            FrameContiguity::NonContiguous => space
                 .map_range::<Size4KiB>(
                     &mapped_segment,
                     PhysicalMemory::allocate_frames_non_contiguous(),
                     flags,
                 )
-                .ok()?,
+                .ok(),
             FrameContiguity::Contiguous => {
                 let owned = PhysicalMemory::allocate_frames::<Size4KiB>(interior_pages)?;
-                AddressSpace::kernel()
+                space
                     .map_range::<Size4KiB>(&mapped_segment, *owned, flags)
                     .ok()?;
                 let _ = owned.leak();
+                Some(())
             }
+        };
+        // The mapper of an address space only works while that address
+        // space is active, so a process context maps through its own tables.
+        // The kernel half is shared, so the mapping is visible everywhere.
+        match Task::try_current() {
+            Some(task) if !ptr::eq(task.process().address_space(), AddressSpace::kernel()) => {
+                let _kernel_half = AddressSpace::lock_kernel_half();
+                map(task.process().address_space())?;
+            }
+            _ => map(AddressSpace::kernel())?,
         }
 
         Some(HigherHalfAllocation {

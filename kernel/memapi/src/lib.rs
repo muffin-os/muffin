@@ -12,12 +12,6 @@ pub enum Location {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum UserAccessible {
-    No,
-    Yes,
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Guarded {
     No,
     Yes,

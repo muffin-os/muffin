@@ -20,11 +20,11 @@ pub use kernel_abi::{
     ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, O_ACCMODE, O_APPEND, O_CLOEXEC,
     O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK,
     O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX,
-    ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FSTAT,
-    SYS_FSYNC, SYS_GETCWD, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP,
-    SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK,
-    SYS_SIGRETURN, SYS_WRITE, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet, Signal, Stat,
-    StrSlice, Timespec, Whence,
+    ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK,
+    SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETPID, SYS_IOCTL, SYS_KILL, SYS_LSEEK, SYS_MMAP,
+    SYS_NANOSLEEP, SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
+    SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WRITE, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet,
+    Signal, Stat, StrSlice, Timespec, Whence,
 };
 pub use panic::catch_unwind;
 pub use start::{__muffin_start_inner, args, env};
@@ -150,6 +150,11 @@ pub fn sigpending(out: &mut SigSet) -> Result<(), Errno> {
 
 pub fn getpid() -> i64 {
     unsafe { syscall0(SYS_GETPID) as i64 }
+}
+
+/// Returns `Ok(0)` in the child and `Ok(child_pid)` in the parent.
+pub fn fork() -> Result<i64, Errno> {
+    ret(unsafe { syscall0(SYS_FORK) }).map(|pid| pid as i64)
 }
 
 /// Builds the action that runs `handler` with an empty mask and returns

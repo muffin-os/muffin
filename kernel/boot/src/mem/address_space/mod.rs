@@ -1,4 +1,5 @@
 use core::fmt::{Debug, Formatter};
+use core::ptr;
 
 use conquer_once::spin::OnceCell;
 use limine::memory_map::EntryType;
@@ -261,26 +262,37 @@ impl AddressSpace {
         }
     }
 
+    /// Creates an address space that shares the kernel half with the
+    /// kernel's. `active` is the address space of this CPU; the temporary
+    /// mappings of the new table go through it, because the kernel half
+    /// is shared.
+    ///
     /// # Panics
     /// This function panics if not enough physical or virtual memory is available to create
     /// a new address space, or if something goes wrong during mapping of addresses.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(active: &Self) -> Self {
+        let kernel = Self::kernel();
+        let level4_vaddr = kernel.inner.read().level4_vaddr;
         let new_frame = PhysicalMemory::allocate_frame().unwrap();
         let new_pt_segment = VirtualMemoryHigherHalf.reserve(1).unwrap();
         let old_pt_segment = VirtualMemoryHigherHalf.reserve(1).unwrap();
 
+        // The kernel's own mapper lock is the kernel half lock, so taking
+        // it again for the kernel address space would deadlock.
+        let _kernel_half = (!ptr::eq(active, kernel)).then(Self::lock_kernel_half);
+
         let old_pt_page = Page::containing_address(old_pt_segment.start);
-        Self::kernel()
+        active
             .map::<Size4KiB>(
                 old_pt_page,
-                Self::kernel().level4_frame,
+                kernel.level4_frame,
                 PageTableFlags::PRESENT | PageTableFlags::NO_EXECUTE,
             )
             .unwrap();
 
         let new_pt_page = Page::containing_address(new_pt_segment.start);
-        Self::kernel()
+        active
             .map::<Size4KiB>(
                 new_pt_page,
                 new_frame,
@@ -305,14 +317,10 @@ impl AddressSpace {
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
         );
 
-        Self::kernel()
-            .unmap(old_pt_page)
-            .expect("page should be mapped");
-        Self::kernel()
-            .unmap(new_pt_page)
-            .expect("page should be mapped");
+        active.unmap(old_pt_page).expect("page should be mapped");
+        active.unmap(new_pt_page).expect("page should be mapped");
 
-        unsafe { Self::create_from(new_frame, Self::kernel().inner.read().level4_vaddr) }
+        unsafe { Self::create_from(new_frame, level4_vaddr) }
     }
 
     pub fn level4_frame(&self) -> PhysFrame {

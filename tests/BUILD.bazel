@@ -186,6 +186,15 @@ ext2_image(
 )
 
 ext2_image(
+    name = "fork_disk",
+    contents = {"spawn": "/bin/fork\n"},
+    files = {
+        "//tests/bins:exit_code": "bin/exit-code",
+        "//tests/bins:fork": "bin/fork",
+    },
+)
+
+ext2_image(
     name = "true_false_disk",
     contents = {"spawn": "/bin/true\n/bin/false\n"},
     files = {
@@ -270,6 +279,7 @@ ext2_image(
         "file_read",
         "file_write",
         "floats",
+        "fork",
         "heap_bounds",
         "kstack_overflow",
         "map_range_rollback",

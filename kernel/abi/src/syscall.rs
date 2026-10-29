@@ -66,4 +66,5 @@ n! {
     SYS_NANOSLEEP = 52,
     SYS_EXECVE = 53,
     SYS_SHUTDOWN = 54,
+    SYS_FORK = 55,
 }

@@ -6,7 +6,7 @@ use core::alloc::Layout;
 use kernel_elfloader::{
     ElfFile, ElfHeader, ElfParseError, ElfType, ProgramHeaderFlags, ProgramHeaderType,
 };
-use kernel_memapi::{Guarded, Location, MemoryApi, UserAccessible};
+use kernel_memapi::{Guarded, Location, MemoryApi};
 use kernel_vfs::Stat;
 use kernel_vfs::node::VfsNode;
 use kernel_virtual_memory::Segment;
@@ -20,7 +20,7 @@ use crate::mcore::mtask::process::mem::{
     FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion,
 };
 use crate::mcore::mtask::task::Task;
-use crate::mem::memapi::LowerHalfMemoryApi;
+use crate::mem::memapi::{LowerHalfAllocOptions, LowerHalfMemoryApi};
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
@@ -237,7 +237,7 @@ impl ValidatedExecutable {
                         .allocate(
                             Location::Fixed(vaddr),
                             layout,
-                            UserAccessible::Yes,
+                            LowerHalfAllocOptions::USER_ACCESSIBLE,
                             Guarded::No,
                         )
                         .ok_or(LoadExecutableError::AllocationFailed)?;
@@ -283,7 +283,7 @@ impl ValidatedExecutable {
                 .allocate(
                     Location::Anywhere,
                     tls.layout,
-                    UserAccessible::Yes,
+                    LowerHalfAllocOptions::USER_ACCESSIBLE,
                     Guarded::No,
                 )
                 .ok_or(LoadExecutableError::AllocationFailed)?;
