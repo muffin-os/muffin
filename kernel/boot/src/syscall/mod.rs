@@ -338,6 +338,7 @@ fn dispatch_sys_read(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno
 }
 
 fn dispatch_sys_getdents(fd: usize, buf: usize, len: usize) -> Result<usize, Errno> {
+    debug!(fd, len, "getdents start");
     let cx = KernelAccess::new();
 
     let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
@@ -345,7 +346,9 @@ fn dispatch_sys_getdents(fd: usize, buf: usize, len: usize) -> Result<usize, Err
 
     let slice = unsafe { slice_from_ptr_and_len_mut(buf, len) }?;
     make_user_range_resident(buf, len, UserAccess::Write)?;
-    sys_getdents(&cx, fd, slice)
+    let result = sys_getdents(&cx, fd, slice);
+    debug!(?result, "getdents end");
+    result
 }
 
 fn dispatch_sys_write(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno> {

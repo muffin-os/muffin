@@ -58,6 +58,12 @@ jobs:
           sudo apt install -y qemu-system-x86
       - name: Test
         run: bazel test -c ${{ matrix.compilation_mode }} //...
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: testlogs-${{ matrix.compilation_mode }}
+          path: bazel-testlogs/
 
   prepare-miri:
     name: "Prepare Miri"

@@ -15,6 +15,7 @@ use kernel_vfs::{
     Stat, StatError, TruncateError, WriteError,
 };
 use spin::RwLock;
+use tracing::debug;
 
 pub struct VirtualExt2Fs<T> {
     ext2fs: Ext2Fs<T>,
@@ -182,6 +183,7 @@ where
     }
 
     fn read_dir(&mut self, handle: FsHandle) -> Result<Vec<String>, ReadDirError> {
+        debug!(?handle, "ext2 read_dir start");
         let inode = &self
             .handles
             .get(&handle)
@@ -189,7 +191,7 @@ where
             .inode;
 
         let guard = inode.read();
-        match &*guard {
+        let result = match &*guard {
             OpenInode::Directory(dir) => self
                 .ext2fs
                 .list_dir(dir)
@@ -203,7 +205,12 @@ where
                 })
                 .collect(),
             OpenInode::RegularFile(_) => Err(ReadDirError::NotDirectory),
-        }
+        };
+        debug!(
+            count = result.as_ref().map(Vec::len).ok(),
+            "ext2 read_dir end"
+        );
+        result
     }
 
     fn stat(&mut self, handle: FsHandle, stat: &mut Stat) -> Result<(), StatError> {

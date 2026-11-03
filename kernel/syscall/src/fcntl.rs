@@ -74,6 +74,7 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
         return Err(errno);
     }
     let fd_num = Into::<c_int>::into(fd);
+    debug!(fd = fd_num, "open done");
     Ok(fd_num as usize)
 }
 
