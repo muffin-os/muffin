@@ -1,2 +1,4 @@
 exec: /bin/compositor-demo
 restart: no
+after:
+    - compositor

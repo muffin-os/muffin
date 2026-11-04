@@ -23,6 +23,9 @@ struct Service {
     exec: PathBuf,
     #[serde(default)]
     restart: Restart,
+    /// Services spawned before this one. Spawn order only: nothing waits for readiness.
+    #[serde(default)]
+    after: Vec<String>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -47,8 +50,10 @@ impl Restart {
 }
 
 fn main() -> ExitCode {
-    let services = match load_services(Path::new(SERVICE_DIR)) {
-        Ok(services) => services,
+    let loaded = load_services(Path::new(SERVICE_DIR))
+        .and_then(|services| start_order(&services).map(|order| (services, order)));
+    let (services, order) = match loaded {
+        Ok(loaded) => loaded,
         Err(e) => {
             println!("services: FAIL {e}");
             return ExitCode::FAILURE;
@@ -58,8 +63,8 @@ fn main() -> ExitCode {
 
     // pid -> service name
     let mut running = BTreeMap::new();
-    for (name, service) in &services {
-        spawn(name, service, &mut running);
+    for name in &order {
+        spawn(name, &services[name], &mut running);
     }
 
     loop {
@@ -133,4 +138,27 @@ fn load_services(dir: &Path) -> Result<BTreeMap<String, Service>, String> {
         services.insert(name.to_owned(), service);
     }
     Ok(services)
+}
+
+/// Orders the services so that each one follows everything in its `after`.
+fn start_order(services: &BTreeMap<String, Service>) -> Result<Vec<String>, String> {
+    let mut order: Vec<String> = Vec::with_capacity(services.len());
+    while order.len() < services.len() {
+        let ready = services.iter().find(|(name, service)| {
+            !order.contains(name) && service.after.iter().all(|dep| order.contains(dep))
+        });
+        let Some((name, _)) = ready else {
+            let stuck: Vec<&str> = services
+                .keys()
+                .filter(|name| !order.contains(name))
+                .map(String::as_str)
+                .collect();
+            return Err(format!(
+                "after: cycle or unknown service in {}",
+                stuck.join(", ")
+            ));
+        };
+        order.push(name.clone());
+    }
+    Ok(order)
 }

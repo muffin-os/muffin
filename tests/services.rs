@@ -13,6 +13,16 @@ fn services() {
 
     assert!(has("services: parsed 4 services"));
     assert!(has("services: spawned crasher pid="));
+    let first = |needle: &str| {
+        transcript
+            .iter()
+            .position(|line| line.contains(needle))
+            .expect(needle)
+    };
+    assert!(
+        first("services: spawned once pid=") < first("services: spawned always pid="),
+        "after must spawn once before always"
+    );
     assert!(
         has("services: restarting crasher"),
         "on-failure must restart a failed service"

@@ -13,7 +13,7 @@ use compositor_protocol::{
 const CONNECT_ATTEMPTS: u32 = 50;
 const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
-/// Retries because `services` starts the demo and the compositor in no defined order.
+/// Retries because `services` spawns the compositor first but does not wait for its socket.
 fn connect() -> io::Result<UnixStream> {
     let mut attempt = 1;
     loop {
