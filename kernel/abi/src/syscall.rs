@@ -76,4 +76,7 @@ n! {
     SYS_ACCEPT = 62,
     SYS_CONNECT = 63,
     SYS_SHUTDOWN = 64,
+    SYS_FTRUNCATE = 65,
+    SYS_UNLINK = 66,
+    SYS_MUNMAP = 67,
 }

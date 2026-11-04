@@ -10,10 +10,12 @@ use spin::RwLock;
 use tracing::{Level, instrument};
 
 use crate::file::devfs::devfs;
+use crate::file::shm::ShmFs;
 use crate::file::socket::Socket;
 
 pub mod devfs;
 pub mod ext2;
+pub mod shm;
 pub mod socket;
 
 static VFS: RwLock<Vfs> = RwLock::new(Vfs::new());
@@ -30,6 +32,9 @@ pub fn init() {
     VFS.write()
         .mount(AbsolutePath::try_new("/dev").unwrap(), devfs().clone())
         .expect("should be able to mount devfs");
+    VFS.write()
+        .mount(AbsolutePath::try_new("/dev/shm").unwrap(), ShmFs::default())
+        .expect("should be able to mount shmfs");
 }
 
 #[derive(Debug)]

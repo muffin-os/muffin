@@ -12,14 +12,15 @@ use kernel_abi::{
 use kernel_syscall::access::{
     FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess, SocketAccess,
 };
-use kernel_syscall::fcntl::sys_open;
-use kernel_syscall::mman::sys_mmap;
+use kernel_syscall::fcntl::{sys_open, sys_unlink};
+use kernel_syscall::mman::{sys_mmap, sys_munmap};
 use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::socket::{
     sys_accept, sys_bind, sys_connect, sys_listen, sys_shutdown, sys_socket,
 };
 use kernel_syscall::unistd::{
-    sys_close, sys_fsync, sys_getcwd, sys_getdents, sys_ioctl, sys_lseek, sys_read, sys_write,
+    sys_close, sys_fsync, sys_ftruncate, sys_getcwd, sys_getdents, sys_ioctl, sys_lseek, sys_read,
+    sys_write,
 };
 use kernel_syscall::wait::{WaitTarget, sys_getppid, sys_waitpid};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
@@ -84,6 +85,9 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_ACCEPT => dispatch_sys_accept(arg1, arg2, arg3),
         kernel_abi::SYS_CONNECT => dispatch_sys_connect(arg1, arg2, arg3),
         kernel_abi::SYS_SHUTDOWN => dispatch_sys_shutdown(arg1, arg2),
+        kernel_abi::SYS_FTRUNCATE => dispatch_sys_ftruncate(arg1, arg2),
+        kernel_abi::SYS_UNLINK => dispatch_sys_unlink(arg1, arg2),
+        kernel_abi::SYS_MUNMAP => dispatch_sys_munmap(arg1, arg2),
         _ => Err(ENOSYS),
     };
 
@@ -331,6 +335,13 @@ fn dispatch_sys_mmap(
     sys_mmap(&cx, addr, len, prot, flags, fd, offset)
 }
 
+fn dispatch_sys_munmap(addr: usize, len: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let addr = UserspacePtr::try_from_usize(addr)?;
+    sys_munmap(&cx, addr, len)
+}
+
 fn dispatch_sys_open(
     path: usize,
     path_len: usize,
@@ -342,6 +353,14 @@ fn dispatch_sys_open(
     make_user_range_resident(path, path_len, UserAccess::Read)?;
     let path = UserspacePtr::try_from_usize(path)?;
     sys_open(&cx, path, path_len, oflag as i32, mode as i32)
+}
+
+fn dispatch_sys_unlink(path: usize, path_len: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    make_user_range_resident(path, path_len, UserAccess::Read)?;
+    let path = UserspacePtr::try_from_usize(path)?;
+    sys_unlink(&cx, path, path_len)
 }
 
 fn dispatch_sys_read(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno> {
@@ -404,6 +423,15 @@ fn dispatch_sys_fsync(fd: usize) -> Result<usize, Errno> {
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     sys_fsync(&cx, fd)
+}
+
+fn dispatch_sys_ftruncate(fd: usize, len: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    let fd = <KernelAccess as FileAccess>::Fd::from(fd);
+
+    sys_ftruncate(&cx, fd, len as i64)
 }
 
 fn dispatch_sys_close(fd: usize) -> Result<usize, Errno> {

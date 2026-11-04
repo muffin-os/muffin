@@ -22,9 +22,12 @@ static IN_PROGRESS: Mutex<()> = Mutex::new(());
 /// This list holds every CPU that loaded its IDT and enabled its LAPIC. It
 /// is sorted by CPU id.
 static ONLINE: Mutex<Vec<Arc<CpuSlot>>> = Mutex::new(Vec::new());
-/// The initiator writes the start address of the target level 4 table here.
-/// The handlers read it.
+/// The initiator writes the start address of the target level 4 table here,
+/// or `EVERY_ADDRESS_SPACE`. The handlers read it.
 static TARGET_LEVEL4: AtomicU64 = AtomicU64::new(0);
+/// This target makes every CPU flush, whatever address space is active. All
+/// address spaces share the kernel half, so a kernel-half change needs it.
+const EVERY_ADDRESS_SPACE: u64 = u64::MAX;
 /// The initiator writes the target count here. Each handler decrements it
 /// one time.
 static PENDING_ACKS: AtomicUsize = AtomicUsize::new(0);
@@ -77,7 +80,8 @@ impl CpuSlot {
             return;
         }
         let active = Cr3::read().0.start_address().as_u64();
-        if active == TARGET_LEVEL4.load(Acquire) {
+        let target = TARGET_LEVEL4.load(Acquire);
+        if target == EVERY_ADDRESS_SPACE || active == target {
             tlb::flush_all();
         }
         PENDING_ACKS.fetch_sub(1, AcqRel);
@@ -94,9 +98,20 @@ impl CpuSlot {
 /// # Panics
 /// Panics if interrupts are disabled.
 pub(super) fn flush_on_all_cpus(level4_frame: PhysFrame) {
+    shoot_down(level4_frame.start_address().as_u64());
+}
+
+/// Invalidates the kernel-half TLB entries on every other online CPU and
+/// returns after each CPU acknowledges. Interrupts must be enabled, as for
+/// [`flush_on_all_cpus`].
+pub(super) fn flush_kernel_half_on_all_cpus() {
+    shoot_down(EVERY_ADDRESS_SPACE);
+}
+
+fn shoot_down(target: u64) {
     assert!(interrupts::are_enabled());
     let _serialized = IN_PROGRESS.lock();
-    TARGET_LEVEL4.store(level4_frame.start_address().as_u64(), Release);
+    TARGET_LEVEL4.store(target, Release);
 
     let pending = interrupts::without_interrupts(|| {
         // Safety: interrupts are off, so the context stays this CPU's during

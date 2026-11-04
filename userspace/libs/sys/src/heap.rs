@@ -94,9 +94,10 @@ fn grow(heap: &mut Heap, need: usize) {
         if mapped as usize != at {
             return;
         }
-        // SAFETY: there is no munmap syscall, so the mapping outlives every use,
-        // satisfying the heap's `'static` requirement. `extend` also needs the new
-        // bytes directly above the old top, which mapping at `at` gives.
+        // SAFETY: the heap never unmaps its chunks, so the mapping outlives every
+        // use. This satisfies the heap's `'static` requirement. `extend` also
+        // needs the new bytes directly above the old top, which mapping at `at`
+        // gives.
         unsafe {
             if heap.bottom().is_null() {
                 heap.init(at as *mut u8, chunk);

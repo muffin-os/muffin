@@ -79,6 +79,19 @@ impl<'fb> SoftQueue<'fb> {
         &*self.target
     }
 
+    /// Copies `pixels`, a `width` by `height` image with no row padding, to
+    /// the top-left corner of the target. Columns and rows past the target's
+    /// edges are clipped.
+    pub fn blit(&mut self, pixels: &[u32], width: u32, height: u32) {
+        let src_stride = width as usize;
+        let columns = src_stride.min(self.width as usize);
+        let rows = (height as usize).min(self.height as usize);
+        for row in 0..rows {
+            let src = &pixels[row * src_stride..][..columns];
+            self.target[row * self.stride_px..][..columns].copy_from_slice(src);
+        }
+    }
+
     fn rasterize(&mut self, cmd: &DrawCmd) {
         let SoftPipeline {
             vertex_fn,

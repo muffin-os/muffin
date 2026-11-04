@@ -69,4 +69,11 @@ pub trait MemoryRegionAccess {
         let _ = (fd, offset, len, prot);
         Err(ENODEV)
     }
+
+    /// Removes the one region that starts at `addr` and spans exactly `len`
+    /// rounded up to a page. The call unmaps the pages before it returns.
+    ///
+    /// # Errors
+    /// Returns `EINVAL` when no region matches.
+    fn unmap(&self, addr: UserspacePtr<u8>, len: usize) -> Result<(), Errno>;
 }

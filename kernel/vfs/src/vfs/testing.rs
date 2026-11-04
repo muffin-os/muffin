@@ -12,7 +12,7 @@ use crate::fs::{FileSystem, FsHandle};
 use crate::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use crate::{
     CloseError, CreateMode, FsError, FsyncError, MkdirError, OpenError, ReadDirError, ReadError,
-    Stat, StatError, TruncateError, WriteError,
+    Stat, StatError, TruncateError, UnlinkError, WriteError,
 };
 
 #[derive(Default)]
@@ -62,6 +62,13 @@ impl FileSystem for TestFs {
         let handle = FsHandle::from(self.handle_counter.fetch_add(1, Relaxed));
         self.open_files.insert(handle, path.to_owned());
         Ok(handle)
+    }
+
+    fn unlink(&mut self, path: &AbsolutePath) -> Result<(), UnlinkError> {
+        self.files
+            .remove(path)
+            .map(|_| ())
+            .ok_or(UnlinkError::NotFound)
     }
 
     fn create_directory(&mut self, path: &AbsolutePath) -> Result<(), MkdirError> {

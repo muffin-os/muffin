@@ -104,13 +104,13 @@ fn map_own_image() -> Option<&'static [u8]> {
     static IMAGE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
     static LEN: AtomicUsize = AtomicUsize::new(0);
 
-    // There is no munmap syscall and `catch_unwind` lets a process print several
-    // backtraces, each of which would otherwise strand another mapping of the
-    // whole image.
+    // The mapping stays for the process lifetime. `catch_unwind` lets a process
+    // print several backtraces, and each one would otherwise map the whole
+    // image again.
     let cached = IMAGE.load(Acquire);
     if !cached.is_null() {
-        // SAFETY: the pointer was published after its length, and no munmap
-        // syscall exists, so the mapping outlives every borrow of it.
+        // SAFETY: the store of the length precedes the store of the pointer,
+        // and nothing unmaps the mapping, so it outlives every borrow of it.
         return Some(unsafe { slice::from_raw_parts(cached, LEN.load(Relaxed)) });
     }
 

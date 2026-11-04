@@ -129,6 +129,8 @@ pub enum TruncateError {
     NotSupported,
     #[error("truncate failed")]
     TruncateFailed,
+    #[error("file is mapped")]
+    Busy,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
@@ -145,4 +147,18 @@ pub enum MkdirError {
     NotSupported,
     #[error("mkdir failed")]
     MkdirFailed,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
+pub enum UnlinkError {
+    #[error("{0}")]
+    FsError(
+        #[from]
+        #[source]
+        FsError,
+    ),
+    #[error("no such file")]
+    NotFound,
+    #[error("the file system cannot remove files")]
+    NotSupported,
 }

@@ -55,6 +55,21 @@ pub extern "C" fn close(fd: c_int) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn ftruncate(fd: c_int, len: off_t) -> c_int {
+    ret(muffin_sys::ftruncate(fd, len).map(|()| 0))
+}
+
+/// # Safety
+///
+/// `path` must point to a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
+    ret(unsafe { c_str(path) }
+        .and_then(muffin_sys::unlink)
+        .map(|()| 0))
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn lseek(fd: c_int, offset: off_t, whence: c_int) -> off_t {
     let whence = Whence::try_from(whence);
     ret(whence

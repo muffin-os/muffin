@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, fence};
 use core::{mem, slice};
 
+use kernel_vfs::MmapRegion;
 use kernel_vfs::node::VfsNode;
 use kernel_virtual_memory::{AlreadyReserved, Segment};
 use spin::mutex::Mutex;
@@ -298,7 +299,7 @@ impl MemoryRegion {
                     .map_err(|AlreadyReserved| CloneRegionError::SegmentReserved)?,
                 size: r.size,
                 frames: r.frames,
-                _node: r._node.clone(),
+                memory: r.memory.clone(),
             })),
         }
     }
@@ -879,20 +880,20 @@ impl FileBackedMemoryRegion {
     }
 }
 
-/// Owns the virtual reservation for a device-backed shared mapping and keeps
-/// the backing device file open.
+/// Owns the virtual reservation for a shared mapping and a share of the
+/// backing memory.
 ///
-/// It deliberately holds no [`OwnedPhysicalMemory`]. The device owns those
-/// frames, so dropping this region must release only the virtual range and
-/// never the frames. Deallocating them would hand live device memory back to
-/// the frame allocator and corrupt the device.
+/// It deliberately holds no [`OwnedPhysicalMemory`]. The device or the
+/// `ShmFs` object owns those frames; `memory` keeps them alive while this
+/// region exists. A drop of this region releases only the virtual range and
+/// the share, never the frames.
 #[derive(Debug)]
 pub struct SharedMemoryRegion {
     segment: OwnedSegment<'static>,
     size: usize,
-    /// Borrowed from the device. Never deallocated (see the struct docs).
+    /// Borrowed from `memory`. Never deallocated (see the struct docs).
     frames: PhysFrameRangeInclusive<Size4KiB>,
-    _node: VfsNode,
+    memory: MmapRegion,
 }
 
 impl SharedMemoryRegion {
@@ -900,13 +901,13 @@ impl SharedMemoryRegion {
         segment: OwnedSegment<'static>,
         size: usize,
         frames: PhysFrameRangeInclusive<Size4KiB>,
-        node: VfsNode,
+        memory: MmapRegion,
     ) -> Self {
         Self {
             segment,
             size,
             frames,
-            _node: node,
+            memory,
         }
     }
 

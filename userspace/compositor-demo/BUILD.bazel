@@ -9,5 +9,6 @@ rust_binary(
     platform = "//platforms:x86_64-unknown-muffin",
     deps = [
         "//userspace/libs/compositor-protocol",
+        "//userspace/libs/sys",
     ],
 )

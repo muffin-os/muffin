@@ -16,18 +16,19 @@ use core::ffi::{c_int, c_void};
 pub use heap::GrowingHeap;
 pub use kernel_abi::{
     AF_UNIX, ARG_MAX, ClockId, DefaultAction, DirentHeader, E2BIG, EACCES, EADDRINUSE,
-    EAFNOSUPPORT, EBADF, ECONNREFUSED, EDESTADDRREQ, EEXIST, EFAULT, EINTR, EINVAL, EISDIR,
+    EAFNOSUPPORT, EBADF, EBUSY, ECONNREFUSED, EDESTADDRREQ, EEXIST, EFAULT, EINTR, EINVAL, EISDIR,
     ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTCONN, ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW,
     EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE, ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo,
     IoctlRequest, MapFlags, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY,
     O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH,
     O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX, ProtFlags, S_IFMT, S_IFSOCK, SOCK_STREAM,
     SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_CONNECT,
-    SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETDENTS,
-    SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LISTEN, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP,
-    SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK,
-    SYS_SIGRETURN, SYS_SOCKET, SYS_WAITPID, SYS_WRITE, SaFamily, SaFlags, ShutdownHow, SigAction,
-    SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, StrSlice, Timespec, Whence,
+    SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_FTRUNCATE, SYS_GETCWD,
+    SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LISTEN, SYS_LSEEK, SYS_MMAP,
+    SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION,
+    SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE,
+    SaFamily, SaFlags, ShutdownHow, SigAction, SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn,
+    SockLen, Stat, StrSlice, Timespec, Whence,
 };
 
 pub fn exit(code: i32) -> ! {
@@ -109,6 +110,25 @@ pub unsafe fn ioctl_raw(
 
 pub fn fsync(fd: c_int) -> Result<(), Errno> {
     ret(unsafe { syscall1(SYS_FSYNC, fd as usize) }).map(|_| ())
+}
+
+/// Sets the size of the file behind `fd` to `len` bytes.
+///
+/// # Errors
+/// Returns the kernel's errno, such as `EBUSY` for a mapped shared memory
+/// object or `EINVAL` for a file that cannot change size.
+pub fn ftruncate(fd: c_int, len: i64) -> Result<(), Errno> {
+    ret(unsafe { syscall2(SYS_FTRUNCATE, fd as usize, len as usize) }).map(|_| ())
+}
+
+/// Removes the name `path`. Open descriptors on the file stay usable.
+///
+/// # Errors
+/// Returns the kernel's errno, such as `ENOENT` for a missing file or `EPERM`
+/// when the file system cannot remove files.
+pub fn unlink(path: &str) -> Result<(), Errno> {
+    // Safety: `path` is a live slice for the whole call.
+    ret(unsafe { syscall2(SYS_UNLINK, path.as_ptr() as usize, path.len()) }).map(|_| ())
 }
 
 pub fn close(fd: c_int) -> Result<(), Errno> {
@@ -366,6 +386,17 @@ pub fn mmap(
         )
     })
     .map(|a| a as *mut u8)
+}
+
+/// Removes the mapping that `mmap` returned at `addr` with `len` bytes.
+///
+/// # Safety
+/// No reference into the mapping may exist after the call.
+///
+/// # Errors
+/// Returns `EINVAL` when `addr` and `len` do not name exactly one mapping.
+pub unsafe fn munmap(addr: *mut u8, len: usize) -> Result<(), Errno> {
+    ret(unsafe { syscall2(SYS_MUNMAP, addr as usize, len) }).map(|_| ())
 }
 
 /// Opens `path` with the `O_*` flags in `oflag` and returns the new fd.

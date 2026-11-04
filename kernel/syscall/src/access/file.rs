@@ -55,6 +55,14 @@ pub trait FileAccess {
     /// the file.
     fn open(&self, info: &Self::FileInfo, access: AccessMode, append: bool) -> Self::Fd;
 
+    /// Removes the name `path`. Open descriptors on the file stay usable.
+    ///
+    /// # Errors
+    /// Returns `ENOENT` when nothing exists at `path`. Returns `EPERM` when
+    /// the file system cannot remove files. Returns `EIO` when the backing
+    /// file system fails.
+    fn unlink(&self, path: &AbsolutePath) -> Result<(), Errno>;
+
     /// Reads from an open file at its current offset. `Ok(0)` on a non-empty
     /// `buf` means the end of the file.
     ///
@@ -295,6 +303,10 @@ pub mod testing {
                 },
             );
             fd
+        }
+
+        fn unlink(&self, path: &AbsolutePath) -> Result<(), Errno> {
+            self.lock().files.remove(path).map(|_| ()).ok_or(ENOENT)
         }
 
         fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {

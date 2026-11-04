@@ -17,8 +17,9 @@ fn compositor() {
     report.assert_line_contains("compositor: listening on /var/run/compositor.sock");
     report.assert_markers_in_order(&[
         "compositor-demo: connected",
-        "compositor: new window /var/hello.txt",
+        "compositor: new window /dev/shm/compositor-demo 256x128",
         "compositor: frame drawn 800x600",
+        "compositor: blit 256x128 first=0xff2060c0",
         "compositor-demo: window created",
         "compositor-smoke: demo exit=0",
     ]);

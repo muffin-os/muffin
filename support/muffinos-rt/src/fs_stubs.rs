@@ -9,7 +9,6 @@ use libc::{mode_t, off_t, ssize_t, timespec};
 use crate::errno::set_errno;
 
 enosys! {
-    fn unlink(*const c_char) -> c_int;
     fn rmdir(*const c_char) -> c_int;
     fn rename(*const c_char, *const c_char) -> c_int;
     fn mkdir(*const c_char, mode_t) -> c_int;
@@ -20,7 +19,6 @@ enosys! {
     fn link(*const c_char, *const c_char) -> c_int;
     fn chmod(*const c_char, mode_t) -> c_int;
     fn fchmod(c_int, mode_t) -> c_int;
-    fn ftruncate(c_int, off_t) -> c_int;
     fn truncate(*const c_char, off_t) -> c_int;
     fn utimensat(c_int, *const c_char, *const timespec, c_int) -> c_int;
     fn futimens(c_int, *const timespec) -> c_int;

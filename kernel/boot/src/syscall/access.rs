@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
-    EACCES, EAGAIN, EBADF, EEXIST, EFBIG, EINTR, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV, ENOENT,
-    ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTTY, EPIPE, ESPIPE, Errno, IoctlRequest, ProtFlags,
-    S_IFSOCK, SigInfo, SigInfoField, Signal, Stat,
+    EACCES, EAGAIN, EBADF, EBUSY, EEXIST, EFBIG, EINTR, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV,
+    ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTTY, EPERM, EPIPE, ESPIPE, Errno, IoctlRequest,
+    ProtFlags, S_IFSOCK, SigInfo, SigInfoField, Signal, Stat,
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
@@ -16,7 +16,7 @@ use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CreateMode, FsError, FsyncError, IoctlError, MmapError, OpenError, ReadDirError, ReadError,
-    Stat as VfsStat, TruncateError, WriteError,
+    Stat as VfsStat, TruncateError, UnlinkError, WriteError,
 };
 use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
@@ -127,6 +127,14 @@ impl FileAccess for KernelAccess {
         self.install(Arc::new(OpenFileDescription::File(ofd)))
     }
 
+    fn unlink(&self, path: &AbsolutePath) -> Result<(), Errno> {
+        vfs().read().unlink(path).map_err(|e| match e {
+            UnlinkError::NotFound => ENOENT,
+            UnlinkError::NotSupported => EPERM,
+            UnlinkError::FsError(_) => EIO,
+        })
+    }
+
     fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
         let fds = self.process.file_descriptors();
         let guard = fds.read();
@@ -223,16 +231,18 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
-        desc.file_description()
-            .file()
-            .ok_or(EINVAL)?
-            .truncate(len_bytes)
-            .map_err(|e| match e {
-                TruncateError::NotSupported => EINVAL,
-                TruncateError::FsError(FsError::InvalidHandle) => EBADF,
-                TruncateError::FsError(FsError::FileSystemNotOpen)
-                | TruncateError::TruncateFailed => EIO,
-            })
+        let file = desc.file_description().file().ok_or(EINVAL)?;
+        if !file.access().can_write() {
+            return Err(EINVAL);
+        }
+        file.truncate(len_bytes).map_err(|e| match e {
+            TruncateError::NotSupported => EINVAL,
+            TruncateError::Busy => EBUSY,
+            TruncateError::FsError(FsError::InvalidHandle) => EBADF,
+            TruncateError::FsError(FsError::FileSystemNotOpen) | TruncateError::TruncateFailed => {
+                EIO
+            }
+        })
     }
 
     fn read_dir(&self, fd: Self::Fd) -> Result<Vec<String>, Errno> {
@@ -368,30 +378,30 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         len: usize,
         prot: ProtFlags,
     ) -> Result<kernel_syscall::UserspacePtr<u8>, Errno> {
-        // Clone the node so the region keeps the device file open for its
-        // whole lifetime. OpenFile derefs to VfsNode.
-        let node = {
+        let memory = {
             let fds = self.process.file_descriptors();
             let guard = fds.read();
             let desc = guard.get(&fd).ok_or(EBADF)?;
-            VfsNode::clone(desc.file_description().file().ok_or(ENODEV)?)
+            desc.file_description()
+                .file()
+                .ok_or(ENODEV)?
+                .mmap()
+                .map_err(|e| match e {
+                    MmapError::NotSupported => ENODEV,
+                    MmapError::FsError(_) => EINVAL,
+                })?
         };
-
-        let region = node.mmap().map_err(|e| match e {
-            MmapError::NotSupported => ENODEV,
-            MmapError::FsError(_) => EINVAL,
-        })?;
 
         let page_size = Size4KiB::SIZE as usize;
         let page_aligned = len.next_multiple_of(page_size);
-        if page_aligned > region.len.next_multiple_of(page_size) {
+        if page_aligned > memory.len().next_multiple_of(page_size) {
             return Err(EINVAL);
         }
 
-        // The mmap pointer is a kernel HHDM virtual address. Translate it to
-        // the physical base of the contiguous device frames.
+        // The memory pointer is a kernel virtual address. Translate it to the
+        // physical base of the contiguous frames.
         let phys = AddressSpace::kernel()
-            .translate(VirtAddr::from_ptr(region.ptr.as_ptr()))
+            .translate(VirtAddr::from_ptr(memory.ptr().as_ptr()))
             .ok_or(EINVAL)?;
         if !phys.is_aligned(Size4KiB::SIZE) {
             return Err(EINVAL);
@@ -414,10 +424,14 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
 
         let user_ptr = addr.as_ptr::<u8>().try_into().map_err(|_| EINVAL)?;
 
-        // The region owns the virtual reservation and the open device file,
+        // The region owns the virtual reservation and a share of the memory,
         // but not the physical frames, so process exit never frees them.
-        let inner =
-            MemoryRegion::Shared(SharedMemoryRegion::new(segment, page_aligned, frames, node));
+        let inner = MemoryRegion::Shared(SharedMemoryRegion::new(
+            segment,
+            page_aligned,
+            frames,
+            memory,
+        ));
         self.add_memory_region(KernelMemoryRegionHandle { inner });
 
         Ok(user_ptr)
@@ -469,6 +483,22 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         });
 
         Ok(user_ptr)
+    }
+
+    fn unmap(&self, addr: kernel_syscall::UserspacePtr<u8>, len: usize) -> Result<(), Errno> {
+        let regions = self.process.memory_regions();
+        let region = regions
+            .region_for(VirtAddr::new(addr.addr().into_u64()))
+            .ok_or(EINVAL)?;
+        if region.addr().as_u64() != addr.addr().into_u64()
+            || region.size() != len.next_multiple_of(Size4KiB::SIZE.into_usize())
+        {
+            return Err(EINVAL);
+        }
+        // The drop of the last `Arc` frees the frames of a private region.
+        // For a shared region, the drop releases the file's mapping.
+        regions.remove_region(self.process.address_space(), &region);
+        Ok(())
     }
 }
 

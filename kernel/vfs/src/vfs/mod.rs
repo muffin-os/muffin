@@ -125,6 +125,24 @@ impl Vfs {
         fs.write().create_directory(relative_path)
     }
 
+    /// Removes the name `path`, as [`FileSystem::unlink`] describes.
+    ///
+    /// # Errors
+    /// Returns [`UnlinkError::NotFound`] if no file system is mounted at or
+    /// above `path`. Returns [`UnlinkError::NotSupported`] if `path` is a
+    /// mount point. Passes through any error of [`FileSystem::unlink`].
+    pub fn unlink<P>(&self, path: P) -> Result<(), UnlinkError>
+    where
+        P: AsRef<AbsolutePath>,
+    {
+        let path = path.as_ref().normalized();
+        let (relative_path, fs) = self.resolve(path.as_ref()).ok_or(UnlinkError::NotFound)?;
+        if relative_path == ROOT {
+            return Err(UnlinkError::NotSupported);
+        }
+        fs.write().unlink(relative_path)
+    }
+
     /// Commits every mounted file system's pending writes. All are tried;
     /// the first failure is returned.
     ///
@@ -172,7 +190,9 @@ mod tests {
 
     use crate::path::{AbsolutePath, ROOT};
     use crate::testing::TestFs;
-    use crate::{CreateMode, MkdirError, MountError, OpenError, Stat, UnmountError, Vfs};
+    use crate::{
+        CreateMode, MkdirError, MountError, OpenError, Stat, UnlinkError, UnmountError, Vfs,
+    };
 
     #[test]
     fn test_read() {
@@ -513,5 +533,28 @@ mod tests {
 
         assert_eq!(Err(MkdirError::AlreadyExists), vfs.create_directory(dev));
         assert_eq!(Err(MkdirError::AlreadyExists), vfs.create_directory(ROOT));
+    }
+
+    #[test]
+    fn unlink_strips_the_mount_point_and_removes_the_file() {
+        let mut fs = TestFs::default();
+        fs.insert_file(AbsolutePath::try_new("/x").unwrap(), vec![1]);
+        let mut vfs = Vfs::new();
+        let dev = AbsolutePath::try_new("/dev").unwrap();
+        vfs.mount(dev, fs).unwrap();
+        let file = AbsolutePath::try_new("/dev/x").unwrap();
+
+        assert_eq!(Ok(()), vfs.unlink(file));
+        assert_eq!(
+            Err(OpenError::NotFound),
+            vfs.open(file, CreateMode::Never).map(|_| ())
+        );
+        assert_eq!(Err(UnlinkError::NotFound), vfs.unlink(file));
+        assert_eq!(Err(UnlinkError::NotSupported), vfs.unlink(dev));
+        assert_eq!(
+            Err(UnlinkError::NotFound),
+            vfs.unlink(AbsolutePath::try_new("/x").unwrap()),
+            "nothing is mounted above /x"
+        );
     }
 }

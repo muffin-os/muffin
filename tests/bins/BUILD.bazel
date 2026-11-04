@@ -60,6 +60,14 @@ rust_binary(
 )
 
 rust_binary(
+    name = "shm",
+    srcs = ["shm/src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = ["//userspace/libs/sys"],
+)
+
+rust_binary(
     name = "sleepy_poweroff",
     srcs = ["sleepy-poweroff/src/main.rs"],
     edition = "2024",

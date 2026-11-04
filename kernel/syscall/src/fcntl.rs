@@ -3,6 +3,7 @@ use core::slice::from_raw_parts;
 
 use kernel_abi::{EINVAL, ENAMETOOLONG, Errno, OpenFlags, PATH_MAX};
 use kernel_vfs::CreateMode;
+use kernel_vfs::path::AbsoluteOwnedPath;
 use tracing::{Level, debug, instrument};
 
 use crate::access::{AccessMode, CwdAccess, FileAccess};
@@ -46,14 +47,7 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
         (false, false) => CreateMode::Never,
     };
 
-    if path_len > PATH_MAX {
-        return Err(ENAMETOOLONG);
-    }
-
-    let path = {
-        let path_bytes = unsafe { from_raw_parts(path.as_ptr(), path_len) };
-        cx.resolve(core::str::from_utf8(path_bytes).map_err(|_| EINVAL)?)
-    };
+    let path = user_path(cx, path, path_len)?;
 
     debug!(?path, "open");
 
@@ -66,6 +60,41 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
     let fd_num = Into::<c_int>::into(fd);
     debug!(fd = fd_num, "open done");
     Ok(fd_num as usize)
+}
+
+/// Removes the name `path`, relative to the working directory unless
+/// absolute. Open descriptors on the file stay usable.
+///
+/// # Errors
+/// Returns `ENAMETOOLONG` for a path longer than `PATH_MAX`. Returns `EINVAL`
+/// for a path that is not UTF-8. Passes through any error of
+/// [`FileAccess::unlink`].
+#[instrument(level = Level::TRACE, skip(cx))]
+pub fn sys_unlink<Cx: CwdAccess + FileAccess>(
+    cx: &Cx,
+    path: UserspacePtr<u8>,
+    path_len: usize,
+) -> Result<usize, Errno> {
+    let path = user_path(cx, path, path_len)?;
+    debug!(?path, "unlink");
+    cx.unlink(path.as_ref()).map(|()| 0)
+}
+
+/// Resolves a user path of `path_len` bytes against the working directory.
+///
+/// # Errors
+/// Returns `ENAMETOOLONG` for a path longer than `PATH_MAX`. Returns `EINVAL`
+/// for a path that is not UTF-8.
+fn user_path<Cx: CwdAccess>(
+    cx: &Cx,
+    path: UserspacePtr<u8>,
+    path_len: usize,
+) -> Result<AbsoluteOwnedPath, Errno> {
+    if path_len > PATH_MAX {
+        return Err(ENAMETOOLONG);
+    }
+    let path_bytes = unsafe { from_raw_parts(path.as_ptr(), path_len) };
+    Ok(cx.resolve(core::str::from_utf8(path_bytes).map_err(|_| EINVAL)?))
 }
 
 fn access_mode(flags: OpenFlags) -> Result<AccessMode, Errno> {
@@ -101,7 +130,7 @@ mod tests {
     use crate::UserspacePtr;
     use crate::access::testing::{MemoryFd, MemoryFile, MemoryFileAccess};
     use crate::access::{AccessMode, CwdAccess, FileAccess};
-    use crate::fcntl::sys_open;
+    use crate::fcntl::{sys_open, sys_unlink};
     use crate::unistd::{sys_lseek, sys_read, sys_write};
 
     struct TestOpenCx<F> {
@@ -147,6 +176,10 @@ mod tests {
 
         fn open(&self, info: &Self::FileInfo, access: AccessMode, append: bool) -> Self::Fd {
             self.file_access.open(info, access, append)
+        }
+
+        fn unlink(&self, path: &AbsolutePath) -> Result<(), Errno> {
+            self.file_access.unlink(path)
         }
 
         fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
@@ -402,5 +435,18 @@ mod tests {
             result2 - 1,
             "opening a file descriptor must return the lowest currently available fd number, so consecutive open calls must return consecutive fd numbers"
         );
+    }
+
+    #[test]
+    fn unlink_removes_the_name_and_keeps_open_fds_usable() {
+        let cx = cx_with(vec![("/foo.txt", MemoryFile::new(vec![1; 8]))]);
+        let num = open(&cx, "/foo.txt", O_RDONLY).unwrap();
+        let path = "/foo.txt";
+        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
+
+        assert_eq!(Ok(0), sys_unlink(&cx, p, path.len()));
+        assert_eq!(Err(ENOENT), open(&cx, "/foo.txt", O_RDONLY));
+        assert_eq!(Ok(4), sys_read(&cx, fd(num), &mut [0_u8; 4]));
+        assert_eq!(Err(ENOENT), sys_unlink(&cx, p, path.len()));
     }
 }

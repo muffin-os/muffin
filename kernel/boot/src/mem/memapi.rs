@@ -3,11 +3,12 @@ use core::alloc::Layout;
 use core::fmt::{Debug, Formatter};
 use core::marker::PhantomData;
 use core::ops::Deref;
-use core::ptr;
+use core::ptr::{self, NonNull};
 use core::slice::{from_raw_parts, from_raw_parts_mut};
 
 use bitflags::bitflags;
 use kernel_memapi::{Allocation, Guarded, Location, MemoryApi, WritableAllocation};
+use kernel_vfs::MappedMemory;
 use kernel_virtual_memory::Segment;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageSize, PageTableFlags, Size4KiB};
@@ -368,16 +369,7 @@ impl MemoryApi for HigherHalfMemoryApi {
                 Some(())
             }
         };
-        // The mapper of an address space only works while that address
-        // space is active, so a process context maps through its own tables.
-        // The kernel half is shared, so the mapping is visible everywhere.
-        match Task::try_current() {
-            Some(task) if !ptr::eq(task.process().address_space(), AddressSpace::kernel()) => {
-                let _kernel_half = AddressSpace::lock_kernel_half();
-                map(task.process().address_space())?;
-            }
-            _ => map(AddressSpace::kernel())?,
-        }
+        with_active_address_space(map)?;
 
         Some(HigherHalfAllocation {
             start: mapped_segment.start,
@@ -519,9 +511,38 @@ impl AsMut<[u8]> for HigherHalfAllocation<Writable> {
 
 impl WritableAllocation for HigherHalfAllocation<Writable> {}
 
+impl MappedMemory for HigherHalfAllocation<Writable> {
+    fn ptr(&self) -> NonNull<u8> {
+        NonNull::new(self.start.as_mut_ptr()).expect("a reserved segment is never null")
+    }
+
+    fn len(&self) -> usize {
+        self.layout.size()
+    }
+}
+
 impl Drop for HigherHalfInner {
     fn drop(&mut self) {
-        AddressSpace::kernel()
-            .unmap_range::<Size4KiB>(&self.mapped_segment, PhysicalMemory::deallocate_frame);
+        with_active_address_space(|space| {
+            space.unmap_range::<Size4KiB>(&self.mapped_segment, PhysicalMemory::deallocate_frame);
+        });
+        // Other CPUs can still translate the segment. The flush runs before
+        // `segment` drops, so the next owner of the range gets no stale entry.
+        if Task::try_current().is_some() {
+            AddressSpace::flush_kernel_half_on_all_cpus();
+        }
+    }
+}
+
+/// The mapper of an address space works only while that address space is
+/// active, so a process context maps through its own tables. All address
+/// spaces share the kernel half, so every process sees the mapping.
+fn with_active_address_space<R>(f: impl FnOnce(&AddressSpace) -> R) -> R {
+    match Task::try_current() {
+        Some(task) if !ptr::eq(task.process().address_space(), AddressSpace::kernel()) => {
+            let _kernel_half = AddressSpace::lock_kernel_half();
+            f(task.process().address_space())
+        }
+        _ => f(AddressSpace::kernel()),
     }
 }

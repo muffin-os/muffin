@@ -457,6 +457,18 @@ fn draw_respects_stride_padding() {
     }
 }
 
+#[test]
+fn blit_clips_to_the_target_and_skips_padding() {
+    // A 3x2 target at stride 4; the 4x3 image overhangs one column and one row.
+    let image: Vec<u32> = (1..=12).collect();
+    let mut target = [0xDEAD_BEEFu32; 8];
+    let mut q = SoftQueue::new(&mut target, 3, 2, 4);
+
+    q.blit(&image, 4, 3);
+
+    assert_eq!(target, [1, 2, 3, 0xDEAD_BEEF, 5, 6, 7, 0xDEAD_BEEF]);
+}
+
 fn blue_frag(_: &[f32]) -> u32 {
     0xFF00_00FF
 }

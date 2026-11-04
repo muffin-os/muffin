@@ -48,6 +48,8 @@ mod process;
 #[cfg(not(test))]
 mod process_stubs;
 #[cfg(not(test))]
+mod shm;
+#[cfg(not(test))]
 mod start;
 mod string;
 #[cfg(not(test))]

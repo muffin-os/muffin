@@ -342,6 +342,15 @@ impl AddressSpace {
         shootdown::flush_on_all_cpus(self.level4_frame);
     }
 
+    /// Invalidates the kernel-half TLB entries on every other online CPU.
+    /// The rules of [`AddressSpace::flush_on_all_cpus`] apply.
+    ///
+    /// # Panics
+    /// Panics if interrupts are disabled.
+    pub fn flush_kernel_half_on_all_cpus() {
+        shootdown::flush_kernel_half_on_all_cpus();
+    }
+
     /// Returns `true` only if every byte of `[addr, addr + len)` is mapped,
     /// writable, and user accessible in this address space.
     #[must_use]

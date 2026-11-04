@@ -13,7 +13,8 @@ use kernel_pci::PciAddress;
 use kernel_pci::config::ConfigurationAccess;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError,
+    FsyncError, IoctlError, MappedMemory, MmapError, MmapRegion, ReadError, Stat, StatError,
+    WriteError,
 };
 use linkme::distributed_slice;
 use spin::Mutex;
@@ -73,8 +74,10 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
             .register_file(AbsolutePath::try_new("/fb0").unwrap(), move || {
                 Ok(FbDevFile {
                     gpu: gpu_arc.clone(),
-                    ptr: NonNull::new(fb_addr as *mut u8).unwrap(),
-                    len: logical_len,
+                    memory: Arc::new(FbMemory {
+                        ptr: NonNull::new(fb_addr as *mut u8).unwrap(),
+                        len: logical_len,
+                    }),
                     width,
                     height,
                 })
@@ -94,59 +97,72 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
     Ok(())
 }
 
-/// Device file backing `/dev/fb0`. Holds a shared handle to the underlying
-/// GPU so `fsync` can flush it, and a raw pointer to the HHDM-mapped
-/// framebuffer bytes so `mmap` can hand them out.
-struct FbDevFile {
-    gpu: Arc<Mutex<VirtIOGpu<HalImpl, PciTransport>>>,
+/// The framebuffer bytes that `/dev/fb0` lends out for shared mappings.
+#[derive(Debug)]
+struct FbMemory {
     ptr: NonNull<u8>,
     len: usize,
+}
+
+// SAFETY: `ptr` aliases a framebuffer that lives for the kernel's lifetime,
+// and every access through it is unsafe on the caller.
+unsafe impl Send for FbMemory {}
+unsafe impl Sync for FbMemory {}
+
+impl MappedMemory for FbMemory {
+    fn ptr(&self) -> NonNull<u8> {
+        self.ptr
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+/// Device file backing `/dev/fb0`. Holds a shared handle to the underlying
+/// GPU so `fsync` can flush it, and the framebuffer memory so `mmap` can
+/// lend it out.
+struct FbDevFile {
+    gpu: Arc<Mutex<VirtIOGpu<HalImpl, PciTransport>>>,
+    memory: Arc<FbMemory>,
     width: u32,
     height: u32,
 }
 
-// SAFETY: `ptr` aliases a framebuffer that lives for the kernel's lifetime;
-// access is gated behind `&mut self` on this `DevFile`, which `DevFs` already
-// serializes via its open-file map.
-unsafe impl Send for FbDevFile {}
-unsafe impl Sync for FbDevFile {}
-
 impl FbDevFile {
     fn as_slice_mut(&mut self) -> &mut [u8] {
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        // SAFETY: `DevFs` serializes access through `&mut self`.
+        unsafe { slice::from_raw_parts_mut(self.memory.ptr.as_ptr(), self.memory.len) }
     }
 }
 
 impl DevFile for FbDevFile {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<usize, ReadError> {
-        let offset = offset.min(self.len);
-        let n = buf.len().min(self.len - offset);
         let fb = self.as_slice_mut();
+        let offset = offset.min(fb.len());
+        let n = buf.len().min(fb.len() - offset);
         buf[..n].copy_from_slice(&fb[offset..offset + n]);
         Ok(n)
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) -> Result<usize, WriteError> {
-        if offset >= self.len {
+        let fb = self.as_slice_mut();
+        if offset >= fb.len() {
             return Err(WriteError::WriteFailed);
         }
-        let n = buf.len().min(self.len - offset);
-        let fb = self.as_slice_mut();
+        let n = buf.len().min(fb.len() - offset);
         fb[offset..offset + n].copy_from_slice(&buf[..n]);
         Ok(n)
     }
 
     fn stat(&mut self, stat: &mut Stat) -> Result<(), StatError> {
-        stat.size = self.len;
+        stat.size = self.memory.len;
         stat.mode = S_IFCHR | 0o666;
         Ok(())
     }
 
     fn mmap(&mut self) -> Result<MmapRegion, MmapError> {
-        Ok(MmapRegion {
-            ptr: self.ptr,
-            len: self.len,
-        })
+        Ok(self.memory.clone())
     }
 
     fn fsync(&mut self) -> Result<(), FsyncError> {

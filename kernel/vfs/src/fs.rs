@@ -6,7 +6,7 @@ use kernel_abi::IoctlRequest;
 use crate::path::AbsolutePath;
 use crate::{
     CloseError, CreateMode, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion, OpenError,
-    ReadDirError, ReadError, Stat, StatError, TruncateError, WriteError,
+    ReadDirError, ReadError, Stat, StatError, TruncateError, UnlinkError, WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -53,6 +53,18 @@ pub trait FileSystem: Send + Sync {
     /// - [`MkdirError::MkdirFailed`] for an underlying error, such as a
     ///   hardware error.
     fn create_directory(&mut self, path: &AbsolutePath) -> Result<(), MkdirError>;
+
+    /// Removes the name `path`. Open handles on the file stay usable until
+    /// the owner closes them.
+    ///
+    /// The default impl rejects with [`UnlinkError::NotSupported`].
+    ///
+    /// # Errors
+    /// - [`UnlinkError::NotFound`] if nothing exists at `path`.
+    /// - [`UnlinkError::NotSupported`] if the file system cannot remove files.
+    fn unlink(&mut self, _path: &AbsolutePath) -> Result<(), UnlinkError> {
+        Err(UnlinkError::NotSupported)
+    }
 
     /// # Errors
     /// Returns an error if the handle is invalid or already closed,

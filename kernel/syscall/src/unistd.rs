@@ -63,6 +63,16 @@ pub fn sys_close<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd) -> Result<usize, Errno
     cx.close(fildes).map(|()| 0)
 }
 
+/// Sets the size of the file behind `fildes` to `len`.
+///
+/// # Errors
+/// Returns `EINVAL` for a negative `len`. Passes through any error of
+/// [`FileAccess::truncate`].
+pub fn sys_ftruncate<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd, len: i64) -> Result<usize, Errno> {
+    let len = u64::try_from(len).map_err(|_| EINVAL)?;
+    cx.truncate(fildes, len).map(|()| 0)
+}
+
 /// Moves an open file's offset and returns the new absolute offset.
 ///
 /// An offset beyond the end of the file is legal and is not clamped. A read
@@ -152,7 +162,7 @@ mod tests {
 
     use crate::access::testing::{MemoryFd, MemoryFile, MemoryFileAccess};
     use crate::access::{AccessMode, CwdAccess, FileAccess};
-    use crate::unistd::{sys_getcwd, sys_getdents, sys_lseek, sys_read, sys_write};
+    use crate::unistd::{sys_ftruncate, sys_getcwd, sys_getdents, sys_lseek, sys_read, sys_write};
 
     struct Cwd(RwLock<AbsoluteOwnedPath>);
 
@@ -229,6 +239,16 @@ mod tests {
             .expect("fixture file must accept a position");
 
         assert_eq!(Ok(0), sys_read(&cx, fd, &mut [0_u8; 4]));
+    }
+
+    #[test]
+    fn sys_ftruncate_resizes_and_rejects_bad_input() {
+        let (cx, fd) = lseek_fixture();
+
+        assert_eq!(Err(EINVAL), sys_ftruncate(&cx, fd.clone(), -1));
+        assert_eq!(Err(EBADF), sys_ftruncate(&cx, MemoryFd::from(99), 4));
+        assert_eq!(Ok(0), sys_ftruncate(&cx, fd.clone(), 4));
+        assert_eq!(4, cx.fstat(fd).unwrap().size);
     }
 
     #[test]

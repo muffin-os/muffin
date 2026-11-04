@@ -1,26 +1,23 @@
+use alloc::sync::Arc;
+use core::fmt::Debug;
 use core::ptr::NonNull;
 
 use thiserror::Error;
 
 use crate::FsError;
 
-/// A memory region produced by [`crate::node::VfsNode::mmap`]: a raw pointer
-/// to the file's backing bytes plus the length of the region.
-///
-/// The pointer's lifetime is tied to the underlying device or filesystem,
-/// not to any Rust borrow — turning the region into a slice is the caller's
-/// responsibility and is `unsafe`.
-#[derive(Debug, Copy, Clone)]
-pub struct MmapRegion {
-    pub ptr: NonNull<u8>,
-    pub len: usize,
+/// Memory that a file lends out for shared mappings. The bytes stay at
+/// `ptr` for as long as any clone of the [`MmapRegion`] lives. User mappings
+/// alias the bytes, so every access through `ptr` is `unsafe`.
+#[expect(clippy::len_without_is_empty)]
+pub trait MappedMemory: Debug + Send + Sync {
+    fn ptr(&self) -> NonNull<u8>;
+    fn len(&self) -> usize;
 }
 
-// Safety: the region is only an address and a length. Dereferencing it is
-// already unsafe and on the caller, so sharing the value between threads
-// cannot cause a data race by itself.
-unsafe impl Send for MmapRegion {}
-unsafe impl Sync for MmapRegion {}
+/// A share of a file's backing memory, produced by
+/// [`crate::node::VfsNode::mmap`].
+pub type MmapRegion = Arc<dyn MappedMemory>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
 pub enum MmapError {

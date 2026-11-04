@@ -16,7 +16,7 @@ use gfx::backend::software::{
 };
 use gfx::error::GfxError;
 use kernel_abi::gfx::BufferDesc;
-use muffin_sys::{FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, ioctl, mmap};
+use muffin_sys::{FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, ioctl, mmap, munmap};
 
 // Vertex layout (x, y, r, g, b).
 fn color_vert(input: &[f32], output: &mut [f32]) {
@@ -161,6 +161,13 @@ impl Frame<'_> {
             .map_err(gfx_error)?;
         self.fb.sync_all()
     }
+
+    /// Copies `pixels` of `width` by `height` to the top-left corner and
+    /// flushes the framebuffer.
+    fn blit(&mut self, pixels: &[u32], width: u32, height: u32) -> io::Result<()> {
+        self.queue.blit(pixels, width, height);
+        self.fb.sync_all()
+    }
 }
 
 fn serve(stream: &UnixStream, frame: &mut Frame<'_>) -> io::Result<()> {
@@ -168,8 +175,13 @@ fn serve(stream: &UnixStream, frame: &mut Frame<'_>) -> io::Result<()> {
     let mut writer = stream;
     while let Some(request) = read_message::<Request>(&mut reader)? {
         match request {
-            Request::NewWindow(NewWindowRequest { path }) => {
-                println!("compositor: new window {}", path.display());
+            Request::NewWindow(request) => {
+                let NewWindowRequest {
+                    path,
+                    width,
+                    height,
+                } = &request;
+                println!("compositor: new window {} {width}x{height}", path.display());
                 let start = Instant::now();
                 frame.draw()?;
                 println!(
@@ -178,6 +190,34 @@ fn serve(stream: &UnixStream, frame: &mut Frame<'_>) -> io::Result<()> {
                     frame.height,
                     start.elapsed().as_micros()
                 );
+                let len = request
+                    .buffer_len()
+                    .ok_or_else(|| io::Error::other("size"))?;
+                let file = File::open(path)?;
+                if file.metadata()?.len() < len as u64 {
+                    return Err(io::Error::other("short buffer"));
+                }
+                let addr = mmap(
+                    0,
+                    len,
+                    ProtFlags::READ,
+                    MapFlags::SHARED,
+                    file.as_raw_fd(),
+                    0,
+                )
+                .map_err(|_| io::Error::other("mmap"))?;
+                // SAFETY: the mapping is read-only, covers `len` bytes and is
+                // page-aligned, hence u32-aligned. `pixels` is not used after
+                // the `munmap` below.
+                let pixels = unsafe {
+                    std::slice::from_raw_parts(addr.cast::<u32>(), len / size_of::<u32>())
+                };
+                let blitted = frame.blit(pixels, *width, *height);
+                let first = pixels.first().copied().unwrap_or(0);
+                unsafe { munmap(addr, len) }.map_err(|_| io::Error::other("munmap"))?;
+                blitted?;
+                println!("compositor: blit {width}x{height} first=0x{first:08x}");
+                drop(file);
                 write_message(&mut writer, &Response::NewWindow(NewWindowResponse {}))?;
             }
         }

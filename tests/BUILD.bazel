@@ -116,6 +116,14 @@ ext2_image(
 )
 
 ext2_image(
+    name = "shm_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/shm": "//tests/bins:shm",
+    },
+)
+
+ext2_image(
     name = "heap_bounds_disk",
     contents = {"heap-bounds": "1\n"},
     files = {
@@ -418,6 +426,7 @@ ext2_image(
         "orphan",
         "posix",
         "services",
+        "shm",
         "shutdown",
         "shutdown_ignore",
         "shutdown_sigterm",

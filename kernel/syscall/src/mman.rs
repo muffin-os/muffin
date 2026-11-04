@@ -75,19 +75,39 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
     }
 }
 
+/// Removes the mapping at `addr` of `len` bytes.
+///
+/// TODO(tpdenk): unmap part of a mapping once a caller needs it; this unmaps
+/// one whole mapping.
+///
+/// # Errors
+/// Returns `EINVAL` for a zero `len`, for an `addr` that is not page aligned,
+/// and for an `addr`/`len` pair that is not exactly one mapping.
+#[instrument(level = Level::TRACE, skip(cx))]
+pub fn sys_munmap<Cx: MemoryRegionAccess>(
+    cx: &Cx,
+    addr: UserspacePtr<u8>,
+    len: usize,
+) -> Result<usize, Errno> {
+    if len == 0 || !addr.addr().is_multiple_of(PAGE_SIZE) {
+        return Err(EINVAL);
+    }
+    cx.unmap(addr, len).map(|()| 0)
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
     use alloc::vec::Vec;
 
-    use kernel_abi::{EINVAL, ENODEV, MapFlags, ProtFlags};
+    use kernel_abi::{EINVAL, ENODEV, Errno, MapFlags, ProtFlags};
     use spin::mutex::Mutex;
 
     use crate::UserspacePtr;
     use crate::access::{
         AllocationStrategy, CreateMappingError, Location, MemoryRegion, MemoryRegionAccess,
     };
-    use crate::mman::sys_mmap;
+    use crate::mman::{sys_mmap, sys_munmap};
 
     struct TestRegion {
         addr: UserspacePtr<u8>,
@@ -164,6 +184,18 @@ mod tests {
             self.regions
                 .lock()
                 .push((region.addr().addr(), region.size()));
+        }
+
+        fn unmap(&self, addr: UserspacePtr<u8>, len: usize) -> Result<(), Errno> {
+            let mut regions = self.regions.lock();
+            let index = regions
+                .iter()
+                .position(|&(start, size)| {
+                    start == addr.addr() && size == len.next_multiple_of(4096)
+                })
+                .ok_or(EINVAL)?;
+            regions.remove(index);
+            Ok(())
         }
     }
 
@@ -410,5 +442,40 @@ mod tests {
             Err(EINVAL),
             "shared fd mapping with a non-zero offset must be rejected"
         );
+    }
+
+    #[test]
+    fn munmap_removes_exactly_one_whole_region() {
+        let cx = Arc::new(TestMemoryAccess::new());
+        let zero = UserspacePtr::try_from_usize(0).unwrap();
+        let addr = sys_mmap(
+            &cx,
+            zero,
+            8192,
+            ProtFlags::READ,
+            MapFlags::ANONYMOUS | MapFlags::PRIVATE,
+            0,
+            0,
+        )
+        .unwrap();
+        let ptr = UserspacePtr::try_from_usize(addr).unwrap();
+
+        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr, 0));
+        assert_eq!(
+            Err(EINVAL),
+            sys_munmap(&cx, UserspacePtr::try_from_usize(addr + 1).unwrap(), 8192)
+        );
+        assert_eq!(
+            Err(EINVAL),
+            sys_munmap(
+                &cx,
+                UserspacePtr::try_from_usize(addr + 8192).unwrap(),
+                4096
+            )
+        );
+        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr, 4096), "partial unmap");
+        assert_eq!(Ok(0), sys_munmap(&cx, ptr, 8192));
+        assert!(cx.regions.lock().is_empty());
+        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr, 8192), "already unmapped");
     }
 }
