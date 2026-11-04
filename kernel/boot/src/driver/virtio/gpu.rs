@@ -5,7 +5,7 @@ use core::fmt::{Debug, Formatter};
 use core::ptr::NonNull;
 use core::slice;
 
-use kernel_abi::{FbScreenInfo, IoctlRequest};
+use kernel_abi::{FbScreenInfo, IoctlRequest, S_IFCHR};
 use kernel_devfs::DevFile;
 use kernel_device::Device;
 use kernel_device::raw::RawDevice;
@@ -138,6 +138,7 @@ impl DevFile for FbDevFile {
 
     fn stat(&mut self, stat: &mut Stat) -> Result<(), StatError> {
         stat.size = self.len;
+        stat.mode = S_IFCHR | 0o666;
         Ok(())
     }
 

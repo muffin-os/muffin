@@ -161,6 +161,11 @@ impl Inode {
         Type::try_from(self.type_and_perm).ok()
     }
 
+    /// The raw `i_mode`: the type code plus the permission bits.
+    pub fn mode(&self) -> u16 {
+        self.type_and_perm
+    }
+
     pub fn perm(&self) -> Permissions {
         Permissions::from_bits_truncate(self.type_and_perm)
     }

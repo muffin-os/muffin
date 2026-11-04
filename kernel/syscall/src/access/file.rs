@@ -157,7 +157,7 @@ pub mod testing {
     use alloc::vec::Vec;
     use core::ffi::c_int;
 
-    use kernel_abi::{EBADF, EEXIST, EINVAL, ENOENT, ENOTDIR, Errno, Stat};
+    use kernel_abi::{EBADF, EEXIST, EINVAL, ENOENT, ENOTDIR, Errno, S_IFREG, Stat};
     use kernel_vfs::CreateMode;
     use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath};
     use spin::mutex::Mutex;
@@ -360,6 +360,7 @@ pub mod testing {
             let open = guard.open_fd(fd)?;
             Ok(Stat {
                 size: open.file.data.read().len() as u64,
+                mode: S_IFREG | 0o644,
             })
         }
 

@@ -1,6 +1,7 @@
 use core::fmt::Write;
 use core::str::from_utf8;
 
+use kernel_abi::S_IFCHR;
 use kernel_vfs::{ReadError, Stat, StatError, WriteError};
 
 use crate::DevFile;
@@ -34,6 +35,7 @@ where
 
     fn stat(&mut self, stat: &mut Stat) -> Result<(), StatError> {
         stat.size = 0;
+        stat.mode = S_IFCHR | 0o666;
         Ok(())
     }
 }

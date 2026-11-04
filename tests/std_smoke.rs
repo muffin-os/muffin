@@ -16,6 +16,7 @@ fn std_smoke() {
         "std-smoke: read ok",
         "std-smoke: write ok",
         "std-smoke: readdir ok",
+        "std-smoke: metadata ok",
         "std-smoke: time ok",
         "std-smoke: exe ok",
         "std-smoke: process ok",
@@ -24,6 +25,8 @@ fn std_smoke() {
     ]);
     report.assert_line_contains("std-panic-exit: escape");
     report.assert_no_line_contains("std-smoke: FAIL");
+    // fstat used to probe for a directory with getdents, which logged ENOTDIR.
+    report.assert_no_line_contains("ENOTDIR");
     report.assert_exit_code(0, 0);
     report.assert_exit_code(1, 101);
 }

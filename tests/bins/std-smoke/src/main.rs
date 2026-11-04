@@ -18,6 +18,7 @@ const STEPS: &[(&str, Step)] = &[
     ("read", read),
     ("write", write),
     ("readdir", readdir),
+    ("metadata", metadata),
     ("time", time),
     ("exe", exe),
     ("process", process),
@@ -74,6 +75,14 @@ fn readdir() -> Result<(), Box<dyn Error>> {
         }
     }
     Err("hello.txt not listed".into())
+}
+
+fn metadata() -> Result<(), Box<dyn Error>> {
+    check(fs::metadata("/data")?.is_dir(), "/data is not a directory")?;
+    check(
+        fs::metadata("/data/hello.txt")?.is_file(),
+        "hello.txt is not a file",
+    )
 }
 
 fn time() -> Result<(), Box<dyn Error>> {

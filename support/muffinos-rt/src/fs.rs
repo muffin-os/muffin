@@ -5,22 +5,13 @@ use kernel_abi::{
     DirentHeader, EINVAL, ENOSYS, ENOTDIR, ENOTTY, Errno, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD,
     F_GETFL, F_SETFD, F_SETFL, IoctlRequest, O_RDONLY, Stat, Whence,
 };
-use libc::{DIR, DT_UNKNOWN, S_IFDIR, S_IFREG, dirent, off_t, ssize_t};
+use libc::{DIR, DT_UNKNOWN, S_IFDIR, S_IFMT, dirent, off_t, ssize_t};
 
 use crate::errno::{fail, ret, set_errno};
 use crate::mem::{free, malloc};
 use crate::string::c_str;
 
 const BLOCK_SIZE: libc::blksize_t = 4096;
-
-/// Returns whether `fd` is a directory.
-///
-/// A 1-byte buffer holds no whole record, so getdents on a directory fails
-/// with `EINVAL`, or returns `0` when no entry remains. It moves no position.
-/// Every other file fails with another errno, such as `ENOTDIR`.
-fn is_directory(fd: c_int) -> bool {
-    matches!(muffin_sys::getdents(fd, &mut [0; 1]), Ok(_) | Err(EINVAL))
-}
 
 /// Ignores the `mode` argument, because the kernel has no file permissions.
 ///
@@ -82,13 +73,7 @@ fn file_status(fd: c_int) -> Result<libc::stat, Errno> {
     // SAFETY: `stat` is plain integers, so all zeros is a valid value.
     let mut status: libc::stat = unsafe { mem::zeroed() };
     status.st_size = off_t::try_from(kernel.size)?;
-    // shortcut: kernel Stat has only size, so the mode is the default for the
-    // file type; upgrade when kernel_abi::Stat grows mode.
-    status.st_mode = if is_directory(fd) {
-        S_IFDIR | 0o755
-    } else {
-        S_IFREG | 0o644
-    };
+    status.st_mode = kernel.mode;
     status.st_nlink = 1;
     status.st_blksize = BLOCK_SIZE;
     Ok(status)
@@ -226,7 +211,7 @@ pub unsafe extern "C" fn opendir(path: *const c_char) -> *mut DIR {
         Ok(fd) => fd,
         Err(errno) => return fail(errno),
     };
-    if !is_directory(fd) {
+    if !file_status(fd).is_ok_and(|status| status.st_mode & S_IFMT == S_IFDIR) {
         // The ENOTDIR result wins over a close error.
         let _ = muffin_sys::close(fd);
         return fail(ENOTDIR);

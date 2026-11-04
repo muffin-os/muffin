@@ -220,7 +220,10 @@ where
             .ok_or(FsError::InvalidHandle)?
             .inode;
 
-        stat.size = inode.read().as_ref().len();
+        let guard = inode.read();
+        let inode = guard.as_ref();
+        stat.size = inode.len();
+        stat.mode = u32::from(inode.mode());
         Ok(())
     }
 

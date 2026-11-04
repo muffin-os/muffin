@@ -1,3 +1,4 @@
+use kernel_abi::S_IFBLK;
 use kernel_device::block::BlockDevice;
 use kernel_vfs::{ReadError, Stat, StatError, WriteError};
 
@@ -31,6 +32,7 @@ impl<D: BlockDevice + Send + Sync> DevFile for BlockDeviceFile<D> {
     fn stat(&mut self, stat: &mut Stat) -> Result<(), StatError> {
         *stat = Stat {
             size: self.device.sector_count() * self.device.sector_size(),
+            mode: S_IFBLK | 0o666,
         };
         Ok(())
     }

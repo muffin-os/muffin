@@ -213,6 +213,7 @@ impl FileAccess for KernelAccess {
         desc.file_description().stat(&mut stat).map_err(|_| EIO)?;
         Ok(Stat {
             size: stat.size.into_u64(),
+            mode: stat.mode,
         })
     }
 
