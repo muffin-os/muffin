@@ -52,4 +52,3 @@ fn read_dir_fd(fd: c_int, names: &mut Vec<String>) -> Result<(), Errno> {
         }
     }
 }
-
