@@ -33,3 +33,17 @@ package(default_visibility = ["//visibility:public"])
         "unwind": "unwind",
     }.items()
 ]
+
+# std binaries: no minilib, std comes from the sysroot.
+[
+    rust_binary(
+        name = name,
+        srcs = ["{}/src/main.rs".format(directory)],
+        edition = "2024",
+        platform = "//platforms:x86_64-unknown-muffin",
+    )
+    for name, directory in {
+        "std_panic_exit": "std-panic-exit",
+        "std_smoke": "std-smoke",
+    }.items()
+]

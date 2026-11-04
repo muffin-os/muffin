@@ -289,6 +289,27 @@ ext2_image(
     },
 )
 
+ext2_image(
+    name = "hello_world_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/hello-world": "//userspace/hello-world",
+    },
+)
+
+ext2_image(
+    name = "std_smoke_disk",
+    contents = {"data/hello.txt": _HELLO},
+    empty_dirs = ["var/tmp"],
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-std-smoke": "//tests/bins:std_smoke",
+        "bin/tests/1-std-panic-exit": "//tests/bins:std_panic_exit",
+        "bin/true": "//userspace/utilities/true",
+        "bin/false": "//userspace/utilities/false",
+    },
+)
+
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
 # harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
 #
@@ -335,6 +356,7 @@ ext2_image(
         "floats",
         "fork",
         "heap_bounds",
+        "hello_world",
         "kstack_overflow",
         "map_range_rollback",
         "mmap",
@@ -346,6 +368,7 @@ ext2_image(
         "signals",
         "signals_edge",
         "sleep",
+        "std_smoke",
         "true_false",
         "unwind",
         "vfs_mkdir",

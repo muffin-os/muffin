@@ -1,0 +1,109 @@
+//! Userspace exerciser for the Rust standard library on muffin.
+//!
+//! Each step prints `std-smoke: <step> ok`. The first failure prints
+//! `std-smoke: FAIL <step>: <error>` and exits 1 at once.
+
+use std::error::Error;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
+use std::process::Command;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{env, panic, thread};
+
+type Step = fn() -> Result<(), Box<dyn Error>>;
+
+const STEPS: &[(&str, Step)] = &[
+    ("args", args),
+    ("env", environment),
+    ("read", read),
+    ("write", write),
+    ("readdir", readdir),
+    ("time", time),
+    ("exe", exe),
+    ("process", process),
+    ("panic", catch_panic),
+];
+
+fn main() {
+    for (name, step) in STEPS {
+        if let Err(e) = step() {
+            println!("std-smoke: FAIL {name}: {e}");
+            std::process::exit(1);
+        }
+        println!("std-smoke: {name} ok");
+    }
+    println!("std-smoke: done");
+}
+
+fn check(ok: bool, what: &str) -> Result<(), Box<dyn Error>> {
+    if ok { Ok(()) } else { Err(what.into()) }
+}
+
+fn args() -> Result<(), Box<dyn Error>> {
+    check(env::args().count() >= 1, "no argv[0]")
+}
+
+fn environment() -> Result<(), Box<dyn Error>> {
+    check(env::vars().count() == 0, "envp not empty")?;
+    check(
+        env::var("PATH") == Err(env::VarError::NotPresent),
+        "PATH present",
+    )
+}
+
+fn read() -> Result<(), Box<dyn Error>> {
+    let text = fs::read_to_string("/data/hello.txt")?;
+    check(text == "muffin says hi\n", "unexpected content")
+}
+
+fn write() -> Result<(), Box<dyn Error>> {
+    let path = "/var/tmp/std-smoke.txt";
+    fs::write(path, "abc")?;
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(1))?;
+    let mut tail = String::new();
+    file.read_to_string(&mut tail)?;
+    check(tail == "bc", "seek+read mismatch")?;
+    check(file.metadata()?.len() == 3, "metadata len mismatch")
+}
+
+fn readdir() -> Result<(), Box<dyn Error>> {
+    for entry in fs::read_dir("/data")? {
+        if entry?.file_name() == "hello.txt" {
+            return Ok(());
+        }
+    }
+    Err("hello.txt not listed".into())
+}
+
+fn time() -> Result<(), Box<dyn Error>> {
+    let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    check(since_epoch.as_secs() > 1_000_000_000, "clock before 2001")?;
+    let start = Instant::now();
+    thread::sleep(Duration::from_millis(10));
+    check(
+        start.elapsed() >= Duration::from_millis(10),
+        "sleep too short",
+    )
+}
+
+fn exe() -> Result<(), Box<dyn Error>> {
+    let path = env::current_exe()?;
+    check(
+        path.to_string_lossy().ends_with("std-smoke"),
+        &format!("current_exe is {path:?}"),
+    )
+}
+
+fn process() -> Result<(), Box<dyn Error>> {
+    for (program, code) in [("/bin/true", 0), ("/bin/false", 1)] {
+        let status = Command::new(program).status()?;
+        check(status.code() == Some(code), program)?;
+    }
+    Ok(())
+}
+
+fn catch_panic() -> Result<(), Box<dyn Error>> {
+    let caught = panic::catch_unwind(|| panic!("boom")).is_err();
+    check(caught, "panic not caught")
+}
