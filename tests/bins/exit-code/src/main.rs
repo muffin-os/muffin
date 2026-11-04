@@ -1,11 +1,6 @@
-#![no_std]
-#![no_main]
+use std::process::ExitCode;
 
-use minilib::println;
-
-minilib::entry!(main);
-
-fn main() -> i32 {
+fn main() -> ExitCode {
     println!("exitcode: exiting 42");
-    42
+    ExitCode::from(42)
 }

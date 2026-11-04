@@ -308,6 +308,8 @@ ext2_image(
         "bin/true": "//userspace/utilities/true",
         "bin/false": "//userspace/utilities/false",
     },
+    # Four std debug builds do not fit into the 64M default.
+    image_size = "128M",
 )
 
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The

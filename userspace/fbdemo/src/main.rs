@@ -1,35 +1,19 @@
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
-use alloc::vec::Vec;
-use core::time::Duration;
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::process::{ExitCode, exit};
+use std::time::Instant;
 
 use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
 use gfx::backend::software::{
     ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftShaderDef,
 };
 use kernel_abi::gfx::BufferDesc;
-use minilib::{
-    ClockId, FbScreenInfo, IoctlRequest, MapFlags, O_RDONLY, ProtFlags, Timespec, clock_gettime,
-    exit, fsync, ioctl, mmap, open, println,
-};
+use muffin_sys::{FbScreenInfo, IoctlRequest, MapFlags, ProtFlags, ioctl, mmap};
 
-fn now() -> Duration {
-    let mut tp = Timespec::default();
-    let Ok(now) = clock_gettime(ClockId::Monotonic, &mut tp).and_then(|()| Duration::try_from(tp))
-    else {
-        println!("fbdemo: FAIL clock");
-        exit(1);
-    };
-    now
-}
-
-fn report(label: &str, start: Duration, end: Duration) {
+fn report(label: &str, start: Instant, end: Instant) {
     println!(
         "fbdemo: {label} {}us",
-        end.saturating_sub(start).as_micros()
+        end.duration_since(start).as_micros()
     );
 }
 
@@ -75,28 +59,27 @@ fn color_frag(interp: &[f32]) -> u32 {
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
-minilib::entry!(main);
-
-fn main() -> i32 {
-    let t = now();
-    let fd = open("/dev/fb0", O_RDONLY);
-    report("open", t, now());
-    let Ok(fd) = fd else {
+fn main() -> ExitCode {
+    let t = Instant::now();
+    let fb = File::open("/dev/fb0");
+    report("open", t, Instant::now());
+    let Ok(fb) = fb else {
         println!("fbdemo: FAIL open");
-        return 1;
+        return ExitCode::FAILURE;
     };
+    let fd = fb.as_raw_fd();
 
     let mut info = FbScreenInfo::default();
-    let t = now();
+    let t = Instant::now();
     let ioctl_rc = ioctl(fd, IoctlRequest::FbGetScreenInfo, &mut info);
-    report("ioctl", t, now());
+    report("ioctl", t, Instant::now());
     if ioctl_rc.is_err() {
         println!("fbdemo: FAIL ioctl");
-        return 1;
+        return ExitCode::FAILURE;
     }
 
     let len = info.len_bytes();
-    let t = now();
+    let t = Instant::now();
     let mapped = mmap(
         0,
         len,
@@ -105,29 +88,29 @@ fn main() -> i32 {
         fd,
         0,
     );
-    report("mmap", t, now());
+    report("mmap", t, Instant::now());
     let Ok(addr) = mapped else {
         println!("fbdemo: FAIL mmap");
-        return 1;
+        return ExitCode::FAILURE;
     };
 
     let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
-    let t = now();
+    let t = Instant::now();
     let vert = or_fail_gfx(backend.compile_shader(&SoftShaderDef::Vertex {
         func: color_vert,
         output_count: 5,
     }));
-    report("compile_vertex", t, now());
-    let t = now();
+    report("compile_vertex", t, Instant::now());
+    let t = Instant::now();
     let frag = or_fail_gfx(backend.compile_shader(&SoftShaderDef::Fragment(color_frag)));
-    report("compile_fragment", t, now());
-    let t = now();
+    report("compile_fragment", t, Instant::now());
+    let t = Instant::now();
     let pso = or_fail_gfx(backend.compile_pipeline(&PipelineDesc {
         vertex_shader: &vert,
         pixel_shader: &frag,
         vertex_stride: 5 * ATTRIBUTE_BYTES,
     }));
-    report("compile_pipeline", t, now());
+    report("compile_pipeline", t, Instant::now());
 
     // three vertices: red apex top, green bottom-left, blue bottom-right
     #[rustfmt::skip]
@@ -138,13 +121,13 @@ fn main() -> i32 {
     ];
     let bytes: Vec<u8> = verts.iter().flat_map(|f| f.to_ne_bytes()).collect();
 
-    let t = now();
+    let t = Instant::now();
     let mut vbuf = or_fail_gfx(backend.alloc_buffer(&BufferDesc {
         size: bytes.len(),
         is_dynamic: false,
     }));
     vbuf.data.copy_from_slice(&bytes);
-    report("alloc_buffer", t, now());
+    report("alloc_buffer", t, Instant::now());
 
     // The software queue writes one u32 per pixel, so any other depth would
     // scribble over neighbouring pixels.
@@ -157,44 +140,44 @@ fn main() -> i32 {
         || width * pixel_bytes > info.pitch as usize
     {
         println!("fbdemo: FAIL geometry");
-        return 1;
+        return ExitCode::FAILURE;
     }
     // SAFETY: the mmap covers `len` bytes and is page-aligned, hence u32-aligned.
     // The geometry check above keeps `stride_px * (height - 1) + width` u32 words
     // within `len = pitch * height` bytes.
     let fb_u32 = unsafe {
-        core::slice::from_raw_parts_mut(addr.cast::<u32>(), stride_px * (height - 1) + width)
+        std::slice::from_raw_parts_mut(addr.cast::<u32>(), stride_px * (height - 1) + width)
     };
     // The mapped framebuffer's initial content is undefined and `SoftQueue::new`
     // never clears its target, so uncovered pixels would keep whatever the device
     // left there.
     fb_u32.fill(0);
 
-    let t = now();
+    let t = Instant::now();
     let mut q = SoftQueue::new(fb_u32, info.width, info.height, stride_px);
-    report("queue_new", t, now());
+    report("queue_new", t, Instant::now());
 
     for frame in 0..5u32 {
-        let t0 = now();
+        let t0 = Instant::now();
         or_fail_gfx(q.submit(|rec| {
             rec.bind_pipeline(&pso);
             rec.bind_vertex_buffer(&vbuf);
             rec.draw(3)
         }));
-        let t1 = now();
-        let fsync_rc = fsync(fd);
-        let t2 = now();
+        let t1 = Instant::now();
+        let fsync_rc = fb.sync_all();
+        let t2 = Instant::now();
         if fsync_rc.is_err() {
             println!("fbdemo: FAIL fsync");
-            return 1;
+            return ExitCode::FAILURE;
         }
         println!(
             "fbdemo: frame {frame} submit {}us fsync {}us",
-            t1.saturating_sub(t0).as_micros(),
-            t2.saturating_sub(t1).as_micros()
+            t1.duration_since(t0).as_micros(),
+            t2.duration_since(t1).as_micros()
         );
     }
 
     println!("fbdemo: frame drawn {}x{}", info.width, info.height);
-    0
+    ExitCode::SUCCESS
 }

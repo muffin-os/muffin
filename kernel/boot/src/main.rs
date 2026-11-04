@@ -9,9 +9,9 @@ use kernel::limine::BASE_REVISION;
 use kernel::mcore;
 use kernel::mcore::mtask::process::Process;
 use kernel_ext2::Ext2Fs;
-use kernel_vfs::CreateMode;
 use kernel_vfs::path::{AbsolutePath, ROOT};
-use tracing::{Level, info, span};
+use kernel_vfs::CreateMode;
+use tracing::{info, span, Level};
 
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
@@ -37,6 +37,13 @@ unsafe extern "C" fn main() -> ! {
             .init()
             .expect("should have init argument on cmdline");
         let path = AbsolutePath::try_new(init).expect("init path should be absolute");
+        Process::create_from_executable(Process::root(), path)
+            .expect("should be able to create process from executable");
+    });
+
+    span!(Level::INFO, "greeting").in_scope(|| {
+        let path =
+            AbsolutePath::try_new("/bin/hello-world").expect("hello-world path should be absolute");
         Process::create_from_executable(Process::root(), path)
             .expect("should be able to create process from executable");
     });

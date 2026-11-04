@@ -1,8 +1,5 @@
-#![no_std]
-#![no_main]
+use std::process::ExitCode;
 
-minilib::entry!(main);
-
-fn main() -> i32 {
-    1
+fn main() -> ExitCode {
+    ExitCode::FAILURE
 }

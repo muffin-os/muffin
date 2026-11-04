@@ -10,6 +10,6 @@ rust_binary(
     deps = [
         "//kernel/abi",
         "//userspace/libs/gfx",
-        "//userspace/minilib",
+        "//userspace/libs/sys",
     ],
 )

@@ -1,8 +1,3 @@
-#![no_std]
-#![no_main]
-
-minilib::entry!(main);
-
-fn main() -> i32 {
-    minilib::shutdown()
+fn main() {
+    muffin_sys::shutdown()
 }

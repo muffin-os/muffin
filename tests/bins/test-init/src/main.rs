@@ -1,68 +1,62 @@
-#![no_std]
-#![no_main]
-
 //! The init process of the integration tests. It lists `/bin/tests`, sorts the
-//! names byte-wise, forks one child per file and execs the file in the child.
-//! Then it reaps every child and prints the wire-contract lines the host
-//! harness parses: `spawned`, `spawn complete` and `outcome`.
+//! names byte-wise, spawns one child per file and reaps every child. It prints
+//! the wire-contract lines the host harness parses: `spawned`, `spawn complete`
+//! and `outcome`.
 
-extern crate alloc;
+use std::fs;
+use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
+use std::process::{Command, ExitCode};
 
-use alloc::vec::Vec;
+use muffin_sys::Signal;
 
-use minilib::{Signal, execve, exit, fork, println, read_dir, waitpid};
-
-minilib::entry!(main);
-
-fn main() -> i32 {
-    let mut names = match read_dir("/bin/tests") {
+fn main() -> ExitCode {
+    let dir = Path::new("/bin/tests");
+    let names = fs::read_dir(dir).and_then(|entries| {
+        entries
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<Vec<_>, _>>()
+    });
+    let mut names = match names {
         Ok(names) => names,
         Err(e) => {
             println!("test-init: FAIL read_dir /bin/tests {e}");
-            return 1;
+            return ExitCode::FAILURE;
         }
     };
-    names.retain(|name| name != "." && name != "..");
     // The assertions index the spawn order, so it must not depend on the disk order.
     names.sort();
 
     let mut children = Vec::new();
     for name in names {
-        let path = alloc::format!("/bin/tests/{name}");
-        let path = path.as_str();
-        match fork() {
-            Ok(0) => {
-                let errno = execve(path, &[path], &[]);
-                println!("test-init: FAIL exec {path} {errno}");
-                exit(1);
-            }
-            Ok(pid) => {
-                println!("test-init: spawned {path} pid={pid}");
-                children.push(pid);
+        let path = dir.join(name);
+        // muffin's `spawn` has no exec error pipe: a failed exec shows up as `exit=127`.
+        match Command::new(&path).env_clear().spawn() {
+            Ok(child) => {
+                println!("test-init: spawned {} pid={}", path.display(), child.id());
+                children.push(child);
             }
             Err(e) => {
-                println!("test-init: FAIL fork {e}");
-                return 1;
+                println!("test-init: FAIL spawn {} {e}", path.display());
+                return ExitCode::FAILURE;
             }
         }
     }
     println!("test-init: spawn complete count={}", children.len());
 
-    for pid in children {
-        let status = match waitpid(pid) {
+    for mut child in children {
+        let pid = child.id();
+        let status = match child.wait() {
             Ok(status) => status,
             Err(e) => {
                 println!("test-init: FAIL waitpid {pid} {e}");
-                return 1;
+                return ExitCode::FAILURE;
             }
         };
-        // shortcut: an exit code of 128 or more reads as a signal, no test exits that high
-        match Signal::try_from(status - 128) {
-            Ok(signal) if status >= 128 => {
-                println!("test-init: outcome pid={pid} signal={}", signal.name())
-            }
-            _ => println!("test-init: outcome pid={pid} exit={status}"),
+        match status.signal().and_then(|signo| Signal::try_from(signo).ok()) {
+            Some(signal) => println!("test-init: outcome pid={pid} signal={}", signal.name()),
+            None => println!("test-init: outcome pid={pid} exit={}", status.into_raw()),
         }
     }
-    0
+    ExitCode::SUCCESS
 }
