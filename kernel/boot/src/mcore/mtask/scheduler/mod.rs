@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use core::arch::x86_64::_fxsave;
 use core::cell::UnsafeCell;
-use core::mem::swap;
+use core::mem::{MaybeUninit, swap};
 use core::pin::Pin;
 
 use cleanup::TaskCleanup;
@@ -30,6 +30,28 @@ enum Disposal {
     Terminate,
 }
 
+/// The outgoing task and its disposal, handed to `finish_switch` through the
+/// context switch.
+pub(in crate::mcore::mtask::scheduler) struct SwitchFinish {
+    task: Pin<Box<Task>>,
+    disposal: Disposal,
+}
+
+/// Routes the outgoing task once its stack pointer is saved. Runs on the
+/// incoming task's stack with interrupts off, for resumed and fresh tasks
+/// alike, so the outgoing task becomes runnable before anything else runs.
+pub(in crate::mcore::mtask::scheduler) extern "C" fn finish_switch(finish: *mut SwitchFinish) {
+    debug_assert!(!interrupts::are_enabled());
+    // Safety: `reschedule` passes a pointer to an initialized value on the
+    // outgoing task's stack and never touches it again, so this is the only
+    // read. The outgoing task cannot resume before it is routed below.
+    let SwitchFinish { task, disposal } = unsafe { finish.read() };
+    // Safety: interrupts are off, so the context is this CPU's. The only
+    // other scheduler reference belongs to the suspended `reschedule` frame
+    // of the outgoing task, which does not use it after the switch.
+    unsafe { ExecutionContext::load().scheduler_mut() }.route(task, disposal);
+}
+
 #[derive(Debug)]
 pub struct Scheduler {
     current_task: Pin<Box<Task>>,
@@ -38,9 +60,6 @@ pub struct Scheduler {
     /// always finds a target.
     idle_task: Option<Pin<Box<Task>>>,
     idle_tid: Option<TaskId>,
-    /// The task last switched away from, with the disposal decided when its
-    /// RSP save slot was picked, so routing matches whether RSP was saved.
-    zombie_task: Option<(Pin<Box<Task>>, Disposal)>,
     /// A dummy location that is a placeholder for the switch code to write the old stack
     /// pointer to if the old task is terminated.
     dummy_old_stack_ptr: UnsafeCell<usize>,
@@ -54,7 +73,6 @@ impl Scheduler {
             idle_tid: None,
             current_task,
             idle_task: None,
-            zombie_task: None,
             dummy_old_stack_ptr: UnsafeCell::new(0),
         }
     }
@@ -71,10 +89,6 @@ impl Scheduler {
     /// Panics if interrupts are enabled.
     pub unsafe fn reschedule(&mut self) {
         assert!(!interrupts::are_enabled());
-
-        if let Some((zombie_task, disposal)) = self.zombie_task.take() {
-            self.route(zombie_task, disposal);
-        }
 
         debug_assert!(
             self.idle_task.is_some() || self.idle_tid == Some(self.current_task.id()),
@@ -135,9 +149,6 @@ impl Scheduler {
             FsBase::write(VirtAddr::zero());
         }
 
-        assert!(self.zombie_task.is_none());
-        self.zombie_task = Some((old_task, disposal));
-
         // Point TSS.RSP0 at the incoming task's kernel stack so its next
         // Ring 3 to Ring 0 transition lands on a per-task stack.
         if let Some(kstack) = self.current_task.kstack() {
@@ -146,11 +157,18 @@ impl Scheduler {
             unsafe { ExecutionContext::load() }.set_kernel_stack(kstack.top());
         }
 
+        // `finish_switch` moves the old task out on the new stack, after its
+        // RSP is saved. Nothing after the switch may touch `finish`.
+        let mut finish = MaybeUninit::new(SwitchFinish {
+            task: old_task,
+            disposal,
+        });
         unsafe {
             Self::switch(
                 old_stack_ptr,
                 *self.current_task.last_stack_ptr(),
                 level4_frame,
+                finish.as_mut_ptr(),
             );
         }
     }
@@ -183,10 +201,15 @@ impl Scheduler {
         self.idle_task = Some(task);
     }
 
-    unsafe fn switch(old_stack_ptr: *mut usize, new_stack_ptr: usize, new_level4_frame: PhysFrame) {
+    unsafe fn switch(
+        old_stack_ptr: *mut usize,
+        new_stack_ptr: usize,
+        new_level4_frame: PhysFrame,
+        finish: *mut SwitchFinish,
+    ) {
         let cr3_value = new_level4_frame.start_address().as_u64().into_usize();
         unsafe {
-            switch_impl(old_stack_ptr, new_stack_ptr as *const u8, cr3_value);
+            switch_impl(old_stack_ptr, new_stack_ptr as *const u8, cr3_value, finish);
         }
     }
 

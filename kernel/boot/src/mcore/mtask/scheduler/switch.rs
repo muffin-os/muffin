@@ -1,5 +1,7 @@
 use core::arch::naked_asm;
 
+use crate::mcore::mtask::scheduler::{SwitchFinish, finish_switch};
+
 macro_rules! push_context {
     () => {
         concat!(
@@ -65,29 +67,39 @@ macro_rules! set_task_switched {
 }
 
 /// Saves the current context, writes the resulting stack pointer to
-/// `_old_stack`, loads `_new_cr3_value` into CR3 and resumes the context
-/// saved at `_new_stack`. Returns only when something later switches back
-/// to the saved context, with interrupts still disabled.
+/// `_old_stack`, loads `_new_cr3_value` into CR3, calls `finish` with
+/// `_finish_arg` on the new stack and resumes the context saved at
+/// `_new_stack`. Returns only when something later switches back to the
+/// saved context, with interrupts still disabled.
 ///
 /// # Safety
 /// Interrupts must be disabled. `_old_stack` must be valid for a write of
 /// one `usize`. `_new_stack` must point at a context pushed by this function
 /// or laid out like one, on a stack that is mapped in the address space
 /// `_new_cr3_value` selects, and `_new_cr3_value` must be a valid CR3 value.
+/// `_finish_arg` must stay valid until `finish` returns.
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_impl(
     _old_stack: *mut usize,
     _new_stack: *const u8,
     _new_cr3_value: usize,
+    _finish_arg: *mut SwitchFinish,
 ) {
-    // SysV ABI: rdi = _old_stack, rsi = _new_stack, rdx = _new_cr3_value.
+    // SysV ABI: rdi = _old_stack, rsi = _new_stack, rdx = _new_cr3_value,
+    // rcx = _finish_arg. A saved context leaves rsp 8 below 16-byte alignment,
+    // so the call needs 8 bytes of padding.
     naked_asm!(
         push_context!(),
         "mov [rdi], rsp",
         "mov rsp, rsi",
         set_task_switched!(),
         "mov cr3, rdx",
+        "mov rdi, rcx",
+        "sub rsp, 8",
+        "call {finish}",
+        "add rsp, 8",
         pop_context!(),
-        "ret"
+        "ret",
+        finish = sym finish_switch,
     )
 }
