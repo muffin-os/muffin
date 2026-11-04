@@ -20,6 +20,9 @@ fn std_smoke() {
         "std-smoke: time ok",
         "std-smoke: exe ok",
         "std-smoke: process ok",
+        "std-smoke: child env ok",
+        "std-smoke: child inherit ok",
+        "std-smoke: child_env ok",
         "std-smoke: panic ok",
         "std-smoke: done",
     ]);

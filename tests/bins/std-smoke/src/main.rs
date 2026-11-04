@@ -22,10 +22,18 @@ const STEPS: &[(&str, Step)] = &[
     ("time", time),
     ("exe", exe),
     ("process", process),
+    ("child_env", child_env),
     ("panic", catch_panic),
 ];
 
 fn main() {
+    if env::var_os("STD_SMOKE_CHILD").is_some() {
+        if let Err(e) = child() {
+            println!("std-smoke: FAIL child: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     for (name, step) in STEPS {
         if let Err(e) = step() {
             println!("std-smoke: FAIL {name}: {e}");
@@ -108,6 +116,31 @@ fn process() -> Result<(), Box<dyn Error>> {
     for (program, code) in [("/bin/true", 0), ("/bin/false", 1)] {
         let status = Command::new(program).status()?;
         check(status.code() == Some(code), program)?;
+    }
+    Ok(())
+}
+
+/// Re-executes this binary with one variable set. The child checks that it
+/// sees exactly that variable, then re-executes itself without `env` and the
+/// grandchild checks that it inherited the same environment.
+fn child_env() -> Result<(), Box<dyn Error>> {
+    let status = Command::new(env::current_exe()?)
+        .env("STD_SMOKE_CHILD", "env")
+        .status()?;
+    check(status.success(), "child failed")
+}
+
+fn child() -> Result<(), Box<dyn Error>> {
+    let vars: Vec<(String, String)> = env::vars().collect();
+    check(
+        vars == [("STD_SMOKE_CHILD".to_string(), "env".to_string())],
+        &format!("envp is {vars:?}"),
+    )?;
+    let level = env::args().nth(1).unwrap_or_else(|| "env".into());
+    println!("std-smoke: child {level} ok");
+    if level == "env" {
+        let status = Command::new(env::current_exe()?).arg("inherit").status()?;
+        check(status.success(), "grandchild failed")?;
     }
     Ok(())
 }
