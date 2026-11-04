@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:27:45 +0100
+Subject: [PATCH] use the unsupported thread name on muffin
+
+muffin has no thread names. set_name is a no-op, as on redox and aix.
+
+diff --git a/library/std/src/sys/thread/mod.rs b/library/std/src/sys/thread/mod.rs
+index 9816981..7728cee 100644
+--- a/library/std/src/sys/thread/mod.rs
++++ b/library/std/src/sys/thread/mod.rs
+@@ -58,6 +58,7 @@ cfg_select! {
+             target_os = "redox",
+             target_os = "hurd",
+             target_os = "aix",
++            target_os = "muffin",
+             target_os = "wasi",
+         )))]
+         pub use unix::set_name;
+@@ -84,6 +85,7 @@ cfg_select! {
+             target_os = "redox",
+             target_os = "hurd",
+             target_os = "aix",
++            target_os = "muffin",
+             target_os = "wasi",
+         ))]
+         pub use unsupported::set_name;
+diff --git a/library/std/src/sys/thread/unix.rs b/library/std/src/sys/thread/unix.rs
+index 2dbb031..b692ddc 100644
+--- a/library/std/src/sys/thread/unix.rs
++++ b/library/std/src/sys/thread/unix.rs
+@@ -5,6 +5,7 @@
+     target_os = "redox",
+     target_os = "hurd",
+     target_os = "aix",
++    target_os = "muffin",
+     target_os = "wasi",
+ )))]
+ use crate::ffi::CStr;

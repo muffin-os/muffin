@@ -202,7 +202,7 @@
   "moduleExtensions": {
     "//support:extensions.bzl%rust_support": {
       "general": {
-        "bzlTransitiveDigest": "6UtLs0FX9QFL4pnSPrU+7usw6ROBYTN8BX2MtBL1+V0=",
+        "bzlTransitiveDigest": "peXDDtUEnHcbgXdLaZnZhMntmHoSi1fhRdVh5k2tv4w=",
         "usagesDigest": "9TKtFbslhDwph+BAZV7lVpAGMjtJ0vX+YUmgSlD1HFI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
@@ -215,7 +215,19 @@
               "patch_args": [
                 "-p1"
               ],
-              "patches": [],
+              "patches": [
+                "@@//support/rust/patches/library:0001-link-muffinos-rt-from-std-on-muffin.patch",
+                "@@//support/rust/patches/library:0002-add-muffin-to-the-std-build-script-and-env-constants.patch",
+                "@@//support/rust/patches/library:0003-add-the-std-os-muffin-module.patch",
+                "@@//support/rust/patches/library:0004-use-the-unwinding-crate-for-unwind-on-muffin.patch",
+                "@@//support/rust/patches/library:0005-register-an-eh-frame-finder-in-the-muffin-unix-init.patch",
+                "@@//support/rust/patches/library:0006-build-std-net-as-unsupported-on-muffin.patch",
+                "@@//support/rust/patches/library:0007-add-muffin-arms-for-args-and-current_exe.patch",
+                "@@//support/rust/patches/library:0008-add-muffin-to-the-std-fs-fd-and-errno-lists.patch",
+                "@@//support/rust/patches/library:0009-spawn-muffin-processes-without-the-exec-error-pipe.patch",
+                "@@//support/rust/patches/library:0010-use-the-unsupported-thread-name-on-muffin.patch",
+                "@@//support/rust/patches/library:0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch"
+              ],
               "sha256": "99c110f203f38294e3b1565950809a45a5b0a91749244fa3a2ea94dd77e5be5b",
               "strip_prefix": "rust-src-nightly/rust-src/lib/rustlib/src/rust",
               "urls": [
@@ -230,7 +242,19 @@
               "patch_args": [
                 "-p1"
               ],
-              "patches": [],
+              "patches": [
+                "@@//support/rust/patches/library:0001-link-muffinos-rt-from-std-on-muffin.patch",
+                "@@//support/rust/patches/library:0002-add-muffin-to-the-std-build-script-and-env-constants.patch",
+                "@@//support/rust/patches/library:0003-add-the-std-os-muffin-module.patch",
+                "@@//support/rust/patches/library:0004-use-the-unwinding-crate-for-unwind-on-muffin.patch",
+                "@@//support/rust/patches/library:0005-register-an-eh-frame-finder-in-the-muffin-unix-init.patch",
+                "@@//support/rust/patches/library:0006-build-std-net-as-unsupported-on-muffin.patch",
+                "@@//support/rust/patches/library:0007-add-muffin-arms-for-args-and-current_exe.patch",
+                "@@//support/rust/patches/library:0008-add-muffin-to-the-std-fs-fd-and-errno-lists.patch",
+                "@@//support/rust/patches/library:0009-spawn-muffin-processes-without-the-exec-error-pipe.patch",
+                "@@//support/rust/patches/library:0010-use-the-unsupported-thread-name-on-muffin.patch",
+                "@@//support/rust/patches/library:0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch"
+              ],
               "sha256": "e2f5d93dc43e4b3275817fd2897aad41deb64c15995b5ceee0ae347ee0673c88",
               "strip_prefix": "rustc-nightly-src",
               "urls": [

@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:19:26 +0100
+Subject: [PATCH] link muffinos-rt from std on muffin
+
+std on muffin binds libc symbols that muffinos-rt defines. The extern crate
+puts the runtime, including _start, into every muffin binary. std for muffin
+builds only through Bazel, which supplies muffinos-rt, so Cargo.toml has no
+dependency on it.
+
+diff --git a/library/std/Cargo.toml b/library/std/Cargo.toml
+index 4c433d4..39d4ac7 100644
+--- a/library/std/Cargo.toml
++++ b/library/std/Cargo.toml
+@@ -168,4 +168,6 @@ check-cfg = [
+     'cfg(target_has_reliable_f16_math)',
+     'cfg(target_has_reliable_f128)',
+     'cfg(target_has_reliable_f128_math)',
++    # muffin is not a built-in target of the stage-0 compiler.
++    'cfg(target_os, values("muffin"))',
+ ]
+diff --git a/library/std/src/lib.rs b/library/std/src/lib.rs
+index 9c5b487..afbe150 100644
+--- a/library/std/src/lib.rs
++++ b/library/std/src/lib.rs
+@@ -481,6 +481,13 @@ extern crate libc;
+ #[allow(unused_extern_crates)]
+ extern crate unwind;
+ 
++// muffinos_rt defines the libc symbols that std binds. Linking it here puts it
++// in every muffin binary.
++#[doc(masked)]
++#[allow(unused_extern_crates)]
++#[cfg(target_os = "muffin")]
++extern crate muffinos_rt;
++
+ // FIXME: #94122 this extern crate definition only exist here to stop
+ // miniz_oxide docs leaking into std docs. Find better way to do it.
+ // Remove exclusion from tidy platform check when this removed.

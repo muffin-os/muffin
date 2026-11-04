@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:21:27 +0100
+Subject: [PATCH] register an eh frame finder in the muffin unix init
+
+muffin binaries are static and have no dl_iterate_phdr. The unwinding crate
+finds the unwind tables through the program headers at __ehdr_start instead.
+muffin has no poll syscall, so the standard fd check uses fcntl only.
+
+diff --git a/library/std/src/sys/pal/unix/mod.rs b/library/std/src/sys/pal/unix/mod.rs
+index 75a75ab..2376b85 100644
+--- a/library/std/src/sys/pal/unix/mod.rs
++++ b/library/std/src/sys/pal/unix/mod.rs
+@@ -6,6 +6,8 @@ pub mod conf;
+ #[cfg(target_os = "fuchsia")]
+ pub mod fuchsia;
+ pub mod futex;
++#[cfg(target_os = "muffin")]
++mod muffin_eh_frame;
+ pub mod stack_overflow;
+ pub mod sync;
+ pub mod thread_parking;
+@@ -36,6 +38,8 @@ pub unsafe fn init(argc: isize, argv: *const *const u8, sigpipe: u8) {
+     // behavior.
+     reset_sigpipe(sigpipe);
+ 
++    #[cfg(target_os = "muffin")]
++    muffin_eh_frame::init();
+     stack_overflow::init();
+     #[cfg(not(target_os = "vita"))]
+     crate::sys::args::init(argc, argv);
+@@ -85,6 +89,7 @@ pub unsafe fn init(argc: isize, argv: *const *const u8, sigpipe: u8) {
+             target_os = "horizon",
+             target_os = "vita",
+             target_os = "rtems",
++            target_os = "muffin", // no `poll`
+             // The poll on Darwin doesn't set POLLNVAL for closed fds.
+             target_vendor = "apple",
+         )))]
+diff --git a/library/std/src/sys/pal/unix/muffin_eh_frame.rs b/library/std/src/sys/pal/unix/muffin_eh_frame.rs
+new file mode 100644
+index 0000000..a2e819e
+--- /dev/null
++++ b/library/std/src/sys/pal/unix/muffin_eh_frame.rs
+@@ -0,0 +1,57 @@
++//! Locates the unwind tables of the running muffin binary.
++//!
++//! muffin binaries are static `ET_EXEC` files and the kernel has no dynamic
++//! loader, so `dl_iterate_phdr` does not exist. The `unwinding` crate instead
++//! asks this finder, which reads the binary's own program headers through the
++//! linker symbol `__ehdr_start`.
++
++use unwind::{EhFrameFinder, FrameInfo, FrameInfoKind};
++
++// ELF64 header and program header field offsets.
++const E_PHOFF: usize = 0x20;
++const E_PHENTSIZE: usize = 0x36;
++const E_PHNUM: usize = 0x38;
++const P_VADDR: usize = 0x10;
++const PT_GNU_EH_FRAME: u32 = 0x6474_E550;
++
++unsafe extern "C" {
++    /// Load address of the process's own ELF header, resolved by the linker.
++    static __ehdr_start: u8;
++}
++
++/// Gives `None` for a binary without `PT_GNU_EH_FRAME`. The unwinder then
++/// reports an escaped panic instead of a corrupt walk.
++struct PhdrFinder;
++
++unsafe impl EhFrameFinder for PhdrFinder {
++    fn find(&self, _pc: usize) -> Option<FrameInfo> {
++        // SAFETY: the kernel maps every `PT_LOAD` of a static `ET_EXEC` and the
++        // first one starts at file offset 0. The ELF header and the program
++        // header table it declares stay readable at `__ehdr_start` for the
++        // process lifetime, and the reads stay inside them. Unaligned reads
++        // assume nothing about the layout of the mapping.
++        unsafe {
++            let base = &raw const __ehdr_start;
++            let e_phoff = base.add(E_PHOFF).cast::<u64>().read_unaligned() as usize;
++            let e_phentsize = base.add(E_PHENTSIZE).cast::<u16>().read_unaligned() as usize;
++            let e_phnum = base.add(E_PHNUM).cast::<u16>().read_unaligned() as usize;
++            (0..e_phnum)
++                .map(|i| base.add(e_phoff + i * e_phentsize))
++                .find(|ph| ph.cast::<u32>().read_unaligned() == PT_GNU_EH_FRAME)
++                .map(|ph| FrameInfo {
++                    text_base: Some(base.addr()),
++                    kind: FrameInfoKind::EhFrameHdr(
++                        ph.add(P_VADDR).cast::<u64>().read_unaligned() as usize
++                    ),
++                })
++        }
++    }
++}
++
++static FINDER: PhdrFinder = PhdrFinder;
++
++/// Registers the finder with the unwinder. Panics and backtraces need it.
++pub fn init() {
++    // Only runtime initialization calls this, once, so no finder is set yet.
++    rtassert!(unwind::set_custom_eh_frame_finder(&FINDER).is_ok());
++}

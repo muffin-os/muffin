@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:19:42 +0100
+Subject: [PATCH] add muffin to the std build script and env constants
+
+Without the build script entry std builds as restricted_std on muffin.
+
+diff --git a/library/std/build.rs b/library/std/build.rs
+index 98856b5..e86cf75 100644
+--- a/library/std/build.rs
++++ b/library/std/build.rs
+@@ -58,6 +58,7 @@ fn main() {
+         || target_os == "nuttx"
+         || target_os == "cygwin"
+         || target_os == "vexos"
++        || target_os == "muffin"
+ 
+         // See src/bootstrap/src/core/build_steps/synthetic_targets.rs
+         || env::var("RUSTC_BOOTSTRAP_SYNTHETIC_TARGET").is_ok()
+diff --git a/library/std/src/sys/env_consts.rs b/library/std/src/sys/env_consts.rs
+index b14160c..25b81f9 100644
+--- a/library/std/src/sys/env_consts.rs
++++ b/library/std/src/sys/env_consts.rs
+@@ -235,6 +235,17 @@ pub mod os {
+     pub const EXE_EXTENSION: &str = "";
+ }
+ 
++#[cfg(target_os = "muffin")]
++pub mod os {
++    pub const FAMILY: &str = "unix";
++    pub const OS: &str = "muffin";
++    pub const DLL_PREFIX: &str = "lib";
++    pub const DLL_SUFFIX: &str = ".so";
++    pub const DLL_EXTENSION: &str = "so";
++    pub const EXE_SUFFIX: &str = "";
++    pub const EXE_EXTENSION: &str = "";
++}
++
+ #[cfg(target_os = "nuttx")]
+ pub mod os {
+     pub const FAMILY: &str = "unix";

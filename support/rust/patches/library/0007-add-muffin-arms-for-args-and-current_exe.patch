@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:24:27 +0100
+Subject: [PATCH] add muffin arms for args and current_exe
+
+lang_start passes argc and argv on muffin as on other unix targets.
+current_exe asks the kernel through muffinos-rt, and home_dir has no
+passwd database to fall back to.
+
+diff --git a/library/std/src/sys/args/unix.rs b/library/std/src/sys/args/unix.rs
+index 197931d..43351ab 100644
+--- a/library/std/src/sys/args/unix.rs
++++ b/library/std/src/sys/args/unix.rs
+@@ -85,6 +85,7 @@ pub fn args() -> Args {
+     target_os = "hurd",
+     target_os = "rtems",
+     target_os = "nuttx",
++    target_os = "muffin",
+ ))]
+ mod imp {
+     use crate::ffi::c_char;
+diff --git a/library/std/src/sys/paths/unix.rs b/library/std/src/sys/paths/unix.rs
+index 7d916b8..bd24ab2 100644
+--- a/library/std/src/sys/paths/unix.rs
++++ b/library/std/src/sys/paths/unix.rs
+@@ -370,6 +370,15 @@ pub fn current_exe() -> io::Result<PathBuf> {
+     Err(io::const_error!(io::ErrorKind::Unsupported, "not yet implemented!"))
+ }
+ 
++#[cfg(target_os = "muffin")]
++pub fn current_exe() -> io::Result<PathBuf> {
++    let mut path = vec![0; libc::PATH_MAX as usize];
++    let len = muffinos_rt::exe_path(&mut path)
++        .map_err(|errno| io::Error::from_raw_os_error(errno.raw()))?;
++    path.truncate(len);
++    Ok(PathBuf::from(OsString::from_vec(path)))
++}
++
+ #[cfg(target_os = "vxworks")]
+ pub fn current_exe() -> io::Result<PathBuf> {
+     #[cfg(test)]
+@@ -442,6 +451,7 @@ pub fn home_dir() -> Option<PathBuf> {
+         target_os = "horizon",
+         target_os = "vita",
+         target_os = "nuttx",
++        target_os = "muffin",
+         all(target_vendor = "apple", not(target_os = "macos")),
+     ))]
+     unsafe fn fallback() -> Option<OsString> {
+@@ -456,6 +466,7 @@ pub fn home_dir() -> Option<PathBuf> {
+         target_os = "horizon",
+         target_os = "vita",
+         target_os = "nuttx",
++        target_os = "muffin",
+         all(target_vendor = "apple", not(target_os = "macos")),
+     )))]
+     unsafe fn fallback() -> Option<OsString> {

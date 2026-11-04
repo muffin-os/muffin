@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:27:10 +0100
+Subject: [PATCH] spawn muffin processes without the exec error pipe
+
+The muffin kernel has no pipe syscall. Command::spawn forks and execs with
+inherited stdio, and an exec failure surfaces as exit code 127.
+
+diff --git a/library/std/src/sys/process/unix/common.rs b/library/std/src/sys/process/unix/common.rs
+index 8215b19..c00b5f9 100644
+--- a/library/std/src/sys/process/unix/common.rs
++++ b/library/std/src/sys/process/unix/common.rs
+@@ -16,8 +16,12 @@ use crate::sys::fs::File;
+ use crate::sys::fs::OpenOptions;
+ use crate::sys::pipe::pipe;
+ use crate::sys::process::env::{CommandEnv, CommandEnvs, CommandResolvedEnvs};
+-use crate::sys::{FromInner, IntoInner, cvt_r};
+-use crate::{fmt, io, mem};
++#[cfg(not(target_os = "muffin"))]
++use crate::sys::cvt_r;
++use crate::sys::{FromInner, IntoInner};
++use crate::{fmt, io};
++#[cfg(not(target_os = "muffin"))]
++use crate::mem;
+ 
+ mod cstring_array;
+ 
+@@ -633,6 +637,19 @@ impl<'a> fmt::Debug for CommandArgs<'a> {
+ 
+ pub type ChildPipe = crate::sys::pipe::Pipe;
+ 
++// shortcut: muffin has no pipe or poll syscall, so `spawn` fails before it
++// creates output pipes; upgrade when the kernel adds pipe and poll.
++#[cfg(target_os = "muffin")]
++pub fn read_output(
++    _out: ChildPipe,
++    _stdout: &mut Vec<u8>,
++    _err: ChildPipe,
++    _stderr: &mut Vec<u8>,
++) -> io::Result<()> {
++    Err(io::Error::UNSUPPORTED_PLATFORM)
++}
++
++#[cfg(not(target_os = "muffin"))]
+ pub fn read_output(
+     out: ChildPipe,
+     stdout: &mut Vec<u8>,
+diff --git a/library/std/src/sys/process/unix/unix.rs b/library/std/src/sys/process/unix/unix.rs
+index 34bf78e..32c2438 100644
+--- a/library/std/src/sys/process/unix/unix.rs
++++ b/library/std/src/sys/process/unix/unix.rs
+@@ -11,7 +11,9 @@ use libc::{c_int, pid_t};
+ use libc::{gid_t, uid_t};
+ 
+ use super::common::*;
+-use crate::io::{self, Error, ErrorKind};
++#[cfg(not(target_os = "muffin"))]
++use crate::io::Error;
++use crate::io::{self, ErrorKind};
+ use crate::num::NonZero;
+ use crate::process::StdioPipes;
+ use crate::sys::cvt;
+@@ -52,6 +54,7 @@ cfg_select! {
+ ////////////////////////////////////////////////////////////////////////////////
+ 
+ impl Command {
++    #[cfg(not(target_os = "muffin"))]
+     pub fn spawn(
+         &mut self,
+         default: Stdio,
+@@ -164,6 +167,42 @@ impl Command {
+         }
+     }
+ 
++    // shortcut: muffin has no pipe syscall, so the child reports an exec failure
++    // as exit code 127 instead of an error from `spawn`; upgrade when the kernel
++    // adds pipe.
++    #[cfg(target_os = "muffin")]
++    pub fn spawn(
++        &mut self,
++        default: Stdio,
++        needs_stdin: bool,
++    ) -> io::Result<(Process, StdioPipes)> {
++        let envp = self.capture_env();
++
++        if self.saw_nul() {
++            return Err(io::const_error!(
++                ErrorKind::InvalidInput,
++                "nul byte found in provided data",
++            ));
++        }
++
++        let (ours, theirs) = self.setup_io(default, needs_stdin)?;
++
++        // The lock and the child's `mem::forget` follow the generic `spawn`.
++        let env_lock = sys::env::env_read_lock();
++        let pid = unsafe { self.do_fork()? };
++
++        if pid == 0 {
++            crate::panic::always_abort();
++            mem::forget(env_lock);
++            let Err(_) = unsafe { self.do_exec(theirs, envp.as_ref()) };
++            unsafe { libc::_exit(127) }
++        }
++
++        drop(env_lock);
++        // Safety: -1 is the "no pidfd" value of every non-Linux target.
++        Ok((unsafe { Process::new(pid, -1) }, ours))
++    }
++
+     // WatchOS and TVOS headers mark the `fork`/`exec*` functions with
+     // `__WATCHOS_PROHIBITED __TVOS_PROHIBITED`, and indicate that the
+     // `posix_spawn*` functions should be used instead. It isn't entirely clear
+@@ -301,7 +340,8 @@ impl Command {
+         {
+             if let Some(_g) = self.get_groups() {
+                 //FIXME: Redox kernel does not support setgroups yet
+-                #[cfg(not(target_os = "redox"))]
++                // shortcut: muffin has no setgroups syscall; upgrade when the kernel adds it.
++                #[cfg(not(any(target_os = "redox", target_os = "muffin")))]
+                 cvt(libc::setgroups(_g.len().try_into().unwrap(), _g.as_ptr()))?;
+             }
+             if let Some(u) = self.get_gid() {
+@@ -315,7 +355,7 @@ impl Command {
+                 // uid has dropped, we may still have groups that enable us to
+                 // do super-user things.
+                 //FIXME: Redox kernel does not support setgroups yet
+-                #[cfg(not(target_os = "redox"))]
++                #[cfg(not(any(target_os = "redox", target_os = "muffin")))]
+                 if self.get_groups().is_none() {
+                     let res = cvt(libc::setgroups(0, crate::ptr::null()));
+                     if let Err(e) = res {
+@@ -432,6 +472,7 @@ impl Command {
+         target_os = "qnx",
+         target_vendor = "apple",
+         target_os = "cygwin",
++        target_os = "muffin",
+     )))]
+     fn posix_spawn(
+         &mut self,
+@@ -1188,11 +1229,11 @@ fn signal_string(signal: i32) -> &'static str {
+         libc::SIGXFSZ => " (SIGXFSZ)",
+         #[cfg(not(any(target_os = "l4re", target_os = "rtems")))]
+         libc::SIGVTALRM => " (SIGVTALRM)",
+-        #[cfg(not(target_os = "l4re"))]
++        #[cfg(not(any(target_os = "l4re", target_os = "muffin")))]
+         libc::SIGPROF => " (SIGPROF)",
+         #[cfg(not(any(target_os = "l4re", target_os = "rtems")))]
+         libc::SIGWINCH => " (SIGWINCH)",
+-        #[cfg(not(any(target_os = "haiku", target_os = "l4re")))]
++        #[cfg(not(any(target_os = "haiku", target_os = "l4re", target_os = "muffin")))]
+         libc::SIGIO => " (SIGIO)",
+         #[cfg(target_os = "haiku")]
+         libc::SIGPOLL => " (SIGPOLL)",

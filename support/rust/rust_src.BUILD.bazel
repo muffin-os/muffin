@@ -88,3 +88,272 @@ rust_library(
     ],
     tags = _TAGS,
 )
+
+# The crates below make up the rest of the std graph. Their `core` and `alloc`
+# come from the layer-1 sysroot through `-L`, so they need no Bazel dep on the
+# `rustc-std-workspace-*` shims that Cargo uses to rename them. The feature
+# lists are copied from `library/Cargo.lock` of the pinned nightly for the std
+# features `panic-unwind` and `backtrace`. Optional dependencies that a feature
+# turns on by name (`core`, `alloc`) are features as well, because Cargo passes
+# them as `--cfg feature=...`.
+#
+# Bootstrap compiles every std-graph crate with `-Zforce-unstable-if-unmarked`.
+# Without it, std cannot call the const fns that hashbrown marks
+# `rustc_const_stable_indirect`, and user crates could link the vendored crates
+# from the sysroot without `rustc_private`.
+_FORCE_UNSTABLE = ["-Zforce-unstable-if-unmarked"]
+
+# Cargo caps lints at `allow` for crates outside the workspace, and the
+# vendored crates are such crates in the std build.
+_VENDORED_FLAGS = _FORCE_UNSTABLE + ["--cap-lints=allow"]
+
+rust_library(
+    name = "cfg_if",
+    srcs = glob(["library/vendor/cfg-if-1.0.4/src/**/*.rs"]),
+    crate_features = [
+        "core",
+        "rustc-dep-of-std",
+    ],
+    crate_root = "library/vendor/cfg-if-1.0.4/src/lib.rs",
+    edition = "2018",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "hashbrown",
+    srcs = glob(["library/vendor/hashbrown-0.17.1/src/**/*.rs"]),
+    crate_features = [
+        "alloc",
+        "core",
+        "nightly",
+        "rustc-dep-of-std",
+        "rustc-internal-api",
+    ],
+    crate_root = "library/vendor/hashbrown-0.17.1/src/lib.rs",
+    edition = "2024",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "rustc_demangle",
+    srcs = glob(["library/vendor/rustc-demangle-0.1.27/src/**/*.rs"]),
+    crate_features = [
+        "core",
+        "rustc-dep-of-std",
+    ],
+    crate_root = "library/vendor/rustc-demangle-0.1.27/src/lib.rs",
+    edition = "2015",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "gimli",
+    srcs = glob(["library/vendor/gimli-0.32.3/src/**/*.rs"]),
+    crate_features = [
+        "read",
+        "read-core",
+        "rustc-dep-of-std",
+    ],
+    crate_root = "library/vendor/gimli-0.32.3/src/lib.rs",
+    edition = "2018",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "unwinding",
+    srcs = glob(["library/vendor/unwinding-0.2.8/src/**/*.rs"]),
+    compile_data = ["library/vendor/unwinding-0.2.8/README.md"],
+    crate_features = [
+        "fde-custom",
+        "rustc-dep-of-std",
+        "unwinder",
+    ],
+    crate_root = "library/vendor/unwinding-0.2.8/src/lib.rs",
+    edition = "2024",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+    deps = [":gimli"],
+)
+
+rust_library(
+    name = "adler2",
+    srcs = glob(["library/vendor/adler2-2.0.1/src/**/*.rs"]),
+    crate_features = [
+        "core",
+        "rustc-dep-of-std",
+    ],
+    crate_root = "library/vendor/adler2-2.0.1/src/lib.rs",
+    edition = "2021",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "miniz_oxide",
+    srcs = glob(["library/vendor/miniz_oxide-0.8.9/src/**/*.rs"]),
+    crate_features = [
+        "alloc",
+        "core",
+        "rustc-dep-of-std",
+    ],
+    crate_root = "library/vendor/miniz_oxide-0.8.9/src/lib.rs",
+    edition = "2021",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+    deps = [":adler2"],
+)
+
+rust_library(
+    name = "memchr",
+    srcs = glob(["library/vendor/memchr-2.7.6/src/**/*.rs"]),
+    crate_features = [
+        "core",
+        "rustc-dep-of-std",
+    ],
+    crate_root = "library/vendor/memchr-2.7.6/src/lib.rs",
+    edition = "2021",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "object",
+    srcs = glob(["library/vendor/object-0.37.3/src/**/*.rs"]),
+    crate_features = [
+        "alloc",
+        "archive",
+        "coff",
+        "core",
+        "elf",
+        "macho",
+        "pe",
+        "read_core",
+        "rustc-dep-of-std",
+        "unaligned",
+    ],
+    crate_root = "library/vendor/object-0.37.3/src/lib.rs",
+    edition = "2018",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+    deps = [":memchr"],
+)
+
+rust_library(
+    name = "addr2line",
+    srcs = glob(["library/vendor/addr2line-0.25.1/src/**/*.rs"]),
+    crate_features = [
+        "alloc",
+        "core",
+        "rustc-dep-of-std",
+    ],
+    crate_root = "library/vendor/addr2line-0.25.1/src/lib.rs",
+    edition = "2018",
+    rustc_flags = _VENDORED_FLAGS,
+    tags = _TAGS,
+    deps = [":gimli"],
+)
+
+rust_library(
+    name = "std_detect",
+    srcs = glob(["library/std_detect/src/**/*.rs"]),
+    compile_data = glob(["library/std_detect/**/*.md"]),
+    crate_root = "library/std_detect/src/lib.rs",
+    edition = "2024",
+    rustc_flags = _FORCE_UNSTABLE,
+    tags = _TAGS,
+    deps = ["@rust_libc//:libc"],
+)
+
+rust_library(
+    name = "unwind",
+    srcs = glob(["library/unwind/src/**/*.rs"]),
+    crate_root = "library/unwind/src/lib.rs",
+    edition = "2024",
+    rustc_flags = _FORCE_UNSTABLE,
+    tags = _TAGS,
+    deps = [
+        ":unwinding",
+        "@rust_libc//:libc",
+    ],
+)
+
+rust_library(
+    name = "panic_abort",
+    srcs = glob(["library/panic_abort/src/**/*.rs"]),
+    crate_root = "library/panic_abort/src/lib.rs",
+    edition = "2024",
+    rustc_flags = _FORCE_UNSTABLE + ["-Cpanic=abort"],
+    tags = _TAGS,
+)
+
+rust_library(
+    name = "panic_unwind",
+    srcs = glob(["library/panic_unwind/src/**/*.rs"]),
+    crate_root = "library/panic_unwind/src/lib.rs",
+    edition = "2024",
+    # Cargo passes `--extern alloc`, the crate has no `extern crate alloc`.
+    rustc_flags = _FORCE_UNSTABLE + ["--extern=alloc"],
+    tags = _TAGS,
+    deps = [
+        ":unwind",
+        "@rust_libc//:libc",
+    ],
+)
+
+# The std build script cannot run under Bazel. `backtrace_in_libstd` and
+# `STD_ENV_ARCH` are what it emits for x86_64. `miniz_oxide`, `addr2line` and
+# `object` are optional dependencies that the `backtrace` feature turns on. Cargo
+# passes `--extern alloc` and some std modules depend on it.
+rust_library(
+    name = "std",
+    # std #[path]-includes the backtrace crate and portable-simd's std_float, and
+    # include!s the docs that core shares with it.
+    srcs = glob([
+        "library/std/src/**/*.rs",
+        "library/backtrace/src/**/*.rs",
+        "library/portable-simd/crates/std_float/src/**/*.rs",
+        "library/core/src/*_docs.rs",
+    ]),
+    compile_data = glob([
+        "library/core/**/*.md",
+        "library/portable-simd/**/*.md",
+        "library/std/**/*.md",
+        "library/stdarch/crates/core_arch/src/**/*.md",
+    ]),
+    crate_features = [
+        "addr2line",
+        "backtrace",
+        "miniz_oxide",
+        "object",
+        "panic-unwind",
+    ],
+    crate_root = "library/std/src/lib.rs",
+    edition = "2024",
+    rustc_env = {"STD_ENV_ARCH": "x86_64"},
+    rustc_flags = _FORCE_UNSTABLE + [
+        "--cfg=backtrace_in_libstd",
+        "--extern=alloc",
+        # The prelude expects `exported_private_dependencies`, which never fires
+        # because rules_rust has no public/private dependency model.
+        "-Aunfulfilled_lint_expectations",
+    ],
+    tags = _TAGS,
+    deps = [
+        ":addr2line",
+        ":cfg_if",
+        ":hashbrown",
+        ":miniz_oxide",
+        ":object",
+        ":panic_abort",
+        ":panic_unwind",
+        ":rustc_demangle",
+        ":std_detect",
+        ":unwind",
+        "@muffinos//support/muffinos-rt",
+        "@rust_libc//:libc",
+    ],
+)

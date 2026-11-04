@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:26:02 +0100
+Subject: [PATCH] add muffin to the std fs, fd and errno lists
+
+muffin has readdir but no readdir_r, readv, writev, openat or FIOCLEX.
+std reads directories with readdir, writes vectored I/O one buffer at a
+time, sets cloexec with fcntl and binds errno to __errno_location.
+The max_iov list is sorted only up to nuttx, so muffin goes at its sorted
+place in that part.
+
+diff --git a/library/std/src/sys/fd/unix.rs b/library/std/src/sys/fd/unix.rs
+index a96df39..942dc51 100644
+--- a/library/std/src/sys/fd/unix.rs
++++ b/library/std/src/sys/fd/unix.rs
+@@ -92,6 +92,7 @@ const fn max_iov() -> usize {
+     target_os = "espidf",
+     target_os = "freebsd",
+     target_os = "linux",
++    target_os = "muffin",
+     target_os = "netbsd",
+     target_os = "nuttx",
+     target_os = "nto",
+@@ -127,7 +128,8 @@ impl FileDesc {
+         target_os = "espidf",
+         target_os = "horizon",
+         target_os = "vita",
+-        target_os = "nuttx"
++        target_os = "nuttx",
++        target_os = "muffin",
+     )))]
+     pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+         let ret = cvt(unsafe {
+@@ -144,7 +146,8 @@ impl FileDesc {
+         target_os = "espidf",
+         target_os = "horizon",
+         target_os = "vita",
+-        target_os = "nuttx"
++        target_os = "nuttx",
++        target_os = "muffin",
+     ))]
+     pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+         io::default_read_vectored(|b| self.read(b), bufs)
+@@ -157,6 +160,7 @@ impl FileDesc {
+             target_os = "horizon",
+             target_os = "vita",
+             target_os = "nuttx",
++            target_os = "muffin",
+             target_os = "wasi",
+         )))
+     }
+@@ -363,7 +367,8 @@ impl FileDesc {
+         target_os = "espidf",
+         target_os = "horizon",
+         target_os = "vita",
+-        target_os = "nuttx"
++        target_os = "nuttx",
++        target_os = "muffin",
+     )))]
+     pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+         let ret = cvt(unsafe {
+@@ -380,7 +385,8 @@ impl FileDesc {
+         target_os = "espidf",
+         target_os = "horizon",
+         target_os = "vita",
+-        target_os = "nuttx"
++        target_os = "nuttx",
++        target_os = "muffin",
+     ))]
+     pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+         io::default_write_vectored(|b| self.write(b), bufs)
+@@ -393,6 +399,7 @@ impl FileDesc {
+             target_os = "horizon",
+             target_os = "vita",
+             target_os = "nuttx",
++            target_os = "muffin",
+             target_os = "wasi",
+         )))
+     }
+@@ -572,6 +579,7 @@ impl FileDesc {
+         target_os = "nto",
+         target_os = "qnx",
+         target_os = "wasi",
++        target_os = "muffin",
+     )))]
+     pub fn set_cloexec(&self) -> io::Result<()> {
+         unsafe {
+@@ -597,6 +605,7 @@ impl FileDesc {
+         target_os = "nto",
+         target_os = "qnx",
+         target_os = "wasi",
++        target_os = "muffin",
+     ))]
+     pub fn set_cloexec(&self) -> io::Result<()> {
+         unsafe {
+diff --git a/library/std/src/sys/fs/unix.rs b/library/std/src/sys/fs/unix.rs
+index 7283e8f..15aab69 100644
+--- a/library/std/src/sys/fs/unix.rs
++++ b/library/std/src/sys/fs/unix.rs
+@@ -27,6 +27,7 @@ use libc::fstatat64;
+     target_os = "freebsd",
+     target_os = "fuchsia",
+     target_os = "illumos",
++    target_os = "muffin",
+     target_os = "nto",
+     target_os = "qnx",
+     target_os = "redox",
+@@ -45,6 +46,7 @@ use libc::readdir as readdir64;
+     target_os = "illumos",
+     target_os = "l4re",
+     target_os = "linux",
++    target_os = "muffin",
+     target_os = "nto",
+     target_os = "qnx",
+     target_os = "redox",
+@@ -283,6 +285,7 @@ cfg_select! {
+         target_os = "espidf",
+         target_os = "horizon",
+         target_os = "vita",
++        target_os = "muffin",
+         target_os = "nto",
+         target_os = "qnx",
+         target_os = "vxworks",
+@@ -412,6 +415,7 @@ fn get_path_from_fd(fd: c_int) -> Option<PathBuf> {
+     target_os = "hurd",
+     target_os = "illumos",
+     target_os = "linux",
++    target_os = "muffin",
+     target_os = "nto",
+     target_os = "qnx",
+     target_os = "redox",
+@@ -439,6 +443,7 @@ pub struct DirEntry {
+     target_os = "hurd",
+     target_os = "illumos",
+     target_os = "linux",
++    target_os = "muffin",
+     target_os = "nto",
+     target_os = "qnx",
+     target_os = "redox",
+@@ -467,6 +472,7 @@ struct dirent64_min {
+     target_os = "hurd",
+     target_os = "illumos",
+     target_os = "linux",
++    target_os = "muffin",
+     target_os = "nto",
+     target_os = "qnx",
+     target_os = "redox",
+@@ -866,6 +872,7 @@ impl Iterator for ReadDir {
+         target_os = "hurd",
+         target_os = "illumos",
+         target_os = "linux",
++        target_os = "muffin",
+         target_os = "nto",
+         target_os = "qnx",
+         target_os = "redox",
+@@ -966,6 +973,7 @@ impl Iterator for ReadDir {
+         target_os = "hurd",
+         target_os = "illumos",
+         target_os = "linux",
++        target_os = "muffin",
+         target_os = "nto",
+         target_os = "qnx",
+         target_os = "redox",
+@@ -1164,6 +1172,7 @@ impl DirEntry {
+         target_os = "illumos",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "muffin",
+         target_os = "nto",
+         target_os = "qnx",
+         target_os = "redox",
+@@ -1219,6 +1228,7 @@ impl DirEntry {
+         target_os = "android",
+         target_os = "freebsd",
+         target_os = "linux",
++        target_os = "muffin",
+         target_os = "solaris",
+         target_os = "illumos",
+         target_os = "fuchsia",
+@@ -1237,6 +1247,7 @@ impl DirEntry {
+         target_os = "android",
+         target_os = "freebsd",
+         target_os = "linux",
++        target_os = "muffin",
+         target_os = "solaris",
+         target_os = "illumos",
+         target_os = "fuchsia",
+@@ -2428,6 +2439,7 @@ pub use remove_dir_impl::remove_dir_all;
+     target_os = "espidf",
+     target_os = "horizon",
+     target_os = "vita",
++    target_os = "muffin",
+     target_os = "nto",
+     target_os = "qnx",
+     target_os = "vxworks",
+@@ -2443,6 +2455,7 @@ mod remove_dir_impl {
+     target_os = "espidf",
+     target_os = "horizon",
+     target_os = "vita",
++    target_os = "muffin",
+     target_os = "nto",
+     target_os = "qnx",
+     target_os = "vxworks",
+diff --git a/library/std/src/sys/io/error/unix.rs b/library/std/src/sys/io/error/unix.rs
+index c545558..d6ffa69 100644
+--- a/library/std/src/sys/io/error/unix.rs
++++ b/library/std/src/sys/io/error/unix.rs
+@@ -17,6 +17,7 @@ unsafe extern "C" {
+             target_os = "fuchsia",
+             target_os = "l4re",
+             target_os = "hurd",
++            target_os = "muffin",
+             target_os = "teeos",
+         ),
+         link_name = "__errno_location"

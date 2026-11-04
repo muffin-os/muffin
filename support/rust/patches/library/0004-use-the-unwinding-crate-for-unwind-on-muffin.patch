@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:21:42 +0100
+Subject: [PATCH] use the unwinding crate for unwind on muffin
+
+muffin has no system libunwind. Like xous, it links the vendored unwinding
+crate with a custom eh frame finder.
+
+diff --git a/library/unwind/Cargo.toml b/library/unwind/Cargo.toml
+index 1293c46..b570fd4 100644
+--- a/library/unwind/Cargo.toml
++++ b/library/unwind/Cargo.toml
+@@ -19,7 +19,7 @@ core = { path = "../rustc-std-workspace-core", package = "rustc-std-workspace-co
+ [target.'cfg(not(all(windows, target_env = "msvc")))'.dependencies]
+ libc = { version = "0.2.140", features = ['rustc-dep-of-std'], default-features = false }
+ 
+-[target.'cfg(target_os = "xous")'.dependencies]
++[target.'cfg(any(target_os = "xous", target_os = "muffin"))'.dependencies]
+ unwinding = { version = "0.2.7", features = ['rustc-dep-of-std', 'unwinder', 'fde-custom'], default-features = false }
+ 
+ [features]
+@@ -35,4 +35,4 @@ system-llvm-libunwind = []
+ 
+ [lints.rust.unexpected_cfgs]
+ level = "warn"
+-check-cfg = ['cfg(target_arch, values("loongarch32"))']
++check-cfg = ['cfg(target_arch, values("loongarch32"))', 'cfg(target_os, values("muffin"))']
+diff --git a/library/unwind/src/lib.rs b/library/unwind/src/lib.rs
+index 02201f4..a4741b8 100644
+--- a/library/unwind/src/lib.rs
++++ b/library/unwind/src/lib.rs
+@@ -26,6 +26,11 @@ cfg_select! {
+     ) => {
+         // These "unix" family members do not have unwinder.
+     }
++    // muffin is a "unix" family member without a system unwinder.
++    any(target_os = "xous", target_os = "muffin") => {
++        mod unwinding;
++        pub use unwinding::*;
++    }
+     any(
+         unix,
+         windows,
+@@ -37,10 +42,6 @@ cfg_select! {
+         mod libunwind;
+         pub use libunwind::*;
+     }
+-    target_os = "xous" => {
+-        mod unwinding;
+-        pub use unwinding::*;
+-    }
+     target_family = "wasm" => {
+         mod wasm;
+         pub use wasm::*;
