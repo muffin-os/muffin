@@ -47,6 +47,9 @@ unsafe extern "C" fn main() -> ! {
 #[cfg(not(test))]
 fn rust_panic(info: &core::panic::PanicInfo) -> ! {
     handle_panic(info);
+    // With interrupts on, the timer would schedule other tasks onto this
+    // CPU and they would run against the half-updated state of the panic.
+    x86_64::instructions::interrupts::disable();
     loop {
         x86_64::instructions::hlt();
     }

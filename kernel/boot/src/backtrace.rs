@@ -218,11 +218,13 @@ impl Iterator for ReturnAddressIterator {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_bp.is_null() {
+        let current_bp = self.current_bp;
+        // The frame below the syscall entry holds the user rbp, and the user
+        // half may already be unmapped, so the walk ends at the kernel half.
+        if (current_bp as isize) >= 0 || !current_bp.is_aligned() {
             return None;
         }
 
-        let current_bp = self.current_bp;
         let next_bp = unsafe { *current_bp };
         let instruction_pointer = unsafe { *(current_bp.add(1)) };
 
