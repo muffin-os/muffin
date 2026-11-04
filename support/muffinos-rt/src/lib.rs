@@ -30,6 +30,8 @@ macro_rules! enosys {
     };
 }
 
+#[cfg(not(test))]
+mod abi_check;
 mod env;
 #[cfg(not(test))]
 mod env_stubs;
