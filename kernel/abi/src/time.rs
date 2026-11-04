@@ -28,6 +28,15 @@ impl TryFrom<usize> for ClockId {
     }
 }
 
+impl TryFrom<i32> for ClockId {
+    type Error = Errno;
+
+    /// Decodes the C `clockid_t` form. A negative value fails with `EINVAL`.
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        usize::try_from(value).map_err(|_| EINVAL)?.try_into()
+    }
+}
+
 /// POSIX `struct timespec` as defined in `<time.h>`.
 ///
 /// `tv_nsec` is valid in `0..1_000_000_000`.

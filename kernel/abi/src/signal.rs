@@ -140,6 +140,16 @@ impl SaFlags {
     pub const RESETHAND: Self = Self(1 << 3);
 
     #[must_use]
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -292,6 +302,15 @@ impl TryFrom<usize> for SigMaskHow {
             2 => Ok(Self::SetMask),
             _ => Err(EINVAL),
         }
+    }
+}
+
+impl TryFrom<i32> for SigMaskHow {
+    type Error = Errno;
+
+    /// Decodes the C `int` form. A negative value fails with `EINVAL`.
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        usize::try_from(value).map_err(|_| EINVAL)?.try_into()
     }
 }
 

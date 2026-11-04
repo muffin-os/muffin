@@ -116,6 +116,15 @@ impl TryFrom<usize> for Whence {
     }
 }
 
+impl TryFrom<i32> for Whence {
+    type Error = Errno;
+
+    /// Decodes the C `int` form. A negative value fails with `EINVAL`.
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        usize::try_from(value).map_err(|_| EINVAL)?.try_into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,10 +142,12 @@ mod tests {
 
     #[test]
     fn whence_unknown_is_einval() {
-        assert_eq!(
-            Whence::try_from(3),
-            Err(EINVAL),
-            "an origin outside 0, 1 and 2 should be rejected"
-        );
+        for invalid in [3, -1] {
+            assert_eq!(
+                Whence::try_from(invalid),
+                Err(EINVAL),
+                "an origin outside 0, 1 and 2 should be rejected"
+            );
+        }
     }
 }

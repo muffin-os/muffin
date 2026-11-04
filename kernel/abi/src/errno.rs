@@ -6,6 +6,13 @@ use core::num::TryFromIntError;
 #[repr(transparent)]
 pub struct Errno(c_int);
 
+impl Errno {
+    #[must_use]
+    pub const fn raw(self) -> c_int {
+        self.0
+    }
+}
+
 impl Display for Errno {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         Display::fmt(errno_name(self), f)
