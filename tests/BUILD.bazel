@@ -293,7 +293,7 @@ ext2_image(
     name = "hello_world_disk",
     files = {
         "bin/init": "//tests/bins:test_init",
-        "bin/tests/hello-world": "//userspace/hello-world",
+        "bin/tests/hello-world": "//userspace/services",
     },
 )
 

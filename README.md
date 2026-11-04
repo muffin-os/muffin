@@ -79,7 +79,7 @@ ext2 disk image at `bazel-bin/muffinos/disk.img`.
 
 Userspace programs link the Rust standard library, which `bazel build
 //support/rust` builds from the patch series in `support/rust/patches`.
-`bazel build //userspace/hello-world` builds the example, and `bazel test
+`bazel build //userspace/services` builds the example, and `bazel test
 //tests:std_smoke` exercises `std` end to end. Programs that must stay
 `no_std` link `//userspace/minilib`.
 

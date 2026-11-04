@@ -1,11 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
-    std::panic::set_hook(Box::new(|info| {
-        eprintln!("{info}");
-        eprintln!("{}", std::backtrace::Backtrace::force_capture());
-    }));
-
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("realtime clock is after 1970")

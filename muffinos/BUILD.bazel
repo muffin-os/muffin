@@ -33,7 +33,7 @@ ext2_image(
     ],
     files = {
         "bin/fbdemo": "//userspace/fbdemo",
-        "bin/hello-world": "//userspace/hello-world",
+        "bin/services": "//userspace/services",
         "bin/init": "//userspace/init",
         "bin/false": "//userspace/utilities/false",
         "bin/true": "//userspace/utilities/true",

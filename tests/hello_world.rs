@@ -6,6 +6,6 @@ fn hello_world() {
 
     report.assert_line_contains("Hello, world!");
     report.assert_line_contains("hello there");
-    report.assert_line_contains("hello_world::fu");
+    report.assert_line_contains("services::fu");
     report.assert_exit_code(0, 101);
 }
