@@ -3,10 +3,8 @@ load("//bazel/toolchains:bootstrap.bzl", "bootstrap_sysroot")
 package(default_visibility = ["//visibility:public"])
 
 # Builds the patched libc crate for muffin against the layer-1 sysroot.
-# TODO(slice C): drop "manual" once rust_libc.BUILD.bazel defines :libc.
 bootstrap_sysroot(
     name = "rust-libc",
     crates = ["@rust_libc//:libc"],
     platform = "//platforms:x86_64-unknown-muffin-std-bootstrap",
-    tags = ["manual"],
 )
