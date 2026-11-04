@@ -1,1 +1,32 @@
-# Package marker so versions.bzl and extensions.bzl are addressable as labels.
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load(
+    ":versions.bzl",
+    "CI_LLVM_URL",
+    "LIBC_SHA256",
+    "LIBC_STRIP_PREFIX",
+    "LIBC_URL",
+    "RUSTC_SRC_SHA256",
+    "RUSTC_SRC_STRIP_PREFIX",
+    "RUSTC_SRC_URL",
+    "RUST_SRC_SHA256",
+    "RUST_SRC_STRIP_PREFIX",
+    "RUST_SRC_URL",
+)
+
+# Round-trips the patch series through a git tree. See patchdev.sh.
+sh_binary(
+    name = "patchdev",
+    srcs = ["patchdev.sh"],
+    env = {
+        "CI_LLVM_URL": CI_LLVM_URL,
+        "LIBC_SHA256": LIBC_SHA256,
+        "LIBC_STRIP_PREFIX": LIBC_STRIP_PREFIX,
+        "LIBC_URL": LIBC_URL,
+        "RUSTC_SRC_SHA256": RUSTC_SRC_SHA256,
+        "RUSTC_SRC_STRIP_PREFIX": RUSTC_SRC_STRIP_PREFIX,
+        "RUSTC_SRC_URL": RUSTC_SRC_URL,
+        "RUST_SRC_SHA256": RUST_SRC_SHA256,
+        "RUST_SRC_STRIP_PREFIX": RUST_SRC_STRIP_PREFIX,
+        "RUST_SRC_URL": RUST_SRC_URL,
+    },
+)
