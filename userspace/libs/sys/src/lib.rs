@@ -130,6 +130,16 @@ pub fn exe_path(buf: &mut [u8]) -> Result<usize, Errno> {
     ret(unsafe { syscall2(SYS_EXE_PATH, buf.as_mut_ptr() as usize, buf.len()) })
 }
 
+/// Writes the working directory into `buf` as a NUL-terminated path.
+///
+/// # Errors
+/// Returns `EINVAL` for an empty `buf` and `ERANGE` when the path and its
+/// NUL do not fit.
+pub fn getcwd(buf: &mut [u8]) -> Result<(), Errno> {
+    // Safety: `buf` is a live, exclusive slice for the whole call.
+    ret(unsafe { syscall2(SYS_GETCWD, buf.as_mut_ptr() as usize, buf.len()) }).map(|_| ())
+}
+
 #[unsafe(naked)]
 pub extern "C" fn sigreturn_restorer() {
     core::arch::naked_asm!("mov rax, {n}", "int 0x80", n = const SYS_SIGRETURN)
