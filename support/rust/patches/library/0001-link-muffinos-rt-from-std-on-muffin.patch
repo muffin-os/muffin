@@ -9,7 +9,7 @@ builds only through Bazel, which supplies muffinos-rt, so Cargo.toml has no
 dependency on it.
 
 diff --git a/library/std/Cargo.toml b/library/std/Cargo.toml
-index 4c433d4..39d4ac7 100644
+index 4c433d4970cda2579c3835c49663da9b4fa182a5..39d4ac75a6a05c3eeab547c3e4e83fc453d0d46d 100644
 --- a/library/std/Cargo.toml
 +++ b/library/std/Cargo.toml
 @@ -168,4 +168,6 @@ check-cfg = [
@@ -20,7 +20,7 @@ index 4c433d4..39d4ac7 100644
 +    'cfg(target_os, values("muffin"))',
  ]
 diff --git a/library/std/src/lib.rs b/library/std/src/lib.rs
-index 9c5b487..afbe150 100644
+index 9c5b487d1cbf0593b8f12ae919ae6319eddc96e8..afbe150e2fa291006aff3a664e382b6e819dec09 100644
 --- a/library/std/src/lib.rs
 +++ b/library/std/src/lib.rs
 @@ -481,6 +481,13 @@ extern crate libc;

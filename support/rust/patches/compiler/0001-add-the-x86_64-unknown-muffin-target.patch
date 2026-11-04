@@ -7,7 +7,7 @@ muffin userspace builds std on the unix PAL. The spec mirrors the JSON
 target in bazel/toolchains/spec.bzl of muffin-os/muffin key by key.
 
 diff --git a/compiler/rustc_target/src/spec/mod.rs b/compiler/rustc_target/src/spec/mod.rs
-index caac3bbc7c..2b3611d40e 100644
+index caac3bbc7c505cda1b794bf2b8b29189f1239690..2b3611d40ec718f568cd5d76ac4d7314e0a5ec2e 100644
 --- a/compiler/rustc_target/src/spec/mod.rs
 +++ b/compiler/rustc_target/src/spec/mod.rs
 @@ -1675,6 +1675,7 @@ supported_targets! {
@@ -28,7 +28,7 @@ index caac3bbc7c..2b3611d40e 100644
          Nto = "nto",
 diff --git a/compiler/rustc_target/src/spec/targets/x86_64_unknown_muffin.rs b/compiler/rustc_target/src/spec/targets/x86_64_unknown_muffin.rs
 new file mode 100644
-index 0000000000..3501710725
+index 0000000000000000000000000000000000000000..35017107259fff5752438d82f1b7ce32745c55ee
 --- /dev/null
 +++ b/compiler/rustc_target/src/spec/targets/x86_64_unknown_muffin.rs
 @@ -0,0 +1,52 @@
@@ -85,7 +85,7 @@ index 0000000000..3501710725
 +    }
 +}
 diff --git a/tests/assembly-llvm/targets/targets-elf.rs b/tests/assembly-llvm/targets/targets-elf.rs
-index 7512adef34..8132a8b0e6 100644
+index 7512adef34e2c6bd95557f4eef007df2aa8395ad..8132a8b0e61c1f5d94565c3b44ab8bcdc1f12eca 100644
 --- a/tests/assembly-llvm/targets/targets-elf.rs
 +++ b/tests/assembly-llvm/targets/targets-elf.rs
 @@ -754,6 +754,9 @@
@@ -99,7 +99,7 @@ index 7512adef34..8132a8b0e6 100644
  //@ [x86_64_unknown_netbsd] compile-flags: --target x86_64-unknown-netbsd
  //@ [x86_64_unknown_netbsd] needs-llvm-components: x86
 diff --git a/tests/ui/check-cfg/cfg-crate-features.stderr b/tests/ui/check-cfg/cfg-crate-features.stderr
-index 9bf3cef403..9b3f22fdfc 100644
+index 9bf3cef403159cd5f94b8fd9692ccef23056c7ac..9b3f22fdfc9feec9887180623664fb98d7c7c209 100644
 --- a/tests/ui/check-cfg/cfg-crate-features.stderr
 +++ b/tests/ui/check-cfg/cfg-crate-features.stderr
 @@ -24,7 +24,7 @@ warning: unexpected `cfg` condition value: `does_not_exist`
@@ -112,7 +112,7 @@ index 9bf3cef403..9b3f22fdfc 100644
     = note: `#[warn(unexpected_cfgs)]` on by default
  
 diff --git a/tests/ui/check-cfg/well-known-values.stderr b/tests/ui/check-cfg/well-known-values.stderr
-index 693833decc..fc721934cf 100644
+index 693833decc9713c896c8719ec3f41dee727b35bd..fc721934cf0da887a5b7e5ae75c9f852deaaa1f0 100644
 --- a/tests/ui/check-cfg/well-known-values.stderr
 +++ b/tests/ui/check-cfg/well-known-values.stderr
 @@ -221,7 +221,7 @@ warning: unexpected `cfg` condition value: `_UNEXPECTED_VALUE`

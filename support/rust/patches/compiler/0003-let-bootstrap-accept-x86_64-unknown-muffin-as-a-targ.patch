@@ -7,7 +7,7 @@ The stage-0 compiler does not know the target yet, so the sanity check
 rejects it without this entry.
 
 diff --git a/src/bootstrap/src/core/sanity.rs b/src/bootstrap/src/core/sanity.rs
-index 99d9c8a04c..7789d2770a 100644
+index 99d9c8a04c5c12f89fa21c88be04777ea68b8ffd..7789d2770a812aaf8b6763760bd1833ea79f7a64 100644
 --- a/src/bootstrap/src/core/sanity.rs
 +++ b/src/bootstrap/src/core/sanity.rs
 @@ -41,6 +41,7 @@ const STAGE0_MISSING_TARGETS: &[&str] = &[

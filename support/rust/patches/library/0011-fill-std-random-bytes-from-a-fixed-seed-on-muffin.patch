@@ -7,7 +7,7 @@ The muffin kernel has no entropy source yet. A fixed-seed SplitMix64 lets
 HashMap::new work, with predictable keys until the kernel adds getrandom.
 
 diff --git a/library/std/src/sys/random/mod.rs b/library/std/src/sys/random/mod.rs
-index e5a66dc..d637990 100644
+index e5a66dc463c6b9a351d2f5e89c29ab555aa12fd4..d63799069257fe320111a3e6e677a8228dd8d852 100644
 --- a/library/std/src/sys/random/mod.rs
 +++ b/library/std/src/sys/random/mod.rs
 @@ -59,6 +59,10 @@ cfg_select! {
@@ -23,7 +23,7 @@ index e5a66dc..d637990 100644
          pub use redox::fill_bytes;
 diff --git a/library/std/src/sys/random/muffin.rs b/library/std/src/sys/random/muffin.rs
 new file mode 100644
-index 0000000..0902964
+index 0000000000000000000000000000000000000000..09029649ed2f46f4d25312dff882afc92c76e155
 --- /dev/null
 +++ b/library/std/src/sys/random/muffin.rs
 @@ -0,0 +1,31 @@

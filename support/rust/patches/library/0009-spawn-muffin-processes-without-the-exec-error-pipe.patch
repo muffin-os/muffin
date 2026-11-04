@@ -7,7 +7,7 @@ The muffin kernel has no pipe syscall. Command::spawn forks and execs with
 inherited stdio, and an exec failure surfaces as exit code 127.
 
 diff --git a/library/std/src/sys/process/unix/common.rs b/library/std/src/sys/process/unix/common.rs
-index 8215b19..c00b5f9 100644
+index 8215b196127ac057e40269491cb4558a8e55a55c..c00b5f91295ab6274a101ce227745311922aeff4 100644
 --- a/library/std/src/sys/process/unix/common.rs
 +++ b/library/std/src/sys/process/unix/common.rs
 @@ -16,8 +16,12 @@ use crate::sys::fs::File;
@@ -46,7 +46,7 @@ index 8215b19..c00b5f9 100644
      out: ChildPipe,
      stdout: &mut Vec<u8>,
 diff --git a/library/std/src/sys/process/unix/unix.rs b/library/std/src/sys/process/unix/unix.rs
-index 34bf78e..32c2438 100644
+index 34bf78e8bb325c8abb4da4dba66dbe0c44ae942f..32c2438f01dbecef2cf8ea27e74294d153d84b9f 100644
 --- a/library/std/src/sys/process/unix/unix.rs
 +++ b/library/std/src/sys/process/unix/unix.rs
 @@ -11,7 +11,9 @@ use libc::{c_int, pid_t};

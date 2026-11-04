@@ -94,8 +94,10 @@ series_for() {
 format_one() {
     work=$1 sha=$2 dest=$3
     n=$(find "$REPO/$dest" -name '*.patch' | wc -l)
+    # --full-index: the abbreviated blob ids grow with the tree, so a rustc
+    # export would rewrite every library patch.
     git -C "$work" format-patch -q --zero-commit --no-signature --no-numbered --no-stat \
-        --start-number $((n + 1)) -o "$REPO/$dest" -1 "$sha"
+        --full-index --start-number $((n + 1)) -o "$REPO/$dest" -1 "$sha"
 }
 
 write_series() {

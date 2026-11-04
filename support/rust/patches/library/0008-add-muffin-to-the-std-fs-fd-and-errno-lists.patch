@@ -10,7 +10,7 @@ The max_iov list is sorted only up to nuttx, so muffin goes at its sorted
 place in that part.
 
 diff --git a/library/std/src/sys/fd/unix.rs b/library/std/src/sys/fd/unix.rs
-index a96df39..942dc51 100644
+index a96df3972be6af601e51ee460b62f1d7b9f2af0e..942dc51200697cf8d56ed2428fb4e626cdc6b4fc 100644
 --- a/library/std/src/sys/fd/unix.rs
 +++ b/library/std/src/sys/fd/unix.rs
 @@ -92,6 +92,7 @@ const fn max_iov() -> usize {
@@ -94,7 +94,7 @@ index a96df39..942dc51 100644
      pub fn set_cloexec(&self) -> io::Result<()> {
          unsafe {
 diff --git a/library/std/src/sys/fs/unix.rs b/library/std/src/sys/fs/unix.rs
-index 7283e8f..15aab69 100644
+index 7283e8f710c55f9f5ab37066ebb95a94e7c2a958..15aab69b8019c3eb27357992dd542e277f10d113 100644
 --- a/library/std/src/sys/fs/unix.rs
 +++ b/library/std/src/sys/fs/unix.rs
 @@ -27,6 +27,7 @@ use libc::fstatat64;
@@ -202,7 +202,7 @@ index 7283e8f..15aab69 100644
      target_os = "qnx",
      target_os = "vxworks",
 diff --git a/library/std/src/sys/io/error/unix.rs b/library/std/src/sys/io/error/unix.rs
-index c545558..d6ffa69 100644
+index c545558c3867e03d5cffb39e81c60b688bb90d37..d6ffa69591cbff16adbac1469a1eb2eb7588cfe9 100644
 --- a/library/std/src/sys/io/error/unix.rs
 +++ b/library/std/src/sys/io/error/unix.rs
 @@ -17,6 +17,7 @@ unsafe extern "C" {

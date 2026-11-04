@@ -8,7 +8,7 @@ current_exe asks the kernel through muffinos-rt, and home_dir has no
 passwd database to fall back to.
 
 diff --git a/library/std/src/sys/args/unix.rs b/library/std/src/sys/args/unix.rs
-index 197931d..43351ab 100644
+index 197931d8cc8d214c482cc23e1bd0123ac34d983e..43351ab208c03148ac123010b7604cba294da26c 100644
 --- a/library/std/src/sys/args/unix.rs
 +++ b/library/std/src/sys/args/unix.rs
 @@ -85,6 +85,7 @@ pub fn args() -> Args {
@@ -20,7 +20,7 @@ index 197931d..43351ab 100644
  mod imp {
      use crate::ffi::c_char;
 diff --git a/library/std/src/sys/paths/unix.rs b/library/std/src/sys/paths/unix.rs
-index 7d916b8..bd24ab2 100644
+index 7d916b843f24e4bece5ee85037fa83b3fdf8d52c..bd24ab29795304e7c7217a5386805d72c8b49c96 100644
 --- a/library/std/src/sys/paths/unix.rs
 +++ b/library/std/src/sys/paths/unix.rs
 @@ -370,6 +370,15 @@ pub fn current_exe() -> io::Result<PathBuf> {

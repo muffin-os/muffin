@@ -7,7 +7,7 @@ The raw stat accessors read the st_*time and st_*time_nsec fields of the
 muffin libc stat, which has no timespec members.
 
 diff --git a/library/std/src/os/mod.rs b/library/std/src/os/mod.rs
-index a7ffd87..3725457 100644
+index a7ffd87d84d936b6a097562d061528cdf086ce79..3725457f1549e0b2c15735cefd869f4504a7e0b3 100644
 --- a/library/std/src/os/mod.rs
 +++ b/library/std/src/os/mod.rs
 @@ -119,6 +119,8 @@ pub mod l4re;
@@ -21,7 +21,7 @@ index a7ffd87..3725457 100644
  #[cfg(any(target_os = "nto", target_os = "qnx"))]
 diff --git a/library/std/src/os/muffin/fs.rs b/library/std/src/os/muffin/fs.rs
 new file mode 100644
-index 0000000..e45ca66
+index 0000000000000000000000000000000000000000..e45ca6669b7eb62812db7bc16079095063acdb49
 --- /dev/null
 +++ b/library/std/src/os/muffin/fs.rs
 @@ -0,0 +1,92 @@
@@ -119,7 +119,7 @@ index 0000000..e45ca66
 +}
 diff --git a/library/std/src/os/muffin/mod.rs b/library/std/src/os/muffin/mod.rs
 new file mode 100644
-index 0000000..7275bfd
+index 0000000000000000000000000000000000000000..7275bfd1765d566aebf3ff72213aae5e97c3b52e
 --- /dev/null
 +++ b/library/std/src/os/muffin/mod.rs
 @@ -0,0 +1,4 @@
@@ -129,7 +129,7 @@ index 0000000..7275bfd
 +pub(crate) mod raw;
 diff --git a/library/std/src/os/muffin/raw.rs b/library/std/src/os/muffin/raw.rs
 new file mode 100644
-index 0000000..f2ef07a
+index 0000000000000000000000000000000000000000..f2ef07afce49a11505dd0196fb18cfaa9af3ba2d
 --- /dev/null
 +++ b/library/std/src/os/muffin/raw.rs
 @@ -0,0 +1,33 @@
@@ -167,7 +167,7 @@ index 0000000..f2ef07a
 +#[stable(feature = "raw_ext", since = "1.1.0")]
 +pub type time_t = libc::time_t;
 diff --git a/library/std/src/os/unix/mod.rs b/library/std/src/os/unix/mod.rs
-index 25aa3bf..5085fc4 100644
+index 25aa3bf7893f41de7b93fae2e17a5564c89f8c20..5085fc4463df917c065b2cc15b015c5b4fb36482 100644
 --- a/library/std/src/os/unix/mod.rs
 +++ b/library/std/src/os/unix/mod.rs
 @@ -67,6 +67,8 @@ mod platform {

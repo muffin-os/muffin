@@ -7,7 +7,7 @@ muffin has no system libunwind. Like xous, it links the vendored unwinding
 crate with a custom eh frame finder.
 
 diff --git a/library/unwind/Cargo.toml b/library/unwind/Cargo.toml
-index 1293c46..b570fd4 100644
+index 1293c469d11c1bf31d4211cf2fa120a1172c5784..b570fd4ec931a33376f033f37d97bca99ca78875 100644
 --- a/library/unwind/Cargo.toml
 +++ b/library/unwind/Cargo.toml
 @@ -19,7 +19,7 @@ core = { path = "../rustc-std-workspace-core", package = "rustc-std-workspace-co
@@ -26,7 +26,7 @@ index 1293c46..b570fd4 100644
 -check-cfg = ['cfg(target_arch, values("loongarch32"))']
 +check-cfg = ['cfg(target_arch, values("loongarch32"))', 'cfg(target_os, values("muffin"))']
 diff --git a/library/unwind/src/lib.rs b/library/unwind/src/lib.rs
-index 02201f4..a4741b8 100644
+index 02201f43c08ce6e3a69c76df9a83d139db24fd49..a4741b80c676f836226edca29711a749cdf365c3 100644
 --- a/library/unwind/src/lib.rs
 +++ b/library/unwind/src/lib.rs
 @@ -26,6 +26,11 @@ cfg_select! {

@@ -6,7 +6,7 @@ Subject: [PATCH] use the unsupported thread name on muffin
 muffin has no thread names. set_name is a no-op, as on redox and aix.
 
 diff --git a/library/std/src/sys/thread/mod.rs b/library/std/src/sys/thread/mod.rs
-index 9816981..7728cee 100644
+index 9816981c7fc887b22783fa2c16c6c26ea0de9b8f..7728cee18b2dd1d6ff0953b40efd4d03a4fc7c44 100644
 --- a/library/std/src/sys/thread/mod.rs
 +++ b/library/std/src/sys/thread/mod.rs
 @@ -58,6 +58,7 @@ cfg_select! {
@@ -26,7 +26,7 @@ index 9816981..7728cee 100644
          ))]
          pub use unsupported::set_name;
 diff --git a/library/std/src/sys/thread/unix.rs b/library/std/src/sys/thread/unix.rs
-index 2dbb031..b692ddc 100644
+index 2dbb0314cb2714aa23a1801b3650b6d33b2b9053..b692ddc48e8e70146944b7093f6c0c359aad8947 100644
 --- a/library/std/src/sys/thread/unix.rs
 +++ b/library/std/src/sys/thread/unix.rs
 @@ -5,6 +5,7 @@

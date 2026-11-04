@@ -8,7 +8,7 @@ finds the unwind tables through the program headers at __ehdr_start instead.
 muffin has no poll syscall, so the standard fd check uses fcntl only.
 
 diff --git a/library/std/src/sys/pal/unix/mod.rs b/library/std/src/sys/pal/unix/mod.rs
-index 75a75ab..2376b85 100644
+index 75a75ab6bc5fdc0fb14102b2429336579161aa7a..2376b85787a780f904dedf5f756dc35a0134af57 100644
 --- a/library/std/src/sys/pal/unix/mod.rs
 +++ b/library/std/src/sys/pal/unix/mod.rs
 @@ -6,6 +6,8 @@ pub mod conf;
@@ -39,7 +39,7 @@ index 75a75ab..2376b85 100644
          )))]
 diff --git a/library/std/src/sys/pal/unix/muffin_eh_frame.rs b/library/std/src/sys/pal/unix/muffin_eh_frame.rs
 new file mode 100644
-index 0000000..a2e819e
+index 0000000000000000000000000000000000000000..a2e819e55c09d476e6f9b1db482720d9aca25595
 --- /dev/null
 +++ b/library/std/src/sys/pal/unix/muffin_eh_frame.rs
 @@ -0,0 +1,57 @@

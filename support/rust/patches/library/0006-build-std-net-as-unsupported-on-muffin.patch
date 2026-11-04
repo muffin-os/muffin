@@ -7,7 +7,7 @@ The muffin kernel has no sockets. std::net returns Unsupported and
 std::os::unix::net is left out, as on l4re and trusty.
 
 diff --git a/library/std/src/os/fd/mod.rs b/library/std/src/os/fd/mod.rs
-index 473d7ae..335578e 100644
+index 473d7ae3e2ae6d5d340dea81aef887a5f7fa854d..335578e7e3662fe1e9bfa83cbaed7921b5c5a6d2 100644
 --- a/library/std/src/os/fd/mod.rs
 +++ b/library/std/src/os/fd/mod.rs
 @@ -13,7 +13,7 @@ mod raw;
@@ -20,7 +20,7 @@ index 473d7ae..335578e 100644
  
  // Implementation of stdio file descriptor constants.
 diff --git a/library/std/src/os/fd/owned.rs b/library/std/src/os/fd/owned.rs
-index 4ed5c43..b73df48 100644
+index 4ed5c43616a29198d7d074e4c64418bed17cd48f..b73df48031e9e626acd0b2440dfe613625f9c818 100644
 --- a/library/std/src/os/fd/owned.rs
 +++ b/library/std/src/os/fd/owned.rs
 @@ -345,7 +345,7 @@ impl From<OwnedFd> for fs::File {
@@ -105,7 +105,7 @@ index 4ed5c43..b73df48 100644
      #[inline]
      fn from(owned_fd: OwnedFd) -> Self {
 diff --git a/library/std/src/os/unix/mod.rs b/library/std/src/os/unix/mod.rs
-index 5085fc4..1c37a34 100644
+index 5085fc4463df917c065b2cc15b015c5b4fb36482..1c37a34650588647b6b6d2dbcf3a2d6f6997f2a2 100644
 --- a/library/std/src/os/unix/mod.rs
 +++ b/library/std/src/os/unix/mod.rs
 @@ -92,6 +92,7 @@ mod platform {
@@ -117,7 +117,7 @@ index 5085fc4..1c37a34 100644
  pub mod process;
  pub mod raw;
 diff --git a/library/std/src/sys/net/connection/mod.rs b/library/std/src/sys/net/connection/mod.rs
-index 84b53fd..922da96 100644
+index 84b53fd375c93c2f766e5040592d37b44df5b732..922da9605ae67a66e8fba5d845b7578d7e70c232 100644
 --- a/library/std/src/sys/net/connection/mod.rs
 +++ b/library/std/src/sys/net/connection/mod.rs
 @@ -1,6 +1,6 @@
@@ -129,7 +129,7 @@ index 84b53fd..922da96 100644
          target_os = "hermit",
          all(target_os = "wasi", any(target_env = "p2", target_env = "p3")),
 diff --git a/library/std/src/sys/net/connection/unsupported.rs b/library/std/src/sys/net/connection/unsupported.rs
-index 7a4d3a9..61c3632 100644
+index 7a4d3a97b83241977b7bbc5fd5f3e2454ed7494f..61c3632632a51e64416f4c160a75c52cdd1a23cf 100644
 --- a/library/std/src/sys/net/connection/unsupported.rs
 +++ b/library/std/src/sys/net/connection/unsupported.rs
 @@ -1,6 +1,9 @@
@@ -143,7 +143,7 @@ index 7a4d3a9..61c3632 100644
  use crate::time::Duration;
  
 diff --git a/library/std/src/sys/net/hostname/mod.rs b/library/std/src/sys/net/hostname/mod.rs
-index 65fcd6b..919175a 100644
+index 65fcd6bfb00d7afe3dc5fe33c74c1869fcf1775e..919175a08c173b3100739028f6adfb89111e3a4c 100644
 --- a/library/std/src/sys/net/hostname/mod.rs
 +++ b/library/std/src/sys/net/hostname/mod.rs
 @@ -1,5 +1,5 @@
@@ -154,7 +154,7 @@ index 65fcd6b..919175a 100644
          pub use unix::hostname;
      }
 diff --git a/library/std/src/sys/pal/unix/mod.rs b/library/std/src/sys/pal/unix/mod.rs
-index 2376b85..84e9937 100644
+index 2376b85787a780f904dedf5f756dc35a0134af57..84e993764b6265abec9eea03238a53e5d66f5ad5 100644
 --- a/library/std/src/sys/pal/unix/mod.rs
 +++ b/library/std/src/sys/pal/unix/mod.rs
 @@ -370,7 +370,13 @@ cfg_select! {
