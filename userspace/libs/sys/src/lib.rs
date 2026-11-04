@@ -11,7 +11,7 @@ mod heap;
 use alloc::vec::Vec;
 use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
-use core::ffi::c_int;
+use core::ffi::{c_int, c_void};
 
 pub use heap::GrowingHeap;
 pub use kernel_abi::{
@@ -87,14 +87,21 @@ pub fn fstat(fd: c_int, stat: &mut Stat) -> Result<(), Errno> {
 
 pub fn ioctl<T>(fd: c_int, request: IoctlRequest, arg: &mut T) -> Result<usize, Errno> {
     // Safety: `arg` is a live, exclusive reference for the whole call.
-    ret(unsafe {
-        syscall3(
-            SYS_IOCTL,
-            fd as usize,
-            request.number(),
-            core::ptr::from_mut(arg) as usize,
-        )
-    })
+    unsafe { ioctl_raw(fd, request, core::ptr::from_mut(arg).cast()) }
+}
+
+/// Issues `request` on `fd` with an untyped argument buffer.
+///
+/// # Safety
+///
+/// `arg` must be valid for reads and writes of `request.arg_size()` bytes for
+/// the whole call.
+pub unsafe fn ioctl_raw(
+    fd: c_int,
+    request: IoctlRequest,
+    arg: *mut c_void,
+) -> Result<usize, Errno> {
+    ret(unsafe { syscall3(SYS_IOCTL, fd as usize, request.number(), arg as usize) })
 }
 
 pub fn fsync(fd: c_int) -> Result<(), Errno> {
