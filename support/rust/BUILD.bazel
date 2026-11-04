@@ -12,3 +12,16 @@ bootstrap_sysroot(
     ],
     platform = "//platforms:x86_64-unknown-muffin-bootstrap",
 )
+
+# Layer 2 of the sysroot. std pulls in the rest of its graph, including both
+# panic runtimes, muffinos-rt and the patched libc.
+bootstrap_sysroot(
+    name = "std_sysroot",
+    crates = ["@rust_src//:std"],
+    platform = "//platforms:x86_64-unknown-muffin-std-bootstrap",
+)
+
+alias(
+    name = "rust",
+    actual = ":std_sysroot",
+)

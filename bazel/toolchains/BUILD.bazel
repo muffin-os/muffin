@@ -14,10 +14,14 @@ rust_stdlib_filegroup(
 )
 
 # rules_rust turns each file into `-L <dir>`, which is how unmodifiable @crates
-# targets resolve core/alloc/compiler_builtins without per-crate deps.
+# targets resolve core/alloc/compiler_builtins without per-crate deps, and how
+# user binaries find std.
 rust_stdlib_filegroup(
     name = "muffin_std",
-    srcs = ["//support/rust:core_sysroot"],
+    srcs = [
+        "//support/rust:core_sysroot",
+        "//support/rust:std_sysroot",
+    ],
 )
 
 _EXEC = [
