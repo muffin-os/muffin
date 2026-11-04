@@ -9,12 +9,24 @@
 //! The scheduler then cannot move the task or flush its TLB. Each run
 //! exercises the cross-CPU invalidation.
 
-use test_support::{KernelTest, host_env};
+use test_support::{KernelTest, RunReport, host_env};
 
 #[test]
 fn cloned_pages_are_shared_until_written() {
-    let report = KernelTest::new("cow_clone", host_env!()).run();
+    assert_cow_probe_passed(&KernelTest::new("cow_clone", host_env!()).run());
+}
 
+/// Without x2APIC the LAPIC runs in xAPIC mode, which encodes the IPI
+/// destination in other ICR bits.
+#[test]
+fn cloned_pages_are_shared_until_written_in_xapic_mode() {
+    let report = KernelTest::new("cow_clone_xapic", host_env!())
+        .qemu_args(["-cpu", "max,-x2apic"])
+        .run();
+    assert_cow_probe_passed(&report);
+}
+
+fn assert_cow_probe_passed(report: &RunReport) {
     report.assert_line_contains("cow clone shared_read=ok");
     report.assert_line_contains("cow clone private_write=ok frame_changed=true");
     report.assert_line_contains("cow clone reader_sees_write=ok");

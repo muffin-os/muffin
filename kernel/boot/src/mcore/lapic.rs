@@ -2,6 +2,7 @@ use core::ops::{Deref, DerefMut};
 
 use x2apic::lapic::{LocalApicBuilder, TimerDivide, TimerMode, xapic_base};
 use x86_64::PhysAddr;
+use x86_64::registers::model_specific::{ApicBase, ApicBaseFlags};
 use x86_64::structures::paging::{Page, PageTableFlags, PhysFrame, Size4KiB};
 
 use crate::arch::idt::InterruptIndex;
@@ -12,6 +13,26 @@ use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigher
 pub struct Lapic {
     _segment: OwnedSegment<'static>,
     inner: x2apic::lapic::LocalApic,
+    is_x2apic: bool,
+}
+
+impl Lapic {
+    /// Sends a fixed IPI with `vector` to the CPU with the APIC ID `lapic_id`.
+    ///
+    /// # Safety
+    /// The caller must keep this CPU's LAPIC exclusive, as for
+    /// [`x2apic::lapic::LocalApic::send_ipi`].
+    pub unsafe fn send_ipi(&mut self, vector: u8, lapic_id: u32) {
+        // This shadows the crate method. In xAPIC mode, x2apic 0.5.0 writes
+        // `dest` to ICR bits 32..40, but xAPIC reads bits 56..64, so the IPI
+        // goes to APIC ID 0.
+        let dest = if self.is_x2apic {
+            lapic_id
+        } else {
+            lapic_id << 24
+        };
+        unsafe { self.inner.send_ipi(vector, dest) };
+    }
 }
 
 impl Deref for Lapic {
@@ -70,5 +91,6 @@ pub fn init() -> Lapic {
     Lapic {
         _segment: segment,
         inner: lapic,
+        is_x2apic: ApicBase::read().1.contains(ApicBaseFlags::X2APIC_ENABLE),
     }
 }
