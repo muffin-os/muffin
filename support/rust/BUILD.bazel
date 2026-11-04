@@ -1,4 +1,6 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("//bazel/toolchains:bootstrap.bzl", "bootstrap_sysroot")
+load(":stage2.bzl", "rustc_stage2", "rustc_stage2_exec")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -24,4 +26,50 @@ bootstrap_sysroot(
 alias(
     name = "rust",
     actual = ":std_sysroot",
+)
+
+# The stage-2 rustc with the built-in x86_64-unknown-muffin target of
+# patches/compiler. `bazel build //support/rust:stage2` puts it in
+# bazel-bin/support/rust/stage2/{bin/rustc,lib}. A cold build takes 6.5 to 8.5
+# minutes on 24 cores and needs network.
+rustc_stage2_exec(
+    name = "stage2",
+    build = ":stage2_build",
+    tags = ["manual"],
+)
+
+rustc_stage2(
+    name = "stage2_build",
+    config = "bootstrap.toml.tpl",
+    libllvm = "@ci_llvm//:libllvm",
+    llvm = "@ci_llvm//:all",
+    llvm_config = "@ci_llvm//:llvm_config",
+    srcs = "@rustc_src//:srcs",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "stage2_rustc",
+    srcs = [":stage2_build"],
+    output_group = "rustc",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "stage2_lib",
+    srcs = [":stage2_build"],
+    output_group = "lib",
+    tags = ["manual"],
+)
+
+# `--config=stage2` sets this flag to select the stage-2 toolchains. The name
+# differs from `stage2` because that target is the compiler.
+bool_flag(
+    name = "use_stage2_rustc",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "use_stage2",
+    flag_values = {":use_stage2_rustc": "True"},
 )

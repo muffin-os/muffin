@@ -1,0 +1,18 @@
+load("//bazel/toolchains:common.bzl", "stage2_toolchain")
+
+# The three sysroot layers of platforms/BUILD.bazel, compiled with the stage-2
+# rustc. `--config=stage2` selects them.
+stage2_toolchain(
+    name = "bootstrap",
+    rust_std = "//bazel/toolchains:empty_std",
+)
+
+stage2_toolchain(
+    name = "std_bootstrap",
+    rust_std = "//bazel/toolchains:core_std",
+)
+
+stage2_toolchain(
+    name = "muffin",
+    rust_std = "//bazel/toolchains:muffin_std",
+)

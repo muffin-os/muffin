@@ -40,8 +40,12 @@ use_repo(rust, "rust_toolchains", "rust_linux_x86_64__x86_64-unknown-none__night
 # The stock none-toolchain's target_compatible_with (cpu:x86_64, os:none) is a
 # subset of the muffin platform's constraints, so it would also match and,
 # absent explicit precedence, could win toolchain resolution. Registering the
-# custom pair first gives them priority.
+# custom ones first gives them priority. The stage-2 ones come first because the
+# JSON-target ones also match under `--config=stage2`.
 register_toolchains(
+    "//bazel/toolchains:x86_64-unknown-muffin-stage2",
+    "//bazel/toolchains:x86_64-unknown-muffin-bootstrap-stage2",
+    "//bazel/toolchains:x86_64-unknown-muffin-std-bootstrap-stage2",
     "//bazel/toolchains:x86_64-unknown-muffin",
     "//bazel/toolchains:x86_64-unknown-muffin-bootstrap",
     "//bazel/toolchains:x86_64-unknown-muffin-std-bootstrap",

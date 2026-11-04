@@ -9,3 +9,9 @@ filegroup(
     name = "llvm_config",
     srcs = ["rust-dev/bin/llvm-config"],
 )
+
+# The file the loader opens: the NEEDED name of librustc_driver.
+filegroup(
+    name = "libllvm",
+    srcs = glob(["rust-dev/lib/libLLVM.so.*"]),
+)

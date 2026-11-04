@@ -64,3 +64,31 @@ toolchain(
     toolchain = "//bazel/toolchains/std_bootstrap:impl",
     toolchain_type = "@rules_rust//rust:toolchain",
 )
+
+# `--config=stage2` swaps in the stage-2 rustc for every layer.
+toolchain(
+    name = "x86_64-unknown-muffin-stage2",
+    exec_compatible_with = _EXEC,
+    target_compatible_with = _TARGET + ["//platforms:prebuilt"],
+    target_settings = ["//support/rust:use_stage2"],
+    toolchain = "//bazel/toolchains/stage2:muffin",
+    toolchain_type = "@rules_rust//rust:toolchain",
+)
+
+toolchain(
+    name = "x86_64-unknown-muffin-bootstrap-stage2",
+    exec_compatible_with = _EXEC,
+    target_compatible_with = _TARGET + ["//platforms:bootstrap"],
+    target_settings = ["//support/rust:use_stage2"],
+    toolchain = "//bazel/toolchains/stage2:bootstrap",
+    toolchain_type = "@rules_rust//rust:toolchain",
+)
+
+toolchain(
+    name = "x86_64-unknown-muffin-std-bootstrap-stage2",
+    exec_compatible_with = _EXEC,
+    target_compatible_with = _TARGET + ["//platforms:core_only"],
+    target_settings = ["//support/rust:use_stage2"],
+    toolchain = "//bazel/toolchains/stage2:std_bootstrap",
+    toolchain_type = "@rules_rust//rust:toolchain",
+)
