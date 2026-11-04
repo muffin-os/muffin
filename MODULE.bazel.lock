@@ -202,7 +202,7 @@
   "moduleExtensions": {
     "//support:extensions.bzl%rust_support": {
       "general": {
-        "bzlTransitiveDigest": "peXDDtUEnHcbgXdLaZnZhMntmHoSi1fhRdVh5k2tv4w=",
+        "bzlTransitiveDigest": "n13ouL/y736Qm1GVggxvpd7t5k8EfBUVOtwlLecbZYk=",
         "usagesDigest": "9TKtFbslhDwph+BAZV7lVpAGMjtJ0vX+YUmgSlD1HFI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
@@ -253,7 +253,10 @@
                 "@@//support/rust/patches/library:0008-add-muffin-to-the-std-fs-fd-and-errno-lists.patch",
                 "@@//support/rust/patches/library:0009-spawn-muffin-processes-without-the-exec-error-pipe.patch",
                 "@@//support/rust/patches/library:0010-use-the-unsupported-thread-name-on-muffin.patch",
-                "@@//support/rust/patches/library:0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch"
+                "@@//support/rust/patches/library:0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch",
+                "@@//support/rust/patches/compiler:0001-add-the-x86_64-unknown-muffin-target.patch",
+                "@@//support/rust/patches/compiler:0002-document-the-x86_64-unknown-muffin-target.patch",
+                "@@//support/rust/patches/compiler:0003-let-bootstrap-accept-x86_64-unknown-muffin-as-a-targ.patch"
               ],
               "sha256": "e2f5d93dc43e4b3275817fd2897aad41deb64c15995b5ceee0ae347ee0673c88",
               "strip_prefix": "rustc-nightly-src",
@@ -296,7 +299,7 @@
     },
     "@@pybind11_bazel+//:internal_configure.bzl%internal_configure_extension": {
       "general": {
-        "bzlTransitiveDigest": "NRXra7941UfmNUyIxnLt82V5hULluVGL2nBsijTl4j4=",
+        "bzlTransitiveDigest": "BsgERqYptkJeeC8wFaLj251IoTZTSy/58WA6kVp0q8I=",
         "usagesDigest": "D1r3lfzMuUBFxgG8V6o0bQTLMk3GkaGOaPzw53wrwyw=",
         "recordedInputs": [
           "REPO_MAPPING:pybind11_bazel+,bazel_tools bazel_tools",
@@ -573,7 +576,7 @@
     },
     "@@rules_rust+//crate_universe/private:internal_extensions.bzl%cu_nr": {
       "general": {
-        "bzlTransitiveDigest": "suZ3PAYAHOImp8hzaZe9UN23LNPnVED7NhjA0I+H59E=",
+        "bzlTransitiveDigest": "g4nHsJk7G2xJL32n0yvZNPe9VCXql6RqEYG/e3/JzrY=",
         "usagesDigest": "+1w4EnEfZLFpf8Ak18jhmCWsOTE75Noy2i16whyXYWs=",
         "recordedInputs": [
           "REPO_MAPPING:apple_support+,bazel_skylib bazel_skylib+",

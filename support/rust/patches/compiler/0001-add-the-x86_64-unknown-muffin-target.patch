@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:07:14 +0100
+Subject: [PATCH] add the x86_64-unknown-muffin target
+
+muffin userspace builds std on the unix PAL. The spec mirrors the JSON
+target in bazel/toolchains/spec.bzl of muffin-os/muffin key by key.
+
+diff --git a/compiler/rustc_target/src/spec/mod.rs b/compiler/rustc_target/src/spec/mod.rs
+index caac3bbc7c..2b3611d40e 100644
+--- a/compiler/rustc_target/src/spec/mod.rs
++++ b/compiler/rustc_target/src/spec/mod.rs
+@@ -1675,6 +1675,7 @@ supported_targets! {
+     ("riscv64gc-unknown-hermit", riscv64gc_unknown_hermit),
+     ("x86_64-unknown-hermit", x86_64_unknown_hermit),
+     ("x86_64-unknown-motor", x86_64_unknown_motor),
++    ("x86_64-unknown-muffin", x86_64_unknown_muffin),
+ 
+     ("x86_64-unikraft-linux-musl", x86_64_unikraft_linux_musl),
+ 
+@@ -1995,6 +1996,7 @@ crate::target_spec_enum! {
+         MacOs = "macos",
+         Managarm = "managarm",
+         Motor = "motor",
++        Muffin = "muffin",
+         NetBsd = "netbsd",
+         None = "none",
+         Nto = "nto",
+diff --git a/compiler/rustc_target/src/spec/targets/x86_64_unknown_muffin.rs b/compiler/rustc_target/src/spec/targets/x86_64_unknown_muffin.rs
+new file mode 100644
+index 0000000000..3501710725
+--- /dev/null
++++ b/compiler/rustc_target/src/spec/targets/x86_64_unknown_muffin.rs
+@@ -0,0 +1,52 @@
++// muffin userspace on x86_64 with SSE2, the SSE float ABI and unwinding.
++//
++// This file transcribes `X86_64_UNKNOWN_MUFFIN` in `bazel/toolchains/spec.bzl` of
++// muffin-os/muffin key by key. Change both together: the stock-nightly build loads the
++// JSON twin and the stage-2 build loads this file.
++
++use crate::spec::{
++    Arch, Cc, CodeModel, LinkerFlavor, Lld, Os, PanicStrategy, RelocModel, RelroLevel,
++    SanitizerSet, StackProbeType, Target, TargetMetadata, TargetOptions, cvs,
++};
++
++pub(crate) fn target() -> Target {
++    let opts = TargetOptions {
++        os: Os::Muffin,
++        families: cvs!["unix"],
++        cpu: "x86-64".into(),
++        plt_by_default: false,
++        max_atomic_width: Some(64),
++        stack_probes: StackProbeType::Inline,
++        // The muffin ELF loader accepts only `ET_EXEC`.
++        position_independent_executables: false,
++        static_position_independent_executables: false,
++        relocation_model: RelocModel::Static,
++        relro_level: RelroLevel::Full,
++        linker_flavor: LinkerFlavor::Gnu(Cc::No, Lld::Yes),
++        linker: Some("rust-lld".into()),
++        // AVX stays off because the kernel saves FPU state with `fxsave`, which does
++        // not cover YMM.
++        features: "-mmx,+fxsr,+sse,+sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2".into(),
++        supported_sanitizers: SanitizerSet::KCFI | SanitizerSet::KERNELADDRESS,
++        disable_redzone: true,
++        panic_strategy: PanicStrategy::Unwind,
++        code_model: Some(CodeModel::Kernel),
++        ..Default::default()
++    };
++    Target {
++        llvm_target: "x86_64-unknown-none-elf".into(),
++        metadata: TargetMetadata {
++            description: Some(
++                "muffin userspace, x86_64 with SSE2, the SSE float ABI and unwinding".into(),
++            ),
++            tier: Some(3),
++            host_tools: Some(false),
++            std: Some(true),
++        },
++        pointer_width: 64,
++        data_layout:
++            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128".into(),
++        arch: Arch::X86_64,
++        options: opts,
++    }
++}
+diff --git a/tests/assembly-llvm/targets/targets-elf.rs b/tests/assembly-llvm/targets/targets-elf.rs
+index 7512adef34..8132a8b0e6 100644
+--- a/tests/assembly-llvm/targets/targets-elf.rs
++++ b/tests/assembly-llvm/targets/targets-elf.rs
+@@ -754,6 +754,9 @@
+ //@ revisions: x86_64_unknown_motor
+ //@ [x86_64_unknown_motor] compile-flags: --target x86_64-unknown-motor
+ //@ [x86_64_unknown_motor] needs-llvm-components: x86
++//@ revisions: x86_64_unknown_muffin
++//@ [x86_64_unknown_muffin] compile-flags: --target x86_64-unknown-muffin
++//@ [x86_64_unknown_muffin] needs-llvm-components: x86
+ //@ revisions: x86_64_unknown_netbsd
+ //@ [x86_64_unknown_netbsd] compile-flags: --target x86_64-unknown-netbsd
+ //@ [x86_64_unknown_netbsd] needs-llvm-components: x86
+diff --git a/tests/ui/check-cfg/cfg-crate-features.stderr b/tests/ui/check-cfg/cfg-crate-features.stderr
+index 9bf3cef403..9b3f22fdfc 100644
+--- a/tests/ui/check-cfg/cfg-crate-features.stderr
++++ b/tests/ui/check-cfg/cfg-crate-features.stderr
+@@ -24,7 +24,7 @@ warning: unexpected `cfg` condition value: `does_not_exist`
+ LL | #![cfg(not(target(os = "does_not_exist")))]
+    |                   ^^^^^^^^^^^^^^^^^^^^^
+    |
+-   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qnx`, `qurt`, `redox`, `rtems`, and `solaris` and 15 more
++   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `muffin`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qnx`, `qurt`, `redox`, and `rtems` and 16 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+ 
+diff --git a/tests/ui/check-cfg/well-known-values.stderr b/tests/ui/check-cfg/well-known-values.stderr
+index 693833decc..fc721934cf 100644
+--- a/tests/ui/check-cfg/well-known-values.stderr
++++ b/tests/ui/check-cfg/well-known-values.stderr
+@@ -221,7 +221,7 @@ warning: unexpected `cfg` condition value: `_UNEXPECTED_VALUE`
+ LL |     target_os = "_UNEXPECTED_VALUE",
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+-   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qnx`, `qurt`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, `trusty`, `tvos`, `uefi`, `unknown`, `vexos`, `visionos`, `vita`, `vxworks`, `wasi`, `watchos`, `windows`, `xous`, and `zkvm`
++   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `muffin`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qnx`, `qurt`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, `trusty`, `tvos`, `uefi`, `unknown`, `vexos`, `visionos`, `vita`, `vxworks`, `wasi`, `watchos`, `windows`, `xous`, and `zkvm`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg.html> for more information about checking conditional configuration
+ 
+ warning: unexpected `cfg` condition value: `_UNEXPECTED_VALUE`
+@@ -294,7 +294,7 @@ LL | #[cfg(target_os = "linuz")] // testing that we suggest `linux`
+    |                   |
+    |                   help: there is a expected value with a similar name: `"linux"`
+    |
+-   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qnx`, `qurt`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, `trusty`, `tvos`, `uefi`, `unknown`, `vexos`, `visionos`, `vita`, `vxworks`, `wasi`, `watchos`, `windows`, `xous`, and `zkvm`
++   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `muffin`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qnx`, `qurt`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, `trusty`, `tvos`, `uefi`, `unknown`, `vexos`, `visionos`, `vita`, `vxworks`, `wasi`, `watchos`, `windows`, `xous`, and `zkvm`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg.html> for more information about checking conditional configuration
+ 
+ warning: 30 warnings emitted

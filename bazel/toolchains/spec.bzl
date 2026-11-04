@@ -21,10 +21,15 @@ and reapply these deltas to the printed JSON:
    `cfg(target_os = "muffin")` distinct from bare metal. The key must be present at all,
    because rules_rust dereferences `toolchain.target_os` unguarded.
 5. Restate `metadata.description`. rustc prints the stock target's wording, which names
-   the float ABI this spec exists to change. Set `metadata.std` to `True`.
+   the float ABI this spec exists to change. Set `metadata.std` to `True` and `metadata.tier`
+   to `3`, the tier of an out-of-tree target.
 6. Set `panic-strategy` to `"unwind"`. Userspace panics run destructors and stay catchable, which
    requires landing pads in every userspace crate including the sysroot rlibs built from this spec.
 7. Add `"target-family": ["unix"]`. std runs on its unix PAL, so userspace gets `cfg(unix)`.
+
+The compiler patch `support/rust/patches/compiler/*-add-the-x86_64-unknown-muffin-target.patch`
+adds the twin of this spec as `compiler/rustc_target/src/spec/targets/x86_64_unknown_muffin.rs`.
+Change both together. `--config=stage2` builds with that twin.
 
 The Bazel platform deliberately keeps `@platforms//os:none` and does not follow this
 field. Every `@crates` target gates `target_compatible_with` on
@@ -53,7 +58,7 @@ X86_64_UNKNOWN_MUFFIN = {
         "description": "muffin userspace, x86_64 with SSE2, the SSE float ABI and unwinding",
         "host_tools": False,
         "std": True,
-        "tier": 2,
+        "tier": 3,
     },
     "os": "muffin",
     "panic-strategy": "unwind",

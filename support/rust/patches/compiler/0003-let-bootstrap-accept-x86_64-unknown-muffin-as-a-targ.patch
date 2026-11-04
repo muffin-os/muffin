@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:07:42 +0100
+Subject: [PATCH] let bootstrap accept x86_64-unknown-muffin as a target
+
+The stage-0 compiler does not know the target yet, so the sanity check
+rejects it without this entry.
+
+diff --git a/src/bootstrap/src/core/sanity.rs b/src/bootstrap/src/core/sanity.rs
+index 99d9c8a04c..7789d2770a 100644
+--- a/src/bootstrap/src/core/sanity.rs
++++ b/src/bootstrap/src/core/sanity.rs
+@@ -41,6 +41,7 @@ const STAGE0_MISSING_TARGETS: &[&str] = &[
+     "aarch64-unknown-linux-pauthtest", // Stage 0 compiler is not guaranteed to see the target yet.
+     "aarch64-unknown-qnx",
+     "x86_64-pc-qnx",
++    "x86_64-unknown-muffin",
+ ];
+ 
+ /// Minimum version threshold for libstdc++ required when using prebuilt LLVM
