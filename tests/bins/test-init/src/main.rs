@@ -53,7 +53,10 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        match status.signal().and_then(|signo| Signal::try_from(signo).ok()) {
+        match status
+            .signal()
+            .and_then(|signo| Signal::try_from(signo).ok())
+        {
             Some(signal) => println!("test-init: outcome pid={pid} signal={}", signal.name()),
             None => println!("test-init: outcome pid={pid} exit={}", status.into_raw()),
         }

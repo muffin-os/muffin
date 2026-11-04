@@ -44,7 +44,10 @@ where
             let chunk = (len - total_read).min(max_chunk_blocks * block_size - relative_offset);
             let start_block = self.file_block_index(position)?;
             let last_block = self.file_block_index(position + chunk - 1)?;
-            data.resize((last_block - start_block) as usize * block_size + block_size, 0);
+            data.resize(
+                (last_block - start_block) as usize * block_size + block_size,
+                0,
+            );
             let read = self.read_blocks_from_inode(file, start_block, last_block, &mut data)?;
 
             let copied = read.saturating_sub(relative_offset).min(chunk);

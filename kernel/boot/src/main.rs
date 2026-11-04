@@ -9,9 +9,9 @@ use kernel::limine::BASE_REVISION;
 use kernel::mcore;
 use kernel::mcore::mtask::process::Process;
 use kernel_ext2::Ext2Fs;
-use kernel_vfs::path::{AbsolutePath, ROOT};
 use kernel_vfs::CreateMode;
-use tracing::{info, span, Level};
+use kernel_vfs::path::{AbsolutePath, ROOT};
+use tracing::{Level, info, span};
 
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
