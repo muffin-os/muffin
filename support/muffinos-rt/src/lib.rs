@@ -33,6 +33,14 @@ mod env;
 mod env_stubs;
 mod errno;
 mod mem;
+#[cfg(not(test))]
+mod process;
+#[cfg(not(test))]
+mod start;
 mod string;
+#[cfg(not(test))]
+mod thread;
+#[cfg(not(test))]
+mod time;
 
 pub use muffin_sys::exe_path;
