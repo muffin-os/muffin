@@ -29,7 +29,7 @@ fn driver() -> ! {
     // the victim must already be parked in nanosleep when SIGTERM lands, and
     // it cannot send an ack from inside that sleep.
     let _ = nanosleep(&Duration::from_secs(2).into(), None);
-    minilib::shutdown()
+    minilib::poweroff()
 }
 
 minilib::entry!(main);

@@ -60,12 +60,6 @@ build:clippy --output_groups=clippy_all
 build:rustfmt --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
 build:rustfmt --output_groups=rustfmt_checks
 
-# Compiles muffin code with the stage-2 rustc of //support/rust:stage2, which
-# has x86_64-unknown-muffin built in. The stock clippy-driver does not know that
-# target, so clippy stays off here.
-build:stage2 --//support/rust:use_stage2_rustc=true
-build:stage2 --output_groups=-clippy_all
-
 # cargo miri needs the user's rustup install and crates.io.
 test:miri --test_env=HOME
 test:miri --test_env=RUSTUP_HOME

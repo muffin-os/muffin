@@ -110,7 +110,7 @@ new file mode 100644
 index 0000000..05d2517
 --- /dev/null
 +++ b/src/unix/muffin/mod.rs
-@@ -0,0 +1,542 @@
+@@ -0,0 +1,554 @@
 +//! Values mirror `kernel/abi` in muffin-os/muffin; `support/muffinos-rt/src/abi_check.rs`
 +//! fails to compile when they drift.
 +
@@ -515,6 +515,15 @@ index 0000000..05d2517
 +pub const MAP_ANON: c_int = MAP_ANONYMOUS;
 +pub const MAP_FAILED: *mut c_void = !0 as *mut c_void;
 +
++pub const MS_ASYNC: c_int = 0x0001;
++pub const MS_SYNC: c_int = 0x0004;
++
++pub const MADV_NORMAL: c_int = 0;
++pub const MADV_RANDOM: c_int = 1;
++pub const MADV_SEQUENTIAL: c_int = 2;
++pub const MADV_WILLNEED: c_int = 3;
++pub const MADV_DONTNEED: c_int = 4;
++
 +// limits.h: `kernel_abi::limits`
 +pub const PATH_MAX: c_int = 4096;
 +
@@ -634,6 +643,9 @@ index 0000000..05d2517
 +    pub fn __errno_location() -> *mut c_int;
 +    pub fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int;
 +    pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;
++    pub fn madvise(addr: *mut c_void, len: size_t, advice: c_int) -> c_int;
++    pub fn mprotect(addr: *mut c_void, len: size_t, prot: c_int) -> c_int;
++    pub fn msync(addr: *mut c_void, len: size_t, flags: c_int) -> c_int;
 +    pub fn dirfd(dirp: *mut DIR) -> c_int;
 +    pub fn futimens(fd: c_int, times: *const timespec) -> c_int;
 +    pub fn utimensat(

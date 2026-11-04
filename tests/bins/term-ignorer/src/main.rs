@@ -6,7 +6,7 @@ use core::time::Duration;
 
 use minilib::{
     SaFlags, SigAction, SigHandler, SigSet, Signal, exit, getpid, install_handler, kill, nanosleep,
-    println, shutdown, sigaction,
+    poweroff, println, sigaction,
 };
 
 /// Spawn order fixes the pid, so the pid picks the role. pid 1 is test-init.
@@ -83,7 +83,7 @@ fn driver() -> ! {
         }
         let _ = nanosleep(&Duration::from_millis(50).into(), None);
     }
-    shutdown()
+    poweroff()
 }
 
 minilib::entry!(main);

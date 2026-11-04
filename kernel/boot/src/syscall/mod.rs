@@ -71,7 +71,7 @@ pub(crate) fn dispatch_syscall(
             exec::dispatch_sys_execve(arg1, arg2, arg3, arg4, arg5, arg6, frame, regs)
         }
         kernel_abi::SYS_FORK => fork::dispatch_sys_fork(frame, regs),
-        kernel_abi::SYS_SHUTDOWN => dispatch_sys_shutdown(),
+        kernel_abi::SYS_POWEROFF => dispatch_sys_poweroff(),
         _ => Err(ENOSYS),
     };
 
@@ -91,9 +91,9 @@ fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
     Task::exit_current()
 }
 
-fn dispatch_sys_shutdown() -> Result<usize, Errno> {
-    debug!("process {} requested shutdown", Process::current().pid());
-    crate::power::shutdown()
+fn dispatch_sys_poweroff() -> Result<usize, Errno> {
+    debug!("process {} requested poweroff", Process::current().pid());
+    crate::power::poweroff()
 }
 
 fn dispatch_sys_getpid() -> Result<usize, Errno> {

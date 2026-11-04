@@ -8,3 +8,12 @@ bootstrap_sysroot(
     crates = ["@rust_libc//:libc"],
     platform = "//platforms:x86_64-unknown-muffin-std-bootstrap",
 )
+
+# Reachable from generated @crates repos, which cannot see `@rust_libc` by its
+# apparent name (MODULE.bazel's memmap2 annotation). `manual` keeps `//...`
+# from compiling it for the host, where it does not build.
+alias(
+    name = "libc",
+    actual = "@rust_libc//:libc",
+    tags = ["manual"],
+)

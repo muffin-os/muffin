@@ -1,8 +1,8 @@
-//! Proves the SYS_SHUTDOWN quiesce protocol runs userspace SIGTERM handlers
+//! Proves the SYS_POWEROFF quiesce protocol runs userspace SIGTERM handlers
 //! before the machine loses power.
 //!
 //! pid 2 installs a SIGTERM handler and parks in nanosleep. pid 3 waits for
-//! that installation to settle, then issues SYS_SHUTDOWN. The kernel broadcasts
+//! that installation to settle, then issues SYS_POWEROFF. The kernel broadcasts
 //! SIGTERM and waits for the victim to exit, so the handler's marker line is
 //! written strictly before the exit that releases the grace wait, which is
 //! itself strictly before the PM1a write. Seeing the marker in the transcript

@@ -43,7 +43,7 @@ fn driver() -> ! {
     // inside the ack syscall, and SIGTERM landing on that return path is the
     // very delivery path this test must rule out.
     let _ = nanosleep(&Duration::from_secs(2).into(), None);
-    minilib::shutdown()
+    minilib::poweroff()
 }
 
 minilib::entry!(main);

@@ -78,7 +78,7 @@ pub fn is_shutdown_in_progress() -> bool {
 ///
 /// Runs in the caller's syscall context with interrupts enabled, so the
 /// timer keeps preempting this task while dying processes run.
-pub fn shutdown() -> ! {
+pub fn poweroff() -> ! {
     if SHUTDOWN_IN_PROGRESS
         .compare_exchange(false, true, AcqRel, Acquire)
         .is_err()

@@ -63,5 +63,5 @@ fn main() -> ExitCode {
         }
     }
     println!("test-init: complete");
-    muffin_sys::shutdown()
+    muffin_sys::poweroff()
 }

@@ -257,7 +257,7 @@ ext2_image(
     name = "shutdown_disk",
     files = {
         "bin/init": "//tests/bins:test_init",
-        "bin/tests/shutdown": "//userspace/utilities/shutdown",
+        "bin/tests/poweroff": "//userspace/utilities/poweroff",
     },
 )
 
@@ -312,6 +312,25 @@ ext2_image(
     image_size = "128M",
 )
 
+# `services` is `/bin/init` here because it never exits. `off` powers the
+# machine off after a delay, which is what ends the run.
+ext2_image(
+    name = "services_disk",
+    contents = {
+        "etc/services/always.yaml": "exec: /bin/true\nrestart: always\n",
+        "etc/services/crasher.yaml": "exec: /bin/false\nrestart: on-failure\n",
+        "etc/services/off.yaml": "exec: /bin/sleepy-poweroff\n",
+        "etc/services/once.yaml": "exec: /bin/true\nrestart: on-failure\n",
+    },
+    files = {
+        "bin/init": "//userspace/services",
+        "bin/false": "//userspace/utilities/false",
+        "bin/sleepy-poweroff": "//tests/bins:sleepy_poweroff",
+        "bin/true": "//userspace/utilities/true",
+    },
+    image_size = "128M",
+)
+
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
 # harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
 #
@@ -363,6 +382,7 @@ ext2_image(
         "mmap",
         "orphan",
         "posix",
+        "services",
         "shutdown",
         "shutdown_ignore",
         "shutdown_sigterm",

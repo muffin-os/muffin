@@ -65,7 +65,7 @@ n! {
     SYS_EXE_PATH = 51,
     SYS_NANOSLEEP = 52,
     SYS_EXECVE = 53,
-    SYS_SHUTDOWN = 54,
+    SYS_POWEROFF = 54,
     SYS_FORK = 55,
     SYS_GETPPID = 56,
     SYS_WAITPID = 57,

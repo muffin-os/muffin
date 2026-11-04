@@ -26,7 +26,10 @@ rust_binary(
 
 ext2_image(
     name = "disk",
-    contents = {"var/hello.txt": "Hello, Muffin OS!\n"},
+    contents = {
+        "etc/services/fbdemo.yaml": "exec: /bin/fbdemo\nrestart: no\n",
+        "var/hello.txt": "Hello, Muffin OS!\n",
+    },
     empty_dirs = [
         "dev/fd",
         "var/tmp",
@@ -37,7 +40,7 @@ ext2_image(
         "bin/init": "//userspace/init",
         "bin/false": "//userspace/utilities/false",
         "bin/true": "//userspace/utilities/true",
-        "bin/shutdown": "//userspace/utilities/shutdown",
+        "bin/poweroff": "//userspace/utilities/poweroff",
     },
     # The std binaries do not fit into the 64M default.
     image_size = "128M",

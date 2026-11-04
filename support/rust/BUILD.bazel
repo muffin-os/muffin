@@ -28,14 +28,12 @@ alias(
     actual = ":std_sysroot",
 )
 
-# The stage-2 rustc with the built-in x86_64-unknown-muffin target of
-# patches/compiler. `bazel build //support/rust:stage2` puts it in
-# bazel-bin/support/rust/stage2/{bin/rustc,lib}. A cold build takes 6.5 to 8.5
-# minutes on 24 cores and needs network.
+# The stage-2 rustc and clippy-driver with the built-in x86_64-unknown-muffin
+# target of patches/compiler. `bazel build //support/rust:stage2` puts them in
+# bazel-bin/support/rust/stage2/{bin/rustc,bin/clippy-driver,lib}.
 rustc_stage2_exec(
     name = "stage2",
     build = ":stage2_build",
-    tags = ["manual"],
 )
 
 rustc_stage2(
@@ -45,28 +43,34 @@ rustc_stage2(
     llvm = "@ci_llvm//:all",
     llvm_config = "@ci_llvm//:llvm_config",
     srcs = "@rustc_src//:srcs",
-    tags = ["manual"],
 )
 
 filegroup(
     name = "stage2_rustc",
     srcs = [":stage2_build"],
     output_group = "rustc",
-    tags = ["manual"],
+)
+
+filegroup(
+    name = "stage2_clippy",
+    srcs = [":stage2_build"],
+    output_group = "clippy",
 )
 
 filegroup(
     name = "stage2_lib",
     srcs = [":stage2_build"],
     output_group = "lib",
-    tags = ["manual"],
 )
 
-# `--config=stage2` sets this flag to select the stage-2 toolchains. The name
+# Selects the stage-2 toolchains. `--//support/rust:use_stage2_rustc=false`
+# falls back to the JSON-target toolchains of the stock nightly, under which
+# every crate with a build script fails analysis (rules_rust puts the target
+# JSON `File` into the build-script env, cargo_build_script.bzl). The name
 # differs from `stage2` because that target is the compiler.
 bool_flag(
     name = "use_stage2_rustc",
-    build_setting_default = False,
+    build_setting_default = True,
 )
 
 config_setting(

@@ -1,7 +1,7 @@
 //! Proves signal delivery on the syscall return path. pid 2 installs a
 //! SIGTERM handler and waits inside nanosleep, so it spends its time in the
 //! kernel and a user-mode timer tick can never deliver. pid 3 settles, then
-//! issues SYS_SHUTDOWN. The broadcast wakes the sleeper, nanosleep fails
+//! issues SYS_POWEROFF. The broadcast wakes the sleeper, nanosleep fails
 //! EINTR, and the marker in the transcript can only come from delivery on
 //! the syscall return.
 

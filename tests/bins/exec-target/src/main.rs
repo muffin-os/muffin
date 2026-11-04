@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use minilib::{SigAction, Signal, args, env, getpid, println, read, shutdown, sigaction};
+use minilib::{SigAction, Signal, args, env, getpid, poweroff, println, read, sigaction};
 
 const EXPECTED_ARGS: [&[u8]; 3] = [b"exec-target", b"alpha", b"beta"];
 const HELLO: &[u8] = b"muffin says hi\n";
@@ -56,7 +56,7 @@ fn main() -> i32 {
     println!("exec-target: after exec");
     // The reap test execs this image as pid 1, which must not exit.
     if getpid() == 1 {
-        shutdown()
+        poweroff()
     }
     42
 }

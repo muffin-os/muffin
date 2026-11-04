@@ -40,12 +40,12 @@ _CODEGEN_FLAGS = [
 # now requires -Zunstable-options.
 EXTRA_RUSTC_FLAGS = ["-Zunstable-options"] + _CODEGEN_FLAGS
 
-def _rust_toolchain(name, rust_std, **kwargs):
+def _rust_toolchain(name, rust_std, clippy_driver = TOOLS + "//:clippy_driver_bin", **kwargs):
     rust_toolchain(
         name = name,
         binary_ext = "",
         channel = "nightly",
-        clippy_driver = TOOLS + "//:clippy_driver_bin",
+        clippy_driver = clippy_driver,
         default_edition = "2024",
         dylib_ext = ".so",
         exec_triple = "x86_64-unknown-linux-gnu",
@@ -76,15 +76,15 @@ def muffin_toolchain(rust_std):
 def stage2_toolchain(name, rust_std):
     """Declares a rust_toolchain that compiles with the stage-2 rustc.
 
-    The toolchain is `manual`: `bazel build //...` must not build the stage-2 rustc.
-    clippy and rustdoc stay the stock ones, which do not know the built-in target.
+    clippy comes from the same x.py run, so it knows the built-in target.
+    rustdoc stays the stock one.
     """
     _rust_toolchain(
         name = name,
+        clippy_driver = "//support/rust:stage2_clippy",
         extra_rustc_flags = _CODEGEN_FLAGS,
         rust_std = rust_std,
         rustc = "//support/rust:stage2_rustc",
         rustc_lib = "//support/rust:stage2_lib",
-        tags = ["manual"],
         target_triple = "x86_64-unknown-muffin",
     )

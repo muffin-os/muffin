@@ -22,7 +22,7 @@ pub use kernel_abi::{
     O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY,
     PATH_MAX, ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT,
     SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL,
-    SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION,
+    SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_SIGACTION,
     SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WAITPID, SYS_WRITE, SaFlags, SigAction,
     SigHandler, SigMaskHow, SigSet, Signal, Stat, StrSlice, Timespec, Whence,
 };
@@ -34,8 +34,8 @@ pub fn exit(code: i32) -> ! {
     }
 }
 
-pub fn shutdown() -> ! {
-    unsafe { syscall0(SYS_SHUTDOWN) };
+pub fn poweroff() -> ! {
+    unsafe { syscall0(SYS_POWEROFF) };
     loop {
         _mm_pause();
     }
