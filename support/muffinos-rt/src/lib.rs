@@ -11,6 +11,8 @@
 //! `posix_memalign`, `strerror_r` and the pthread functions return the error
 //! number instead.
 #![cfg_attr(not(test), no_std)]
+// `open`, `fcntl` and `ioctl` take C variadic arguments.
+#![cfg_attr(not(test), feature(c_variadic))]
 // Host unit tests build only the modules with pure logic, without their C
 // symbols. Those symbols would replace the host libc ones in the test binary.
 #![cfg_attr(test, allow(dead_code))]
@@ -32,6 +34,10 @@ mod env;
 #[cfg(not(test))]
 mod env_stubs;
 mod errno;
+#[cfg(not(test))]
+mod fs;
+#[cfg(not(test))]
+mod fs_stubs;
 mod mem;
 #[cfg(not(test))]
 mod process;
