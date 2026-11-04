@@ -15,16 +15,19 @@ use core::ffi::{c_int, c_void};
 
 pub use heap::GrowingHeap;
 pub use kernel_abi::{
-    ARG_MAX, ClockId, DefaultAction, DirentHeader, E2BIG, EACCES, EBADF, EEXIST, EFAULT, EINTR,
-    EINVAL, EISDIR, ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTDIR, ENOTTY, EOVERFLOW,
-    EPERM, ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo, IoctlRequest, MapFlags, O_ACCMODE, O_APPEND,
-    O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW,
-    O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY,
-    PATH_MAX, ProtFlags, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT,
-    SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL,
-    SYS_KILL, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_SIGACTION,
-    SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_WAITPID, SYS_WRITE, SaFlags, SigAction,
-    SigHandler, SigMaskHow, SigSet, Signal, Stat, StrSlice, Timespec, Whence,
+    AF_UNIX, ARG_MAX, ClockId, DefaultAction, DirentHeader, E2BIG, EACCES, EADDRINUSE,
+    EAFNOSUPPORT, EBADF, ECONNREFUSED, EDESTADDRREQ, EEXIST, EFAULT, EINTR, EINVAL, EISDIR,
+    ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTCONN, ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW,
+    EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE, ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo,
+    IoctlRequest, MapFlags, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY,
+    O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH,
+    O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX, ProtFlags, S_IFMT, S_IFSOCK, SOCK_STREAM,
+    SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_CONNECT,
+    SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_GETCWD, SYS_GETDENTS,
+    SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LISTEN, SYS_LSEEK, SYS_MMAP, SYS_NANOSLEEP,
+    SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK,
+    SYS_SIGRETURN, SYS_SOCKET, SYS_WAITPID, SYS_WRITE, SaFamily, SaFlags, ShutdownHow, SigAction,
+    SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, StrSlice, Timespec, Whence,
 };
 
 pub fn exit(code: i32) -> ! {
@@ -384,6 +387,61 @@ pub fn open(path: &str, oflag: c_int) -> Result<c_int, Errno> {
         )
     })
     .map(|fd| fd as c_int)
+}
+
+/// Creates an AF_UNIX stream socket and returns the new fd.
+pub fn socket(domain: c_int, ty: c_int, protocol: c_int) -> Result<c_int, Errno> {
+    ret(unsafe { syscall3(SYS_SOCKET, domain as usize, ty as usize, protocol as usize) })
+        .map(|fd| fd as c_int)
+}
+
+/// # Safety
+/// `addr` must be valid for `addrlen` bytes of reads for the whole call.
+pub unsafe fn bind_raw(fd: c_int, addr: *const u8, addrlen: SockLen) -> Result<(), Errno> {
+    ret(unsafe { syscall3(SYS_BIND, fd as usize, addr as usize, addrlen as usize) }).map(|_| ())
+}
+
+/// # Safety
+/// `addr` must be valid for `addrlen` bytes of reads for the whole call.
+pub unsafe fn connect_raw(fd: c_int, addr: *const u8, addrlen: SockLen) -> Result<(), Errno> {
+    ret(unsafe { syscall3(SYS_CONNECT, fd as usize, addr as usize, addrlen as usize) }).map(|_| ())
+}
+
+/// Blocks until a connection is pending and returns it on a new fd.
+///
+/// # Safety
+/// `addr` and `addrlen` are null, or `addrlen` points to the writable length of `addr`.
+pub unsafe fn accept_raw(fd: c_int, addr: *mut u8, addrlen: *mut SockLen) -> Result<c_int, Errno> {
+    ret(unsafe { syscall3(SYS_ACCEPT, fd as usize, addr as usize, addrlen as usize) })
+        .map(|fd| fd as c_int)
+}
+
+pub fn listen(fd: c_int, backlog: c_int) -> Result<(), Errno> {
+    ret(unsafe { syscall2(SYS_LISTEN, fd as usize, backlog as usize) }).map(|_| ())
+}
+
+pub fn shutdown(fd: c_int, how: ShutdownHow) -> Result<(), Errno> {
+    ret(unsafe { syscall2(SYS_SHUTDOWN, fd as usize, how as usize) }).map(|_| ())
+}
+
+/// Returns `ENAMETOOLONG` when `path` does not fit `SockAddrUn`.
+pub fn bind(fd: c_int, path: &str) -> Result<(), Errno> {
+    let addr = SockAddrUn::new(path).ok_or(ENAMETOOLONG)?;
+    // Safety: `addr` lives on the stack for the whole call.
+    unsafe { bind_raw(fd, core::ptr::from_ref(&addr).cast(), addr.len()) }
+}
+
+/// Returns `ENAMETOOLONG` when `path` does not fit `SockAddrUn`.
+pub fn connect(fd: c_int, path: &str) -> Result<(), Errno> {
+    let addr = SockAddrUn::new(path).ok_or(ENAMETOOLONG)?;
+    // Safety: `addr` lives on the stack for the whole call.
+    unsafe { connect_raw(fd, core::ptr::from_ref(&addr).cast(), addr.len()) }
+}
+
+/// Blocks until a connection is pending and returns it on a new fd.
+pub fn accept(fd: c_int) -> Result<c_int, Errno> {
+    // Safety: a null `addr` and a null `addrlen` tell the kernel to skip the peer address.
+    unsafe { accept_raw(fd, core::ptr::null_mut(), core::ptr::null_mut()) }
 }
 
 /// Never returns on success, so the result is always the failure reason.

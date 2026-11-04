@@ -4,12 +4,13 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
-    EACCES, EBADF, EEXIST, EFBIG, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV, ENOENT, ENOMEM,
-    ENOSPC, ENOSYS, ENOTDIR, ENOTTY, Errno, IoctlRequest, ProtFlags, Stat,
+    EACCES, EAGAIN, EBADF, EEXIST, EFBIG, EINTR, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV, ENOENT,
+    ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTTY, EPIPE, ESPIPE, Errno, IoctlRequest, ProtFlags,
+    S_IFSOCK, SigInfo, SigInfoField, Signal, Stat,
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
-    MemoryRegion as _,
+    MemoryRegion as _, SignalAccess,
 };
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
@@ -23,17 +24,19 @@ use x86_64::VirtAddr;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::{PageSize, PageTableFlags, PhysFrame, Size4KiB};
 
-use crate::file::{OpenFileDescription, vfs};
-use crate::mcore::mtask::process::Process;
+use crate::file::{OpenFile, OpenFileDescription, vfs};
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::{
     FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion, SharedMemoryRegion,
 };
+use crate::mcore::mtask::process::{ParkOutcome, Process};
+use crate::mcore::mtask::wait::WaitQueue;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
 mod signal;
+mod socket;
 mod wait;
 
 pub struct KernelAccess {
@@ -45,6 +48,49 @@ impl KernelAccess {
         KernelAccess {
             process: Process::current().clone(),
         }
+    }
+
+    /// Installs `ofd` on the lowest free descriptor.
+    fn install(&self, ofd: Arc<OpenFileDescription>) -> FdNum {
+        let num = self
+            .process
+            .file_descriptors()
+            .read()
+            .keys()
+            .fold(0, |acc, &fd| {
+                if acc == Into::<i32>::into(fd) {
+                    acc + 1
+                } else {
+                    acc
+                }
+            })
+            .into();
+        let fd = FileDescriptor::new(num, FileDescriptorFlags::empty(), ofd);
+
+        self.process.file_descriptors().write().insert(num, fd);
+
+        num
+    }
+
+    /// Retries `op` while it would block. Between tries, the task parks on `queue`.
+    /// Returns `EINTR` when a signal or an exec reap ends the wait first.
+    fn block_on<T>(
+        &self,
+        queue: &WaitQueue,
+        mut op: impl FnMut() -> Result<T, Errno>,
+    ) -> Result<T, Errno> {
+        let mut result = op();
+        while matches!(result, Err(EAGAIN)) {
+            let outcome = self.process.park_current_task(None, Some(queue), || {
+                result = op();
+                !matches!(result, Err(EAGAIN))
+                    || self.process.signals_read().has_interrupting_deliverable()
+            });
+            if matches!(outcome, ParkOutcome::Interrupted) || matches!(result, Err(EAGAIN)) {
+                return Err(EINTR);
+            }
+        }
+        result
     }
 }
 
@@ -77,25 +123,8 @@ impl FileAccess for KernelAccess {
     }
 
     fn open(&self, info: &Self::FileInfo, access: AccessMode, append: bool) -> Self::Fd {
-        let ofd = OpenFileDescription::new(info.node.clone(), access, append);
-        let num = self
-            .process
-            .file_descriptors()
-            .read()
-            .keys()
-            .fold(0, |acc, &fd| {
-                if acc == Into::<i32>::into(fd) {
-                    acc + 1
-                } else {
-                    acc
-                }
-            })
-            .into();
-        let fd = FileDescriptor::new(num, FileDescriptorFlags::empty(), ofd.into());
-
-        self.process.file_descriptors().write().insert(num, fd);
-
-        num
+        let ofd = OpenFile::new(info.node.clone(), access, append);
+        self.install(Arc::new(OpenFileDescription::File(ofd)))
     }
 
     fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
@@ -103,19 +132,26 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
-        let ofd = desc.file_description();
-        if !ofd.access().can_read() {
-            return Err(EBADF);
-        }
-        let offset = ofd.position().load(Relaxed);
-        let read = ofd.read(buf, offset.into_usize()).map_err(|e| match e {
-            ReadError::NotReadable => EISDIR,
-            ReadError::FsError(_) | ReadError::ReadFailed => EIO,
-        })?;
-        // The load and the store are separate. A fork shares the description
-        // between processes, so a concurrent read can lose an offset update.
-        ofd.position().store(offset + read.into_u64(), Relaxed);
-        Ok(read)
+        let socket = match desc.file_description().as_ref() {
+            OpenFileDescription::File(ofd) => {
+                if !ofd.access().can_read() {
+                    return Err(EBADF);
+                }
+                let offset = ofd.position().load(Relaxed);
+                let read = ofd.read(buf, offset.into_usize()).map_err(|e| match e {
+                    ReadError::NotReadable => EISDIR,
+                    ReadError::FsError(_) | ReadError::ReadFailed => EIO,
+                })?;
+                // The load and the store are separate. A fork shares the description
+                // between processes, so a concurrent read can lose an offset update.
+                ofd.position().store(offset + read.into_u64(), Relaxed);
+                return Ok(read);
+            }
+            OpenFileDescription::Socket(socket) => socket.clone(),
+        };
+        // The wait must not hold the descriptor table lock.
+        drop(guard);
+        self.block_on(socket.waiters(), || socket.try_read(buf))
     }
 
     fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Errno> {
@@ -123,25 +159,54 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
-        let ofd = desc.file_description();
-        if !ofd.access().can_write() {
-            return Err(EBADF);
-        }
-        let offset = if ofd.is_append() {
-            let mut stat = VfsStat::default();
-            ofd.stat(&mut stat).map_err(|_| EIO)?;
-            stat.size.into_u64()
-        } else {
-            ofd.position().load(Relaxed)
+        let socket = match desc.file_description().as_ref() {
+            OpenFileDescription::File(ofd) => {
+                if !ofd.access().can_write() {
+                    return Err(EBADF);
+                }
+                let offset = if ofd.is_append() {
+                    let mut stat = VfsStat::default();
+                    ofd.stat(&mut stat).map_err(|_| EIO)?;
+                    stat.size.into_u64()
+                } else {
+                    ofd.position().load(Relaxed)
+                };
+                let written = ofd.write(buf, offset.into_usize()).map_err(|e| match e {
+                    WriteError::NotWritable => EISDIR,
+                    WriteError::NoSpace => ENOSPC,
+                    WriteError::FileTooLarge => EFBIG,
+                    WriteError::FsError(_) | WriteError::WriteFailed => EIO,
+                })?;
+                ofd.position().store(offset + written.into_u64(), Relaxed);
+                return Ok(written);
+            }
+            OpenFileDescription::Socket(socket) => socket.clone(),
         };
-        let written = ofd.write(buf, offset.into_usize()).map_err(|e| match e {
-            WriteError::NotWritable => EISDIR,
-            WriteError::NoSpace => ENOSPC,
-            WriteError::FileTooLarge => EFBIG,
-            WriteError::FsError(_) | WriteError::WriteFailed => EIO,
-        })?;
-        ofd.position().store(offset + written.into_u64(), Relaxed);
-        Ok(written)
+        // The wait must not hold the descriptor table lock.
+        drop(guard);
+        let mut done = 0;
+        while done < buf.len() {
+            match self.block_on(socket.waiters(), || socket.try_write(&buf[done..])) {
+                Ok(n) => done += n,
+                // POSIX reports a partial count when some bytes reached the peer.
+                Err(_) if done > 0 => break,
+                Err(EPIPE) => {
+                    SignalAccess::deliver(
+                        self,
+                        self.process.pid(),
+                        SigInfo {
+                            signo: Signal::Pipe,
+                            code: 0,
+                            errno: 0,
+                            info: SigInfoField::None,
+                        },
+                    );
+                    return Err(EPIPE);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(done)
     }
 
     fn close(&self, fd: Self::Fd) -> Result<(), Errno> {
@@ -159,6 +224,8 @@ impl FileAccess for KernelAccess {
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
         desc.file_description()
+            .file()
+            .ok_or(EINVAL)?
             .truncate(len_bytes)
             .map_err(|e| match e {
                 TruncateError::NotSupported => EINVAL,
@@ -173,7 +240,8 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
-        desc.file_description().read_dir().map_err(|e| match e {
+        let file = desc.file_description().file().ok_or(ENOTDIR)?;
+        file.read_dir().map_err(|e| match e {
             ReadDirError::NotDirectory => ENOTDIR,
             ReadDirError::NotSupported => ENOSYS,
             ReadDirError::ReadFailed => EIO,
@@ -187,6 +255,8 @@ impl FileAccess for KernelAccess {
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
         desc.file_description()
+            .file()
+            .ok_or(ENOTTY)?
             .ioctl(request, arg)
             .map_err(|e| match e {
                 IoctlError::NotSupported => ENOTTY,
@@ -199,7 +269,8 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
-        desc.file_description().fsync().map_err(|e| match e {
+        let file = desc.file_description().file().ok_or(EINVAL)?;
+        file.fsync().map_err(|e| match e {
             FsyncError::FsError(_) | FsyncError::Failed => EIO,
         })
     }
@@ -209,8 +280,14 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
+        let Some(file) = desc.file_description().file() else {
+            return Ok(Stat {
+                size: 0,
+                mode: S_IFSOCK | 0o777,
+            });
+        };
         let mut stat = VfsStat::default();
-        desc.file_description().stat(&mut stat).map_err(|_| EIO)?;
+        file.stat(&mut stat).map_err(|_| EIO)?;
         Ok(Stat {
             size: stat.size.into_u64(),
             mode: stat.mode,
@@ -222,7 +299,8 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
-        Ok(desc.file_description().position().load(Relaxed))
+        let file = desc.file_description().file().ok_or(ESPIPE)?;
+        Ok(file.position().load(Relaxed))
     }
 
     fn set_position(&self, fd: Self::Fd, position: u64) -> Result<(), Errno> {
@@ -230,7 +308,8 @@ impl FileAccess for KernelAccess {
         let guard = fds.read();
 
         let desc = guard.get(&fd).ok_or(EBADF)?;
-        desc.file_description().position().store(position, Relaxed);
+        let file = desc.file_description().file().ok_or(ESPIPE)?;
+        file.position().store(position, Relaxed);
         Ok(())
     }
 }
@@ -290,12 +369,12 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         prot: ProtFlags,
     ) -> Result<kernel_syscall::UserspacePtr<u8>, Errno> {
         // Clone the node so the region keeps the device file open for its
-        // whole lifetime. OpenFileDescription derefs to VfsNode.
+        // whole lifetime. OpenFile derefs to VfsNode.
         let node = {
             let fds = self.process.file_descriptors();
             let guard = fds.read();
             let desc = guard.get(&fd).ok_or(EBADF)?;
-            VfsNode::clone(desc.file_description())
+            VfsNode::clone(desc.file_description().file().ok_or(ENODEV)?)
         };
 
         let region = node.mmap().map_err(|e| match e {
@@ -362,7 +441,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
             let fds = self.process.file_descriptors();
             let guard = fds.read();
             let desc = guard.get(&fd).ok_or(EBADF)?;
-            VfsNode::clone(desc.file_description())
+            VfsNode::clone(desc.file_description().file().ok_or(ENODEV)?)
         };
 
         let mut stat = VfsStat::default();

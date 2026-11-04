@@ -41,6 +41,34 @@ pub fn unpark_and_enqueue(ticket: TaskUnparkTicket) {
     }
 }
 
+/// Holds the tasks that wait on one resource. `wake_all` is safe from any task context.
+pub struct WaitQueue(Mutex<Vec<TaskWaker>>);
+
+impl WaitQueue {
+    pub const fn new() -> Self {
+        Self(Mutex::new(Vec::new()))
+    }
+
+    pub fn register(&self, waker: TaskWaker) {
+        self.0.lock().push(waker);
+    }
+
+    /// Takes every waker and wakes it. A task that left through a signal
+    /// leaves one stale waker here. A wake of that waker does nothing.
+    pub fn wake_all(&self) {
+        let wakers = core::mem::take(&mut *self.0.lock());
+        for waker in wakers {
+            wake(&waker);
+        }
+    }
+}
+
+impl Default for WaitQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Parks the current task until a holder of the matching unpark ticket
 /// wakes it.
 ///

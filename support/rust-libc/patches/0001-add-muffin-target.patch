@@ -27,7 +27,7 @@ The kernel has no socket syscall, so the other socket types are
 omitted until it does.
 
 diff --git a/build.rs b/build.rs
-index 34df96a..203d4d6 100644
+index 34df96aa7ce0f1868077cef77621f8e542a79579..203d4d63bcde35dd51fdf7ae3dcc91b27f45e778 100644
 --- a/build.rs
 +++ b/build.rs
 @@ -42,7 +42,7 @@ const CHECK_CFG_EXTRA: &[(&str, &[&str])] = &[
@@ -40,7 +40,7 @@ index 34df96a..203d4d6 100644
      ),
      (
 diff --git a/src/new/mod.rs b/src/new/mod.rs
-index 1c5d6a6..12ded5c 100644
+index 1c5d6a6e17c25651dd1a16a2f76679ef3124a5c3..12ded5cc2bccad3db4d4eaf51f400a6945d2a885 100644
 --- a/src/new/mod.rs
 +++ b/src/new/mod.rs
 @@ -96,6 +96,9 @@ cfg_if! {
@@ -55,7 +55,7 @@ index 1c5d6a6..12ded5c 100644
          pub(crate) use nuttx::*;
 diff --git a/src/new/muffin/mod.rs b/src/new/muffin/mod.rs
 new file mode 100644
-index 0000000..6946332
+index 0000000000000000000000000000000000000000..6946332d2619d98b9ae46caf1b176769ea96034d
 --- /dev/null
 +++ b/src/new/muffin/mod.rs
 @@ -0,0 +1,3 @@
@@ -64,7 +64,7 @@ index 0000000..6946332
 +pub(crate) mod unistd;
 diff --git a/src/new/muffin/unistd.rs b/src/new/muffin/unistd.rs
 new file mode 100644
-index 0000000..8d55ee5
+index 0000000000000000000000000000000000000000..8d55ee5823315ab57b43dc4631d464b89efb2e69
 --- /dev/null
 +++ b/src/new/muffin/unistd.rs
 @@ -0,0 +1,7 @@
@@ -76,7 +76,7 @@ index 0000000..8d55ee5
 +    STDOUT_FILENO,
 +};
 diff --git a/src/unix/mod.rs b/src/unix/mod.rs
-index 207c36b..1098cc0 100644
+index 207c36b82d55f0e1ed82d930a0acb038b246bf69..1098cc0f6769c310e7b0e5e6de41929acdfea862 100644
 --- a/src/unix/mod.rs
 +++ b/src/unix/mod.rs
 @@ -416,12 +416,14 @@ cfg_if! {
@@ -107,7 +107,7 @@ index 207c36b..1098cc0 100644
      }
 diff --git a/src/unix/muffin/mod.rs b/src/unix/muffin/mod.rs
 new file mode 100644
-index 0000000..05d2517
+index 0000000000000000000000000000000000000000..9612b2b529559e70588ac144ef3363fd575e31fe
 --- /dev/null
 +++ b/src/unix/muffin/mod.rs
 @@ -0,0 +1,554 @@

@@ -234,6 +234,14 @@ ext2_image(
     },
 )
 
+ext2_image(
+    name = "unix_socket_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/unix-socket": "//tests/bins:unix_socket",
+    },
+)
+
 # The same binary is the driver in `/bin/tests` and the exec target outside it.
 ext2_image(
     name = "exec_identity_disk",
@@ -310,6 +318,14 @@ ext2_image(
     },
     # Four std debug builds do not fit into the 64M default.
     image_size = "128M",
+)
+
+ext2_image(
+    name = "std_unix_socket_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/std-unix-socket": "//tests/bins:std_unix_socket",
+    },
 )
 
 # `services` is `/bin/init` here because it never exits. `off` powers the
@@ -391,7 +407,9 @@ ext2_image(
         "signals_edge",
         "sleep",
         "std_smoke",
+        "std_unix_socket",
         "true_false",
+        "unix_socket",
         "unwind",
         "vfs_mkdir",
     ]

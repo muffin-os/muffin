@@ -70,4 +70,10 @@ n! {
     SYS_GETPPID = 56,
     SYS_WAITPID = 57,
     SYS_GETDENTS = 58,
+    SYS_SOCKET = 59,
+    SYS_BIND = 60,
+    SYS_LISTEN = 61,
+    SYS_ACCEPT = 62,
+    SYS_CONNECT = 63,
+    SYS_SHUTDOWN = 64,
 }

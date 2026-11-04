@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Wed, 4 Nov 2026 13:34:48 +0100
+Subject: [PATCH] add muffin socket definitions
+
+
+diff --git a/src/unix/muffin/mod.rs b/src/unix/muffin/mod.rs
+index 9612b2b529559e70588ac144ef3363fd575e31fe..c0c176cba81250e3f1a2cd7cf83d1565ea4d7f1b 100644
+--- a/src/unix/muffin/mod.rs
++++ b/src/unix/muffin/mod.rs
+@@ -3,6 +3,7 @@
+ 
+ use crate::prelude::*;
+ use crate::{
++    in_addr_t,
+     timespec,
+     DIR,
+ };
+@@ -158,6 +159,40 @@ s! {
+         pub ai_next: *mut addrinfo,
+     }
+ 
++    pub struct sockaddr_un {
++        pub sun_family: sa_family_t,
++        pub sun_path: [c_char; 108],
++    }
++
++    pub struct sockaddr_storage {
++        pub ss_family: sa_family_t,
++        __ss_pad: [u8; 126],
++    }
++
++    pub struct in_addr {
++        pub s_addr: in_addr_t,
++    }
++
++    pub struct sockaddr_in {
++        pub sin_family: sa_family_t,
++        pub sin_port: crate::in_port_t,
++        pub sin_addr: crate::in_addr,
++        pub sin_zero: [u8; 8],
++    }
++
++    pub struct sockaddr_in6 {
++        pub sin6_family: sa_family_t,
++        pub sin6_port: crate::in_port_t,
++        pub sin6_flowinfo: u32,
++        pub sin6_addr: crate::in6_addr,
++        pub sin6_scope_id: u32,
++    }
++
++    pub struct ip_mreq {
++        pub imr_multiaddr: in_addr,
++        pub imr_interface: in_addr,
++    }
++
+     pub struct termios {
+         pub c_iflag: tcflag_t,
+         pub c_oflag: tcflag_t,
+@@ -445,6 +480,48 @@ pub const WNOHANG: c_int = 1;
+ // sys/stat.h: `utimensat` sentinel.
+ pub const UTIME_OMIT: c_long = (1 << 30) - 2;
+ 
++// sys/socket.h: `kernel_abi::socket`
++pub const AF_UNIX: c_int = 1;
++pub const AF_LOCAL: c_int = AF_UNIX;
++pub const SOCK_STREAM: c_int = 1;
++pub const SOMAXCONN: c_int = 128;
++pub const SHUT_RD: c_int = 0;
++pub const SHUT_WR: c_int = 1;
++pub const SHUT_RDWR: c_int = 2;
++
++// sys/socket.h, netinet/*.h, netdb.h, poll.h: the kernel never interprets
++// these; the values copy the nuttx target so std's socket backend compiles.
++pub const AF_INET: c_int = 2;
++pub const AF_INET6: c_int = 10;
++pub const SOCK_DGRAM: c_int = 2;
++pub const MSG_PEEK: c_int = 2;
++pub const SOL_SOCKET: c_int = 1;
++pub const SO_ERROR: c_int = 4;
++pub const SO_REUSEADDR: c_int = 11;
++pub const SO_LINGER: c_int = 6;
++pub const SO_RCVTIMEO: c_int = 10;
++pub const SO_SNDTIMEO: c_int = 14;
++pub const SO_BROADCAST: c_int = 1;
++pub const SO_KEEPALIVE: c_int = 9;
++pub const TCP_NODELAY: c_int = 16;
++pub const IP_TTL: c_int = 30;
++pub const IPV6_V6ONLY: c_int = 23;
++pub const IPV6_ADD_MEMBERSHIP: c_int = 17;
++pub const IPV6_DROP_MEMBERSHIP: c_int = 18;
++pub const IP_MULTICAST_LOOP: c_int = 19;
++pub const IPV6_MULTICAST_LOOP: c_int = 21;
++pub const IP_MULTICAST_TTL: c_int = 18;
++pub const IP_ADD_MEMBERSHIP: c_int = 20;
++pub const IP_DROP_MEMBERSHIP: c_int = 21;
++pub const EAI_SYSTEM: c_int = -11;
++// The kernel has no non-blocking mode; `ioctl` rejects this with `ENOTTY`.
++pub const FIONBIO: c_int = 0x30a;
++pub const POLLIN: c_short = 1;
++pub const POLLOUT: c_short = 4;
++pub const POLLERR: c_short = 8;
++pub const POLLHUP: c_short = 16;
++pub const POLLNVAL: c_short = 32;
++
+ // unistd.h: `sysconf` names, muffinos-rt answers them.
+ pub const _SC_PAGESIZE: c_int = 1;
+ pub const _SC_NPROCESSORS_ONLN: c_int = 2;
+@@ -530,6 +607,15 @@ extern "C" {
+     pub fn __errno_location() -> *mut c_int;
+     pub fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int;
+     pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;
++    pub fn bind(socket: c_int, address: *const sockaddr, address_len: socklen_t) -> c_int;
++    pub fn recvfrom(
++        socket: c_int,
++        buf: *mut c_void,
++        len: size_t,
++        flags: c_int,
++        addr: *mut sockaddr,
++        addrlen: *mut socklen_t,
++    ) -> ssize_t;
+     pub fn madvise(addr: *mut c_void, len: size_t, advice: c_int) -> c_int;
+     pub fn mprotect(addr: *mut c_void, len: size_t, prot: c_int) -> c_int;
+     pub fn msync(addr: *mut c_void, len: size_t, flags: c_int) -> c_int;

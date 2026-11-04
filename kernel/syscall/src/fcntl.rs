@@ -1,10 +1,8 @@
-use alloc::borrow::ToOwned;
 use core::ffi::c_int;
 use core::slice::from_raw_parts;
 
 use kernel_abi::{EINVAL, ENAMETOOLONG, Errno, OpenFlags, PATH_MAX};
 use kernel_vfs::CreateMode;
-use kernel_vfs::path::{AbsolutePath, Path};
 use tracing::{Level, debug, instrument};
 
 use crate::access::{AccessMode, CwdAccess, FileAccess};
@@ -54,15 +52,7 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
 
     let path = {
         let path_bytes = unsafe { from_raw_parts(path.as_ptr(), path_len) };
-        let path = core::str::from_utf8(path_bytes).map_err(|_| EINVAL)?;
-        let path = Path::new(path);
-        if let Ok(p) = AbsolutePath::try_new(path) {
-            p.to_owned()
-        } else {
-            let mut p = cx.current_working_directory().read().clone();
-            p.push(path);
-            p
-        }
+        cx.resolve(core::str::from_utf8(path_bytes).map_err(|_| EINVAL)?)
     };
 
     debug!(?path, "open");

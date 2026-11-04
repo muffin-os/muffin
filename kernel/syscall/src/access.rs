@@ -6,6 +6,7 @@ mod mem;
 mod process;
 mod region;
 mod signal;
+mod socket;
 
 pub use cwd::*;
 pub use file::*;
@@ -13,6 +14,7 @@ pub use mem::*;
 pub use process::*;
 pub use region::*;
 pub use signal::*;
+pub use socket::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Capability {

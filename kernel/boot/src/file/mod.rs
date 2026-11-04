@@ -1,5 +1,6 @@
+use alloc::sync::Arc;
 use core::ops::Deref;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::AtomicU64;
 
 use kernel_syscall::access::AccessMode;
 use kernel_vfs::Vfs;
@@ -9,9 +10,11 @@ use spin::RwLock;
 use tracing::{Level, instrument};
 
 use crate::file::devfs::devfs;
+use crate::file::socket::Socket;
 
 pub mod devfs;
 pub mod ext2;
+pub mod socket;
 
 static VFS: RwLock<Vfs> = RwLock::new(Vfs::new());
 
@@ -30,7 +33,7 @@ pub fn init() {
 }
 
 #[derive(Debug)]
-pub struct OpenFileDescription {
+pub struct OpenFile {
     position: AtomicU64,
     node: VfsNode,
     access: AccessMode,
@@ -38,19 +41,31 @@ pub struct OpenFileDescription {
     append: bool,
 }
 
-impl Clone for OpenFileDescription {
-    fn clone(&self) -> Self {
-        let position = self.position.load(Ordering::Relaxed);
-        Self {
-            position: AtomicU64::new(position),
-            node: self.node.clone(),
-            access: self.access,
-            append: self.append,
+#[derive(Debug)]
+pub enum OpenFileDescription {
+    File(OpenFile),
+    Socket(Arc<Socket>),
+}
+
+impl OpenFileDescription {
+    #[must_use]
+    pub fn file(&self) -> Option<&OpenFile> {
+        match self {
+            Self::File(file) => Some(file),
+            Self::Socket(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn socket(&self) -> Option<&Arc<Socket>> {
+        match self {
+            Self::File(_) => None,
+            Self::Socket(socket) => Some(socket),
         }
     }
 }
 
-impl Deref for OpenFileDescription {
+impl Deref for OpenFile {
     type Target = VfsNode;
 
     fn deref(&self) -> &Self::Target {
@@ -58,7 +73,7 @@ impl Deref for OpenFileDescription {
     }
 }
 
-impl OpenFileDescription {
+impl OpenFile {
     #[must_use]
     pub fn new(node: VfsNode, access: AccessMode, append: bool) -> Self {
         Self {

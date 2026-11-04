@@ -473,7 +473,7 @@ extern "C" fn cow_clone_reader(_: *mut c_void) {
 extern "C" fn exec_sibling(_: *mut c_void) {
     let task = kernel::mcore::mtask::task::Task::current();
     let process = task.process().clone();
-    match process.park_current_task(None, || false) {
+    match process.park_current_task(None, None, || false) {
         ParkOutcome::Interrupted => {
             kernel::serial_println!("test-kernel: sibling terminating");
         }

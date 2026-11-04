@@ -7,6 +7,7 @@ pub mod exec;
 pub mod fcntl;
 pub mod mman;
 pub mod signal;
+pub mod socket;
 pub mod unistd;
 pub mod wait;
 

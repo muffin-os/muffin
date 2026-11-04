@@ -36,7 +36,7 @@ impl WaitAccess for KernelAccess {
 
     fn sleep_one_poll(&self) -> Result<(), Errno> {
         let deadline = hpet().read().now().saturating_add(POLL_INTERVAL);
-        let outcome = self.process.park_current_task(Some(deadline), || {
+        let outcome = self.process.park_current_task(Some(deadline), None, || {
             hpet().read().now() >= deadline
                 || self.process.signals_read().has_interrupting_deliverable()
         });

@@ -23,6 +23,7 @@ fn posix() {
     report.assert_markers_in_order(&[
         "posix: start",
         "posix: group fd",
+        "posix: group socket",
         "posix: group mmap",
         "posix: group process",
         "posix: group signal",

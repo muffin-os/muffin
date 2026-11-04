@@ -1,17 +1,23 @@
+use core::ffi::c_int;
 use core::ops::Neg;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
 use core::time::Duration;
 
 use access::KernelAccess;
 use kernel_abi::{
-    ClockId, EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno,
-    IoctlRequest, MapFlags, ProcessId, ProtFlags, SigAction, SigMaskHow, SigSet, Signal, Stat,
-    Timespec, Whence, syscall_name,
+    AF_UNIX, ClockId, EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno,
+    IoctlRequest, MapFlags, ProcessId, ProtFlags, SOMAXCONN, SaFamily, ShutdownHow, SigAction,
+    SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, Timespec, Whence, syscall_name,
 };
-use kernel_syscall::access::{FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess};
+use kernel_syscall::access::{
+    FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess, SocketAccess,
+};
 use kernel_syscall::fcntl::sys_open;
 use kernel_syscall::mman::sys_mmap;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
+use kernel_syscall::socket::{
+    sys_accept, sys_bind, sys_connect, sys_listen, sys_shutdown, sys_socket,
+};
 use kernel_syscall::unistd::{
     sys_close, sys_fsync, sys_getcwd, sys_getdents, sys_ioctl, sys_lseek, sys_read, sys_write,
 };
@@ -72,6 +78,12 @@ pub(crate) fn dispatch_syscall(
         }
         kernel_abi::SYS_FORK => fork::dispatch_sys_fork(frame, regs),
         kernel_abi::SYS_POWEROFF => dispatch_sys_poweroff(),
+        kernel_abi::SYS_SOCKET => dispatch_sys_socket(arg1, arg2, arg3),
+        kernel_abi::SYS_BIND => dispatch_sys_bind(arg1, arg2, arg3),
+        kernel_abi::SYS_LISTEN => dispatch_sys_listen(arg1, arg2),
+        kernel_abi::SYS_ACCEPT => dispatch_sys_accept(arg1, arg2, arg3),
+        kernel_abi::SYS_CONNECT => dispatch_sys_connect(arg1, arg2, arg3),
+        kernel_abi::SYS_SHUTDOWN => dispatch_sys_shutdown(arg1, arg2),
         _ => Err(ENOSYS),
     };
 
@@ -428,6 +440,69 @@ fn dispatch_sys_lseek(fd: usize, offset: usize, whence: usize) -> Result<usize, 
     sys_lseek(&cx, fd, offset as i64, whence)
 }
 
+fn socket_fd(fd: usize) -> Result<<KernelAccess as SocketAccess>::Fd, Errno> {
+    let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
+    Ok(<KernelAccess as SocketAccess>::Fd::from(fd))
+}
+
+/// Returns the path inside a user socket address. The length check comes before
+/// the pointer read, so a large `addrlen` cannot reach past the address.
+fn user_socket_path(addr: usize, addrlen: usize) -> Result<&'static str, Errno> {
+    if addrlen > size_of::<SockAddrUn>() {
+        return Err(EINVAL);
+    }
+    let bytes = unsafe { slice_from_ptr_and_len(addr, addrlen) }?;
+    make_user_range_resident(addr, addrlen, UserAccess::Read)?;
+    SockAddrUn::path_of(bytes)
+}
+
+fn dispatch_sys_socket(domain: usize, ty: usize, protocol: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    sys_socket(&cx, domain as c_int, ty as c_int, protocol as c_int)
+}
+
+fn dispatch_sys_bind(fd: usize, addr: usize, addrlen: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    let fd = socket_fd(fd)?;
+    let path = user_socket_path(addr, addrlen)?;
+    sys_bind(&cx, fd, path)
+}
+
+fn dispatch_sys_listen(fd: usize, backlog: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    let fd = socket_fd(fd)?;
+    sys_listen(&cx, fd, (backlog as c_int).clamp(1, SOMAXCONN) as usize)
+}
+
+fn dispatch_sys_accept(fd: usize, addr: usize, addrlen: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    let fd = socket_fd(fd)?;
+    let new_fd = sys_accept(&cx, fd)?;
+    // The peer has no name, so the kernel writes only the family. A null `addr`
+    // skips the write. The new fd stays open on `EFAULT`.
+    if addr != 0 {
+        let cap = read_user::<SockLen>(addrlen)?;
+        if cap >= 2 {
+            write_user::<SaFamily>(addr, AF_UNIX)?;
+        }
+        write_user::<SockLen>(addrlen, 2)?;
+    }
+    Ok(new_fd)
+}
+
+fn dispatch_sys_connect(fd: usize, addr: usize, addrlen: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    let fd = socket_fd(fd)?;
+    let path = user_socket_path(addr, addrlen)?;
+    sys_connect(&cx, fd, path)
+}
+
+fn dispatch_sys_shutdown(fd: usize, how: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    let fd = socket_fd(fd)?;
+    sys_shutdown(&cx, fd, ShutdownHow::try_from(how as c_int)?)
+}
+
 /// POSIX clock_gettime backed by the HPET main counter.
 fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno> {
     let since_boot = hpet().read().now().since_boot();
@@ -448,7 +523,7 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
     let deadline = hpet().read().now().saturating_add(duration);
     let process = Process::current().clone();
 
-    let outcome = process.park_current_task(Some(deadline), || {
+    let outcome = process.park_current_task(Some(deadline), None, || {
         hpet().read().now() >= deadline || process.signals_read().has_interrupting_deliverable()
     });
 

@@ -42,6 +42,8 @@ mod fs;
 mod fs_stubs;
 mod mem;
 #[cfg(not(test))]
+mod net;
+#[cfg(not(test))]
 mod process;
 #[cfg(not(test))]
 mod process_stubs;

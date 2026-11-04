@@ -3,7 +3,9 @@
 
 use core::ffi::c_int;
 
-use kernel_abi::{ClockId, MapFlags, ProtFlags, SaFlags, SigHandler, SigMaskHow, Signal, Whence};
+use kernel_abi::{
+    ClockId, MapFlags, ProtFlags, SaFlags, ShutdownHow, SigHandler, SigMaskHow, Signal, Whence,
+};
 
 macro_rules! same_errno {
     ($($name:ident),* $(,)?) => {
@@ -201,6 +203,13 @@ same_value!(
     libc::MAP_PRIVATE = MapFlags::PRIVATE.bits(),
     libc::MAP_FIXED = MapFlags::FIXED.bits(),
     libc::MAP_ANONYMOUS = MapFlags::ANONYMOUS.bits(),
+    libc::AF_UNIX = kernel_abi::AF_UNIX as c_int,
+    libc::SOCK_STREAM = kernel_abi::SOCK_STREAM,
+    libc::SOMAXCONN = kernel_abi::SOMAXCONN,
+    libc::SHUT_RD = ShutdownHow::Read as c_int,
+    libc::SHUT_WR = ShutdownHow::Write as c_int,
+    libc::SHUT_RDWR = ShutdownHow::Both as c_int,
 );
 
 const _: () = assert!(libc::PATH_MAX as usize == kernel_abi::PATH_MAX);
+const _: () = assert!(size_of::<libc::sockaddr_un>() == size_of::<kernel_abi::SockAddrUn>());

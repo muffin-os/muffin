@@ -33,7 +33,7 @@ use x86_64::structures::idt::InterruptStackFrameValue;
 use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::arch::gdt::Selectors;
-use crate::file::{OpenFileDescription, vfs};
+use crate::file::{OpenFile, OpenFileDescription, vfs};
 use crate::hpet::Instant;
 use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::MemoryRegions;
@@ -42,7 +42,8 @@ use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::{FxArea, HigherHalfStack, StackAllocationError, Task, TaskId};
 use crate::mcore::mtask::wait::{
-    TaskUnparkTicket, TaskWaker, block_current, reserve, sleep_until, unpark_and_enqueue, wake,
+    TaskUnparkTicket, TaskWaker, WaitQueue, block_current, reserve, sleep_until,
+    unpark_and_enqueue, wake,
 };
 use crate::mem::address_space::AddressSpace;
 use crate::mem::memapi::{
@@ -390,12 +391,14 @@ impl Process {
 
     /// Parks the current task until `should_wake` holds or an exec reap
     /// targets it, reparking on spurious wakeups. A deadline only arms a
-    /// wakeup, the closure must observe it to end the wait. Parking anywhere
-    /// else hides the task from signal generation and the exec reaper, so
-    /// every blocking syscall must wait through here.
+    /// wakeup, the closure must observe it to end the wait. A `queue` arms a
+    /// wakeup from `WaitQueue::wake_all`. Parking anywhere else hides the task
+    /// from signal generation and the exec reaper, so every blocking syscall
+    /// must wait through here.
     pub fn park_current_task(
         &self,
         deadline: Option<Instant>,
+        queue: Option<&WaitQueue>,
         mut should_wake: impl FnMut() -> bool,
     ) -> ParkOutcome {
         let task = Task::current();
@@ -418,6 +421,9 @@ impl Process {
                 sleep_until(deadline, waker.clone());
             }
             self.register_interruptible_waker(tid, waker.clone());
+            if let Some(queue) = queue {
+                queue.register(waker.clone());
+            }
             if should_wake() || self.reap_requested_for(tid) {
                 wake(&waker);
             }
@@ -583,11 +589,11 @@ extern "C" fn trampoline(_arg: *mut c_void) {
                 CreateMode::Never,
             )
             .expect("should be able to open /dev/null");
-        let devnull_ofd = Arc::new(OpenFileDescription::new(
+        let devnull_ofd = Arc::new(OpenFileDescription::File(OpenFile::new(
             devnull,
             AccessMode::ReadOnly,
             false,
-        ));
+        )));
         guard.insert(
             0.into(),
             FileDescriptor::new(0.into(), FileDescriptorFlags::empty(), devnull_ofd.clone()),
@@ -600,11 +606,11 @@ extern "C" fn trampoline(_arg: *mut c_void) {
                 CreateMode::Never,
             )
             .expect("should be able to open /dev/serial");
-        let devserial_ofd = Arc::new(OpenFileDescription::new(
+        let devserial_ofd = Arc::new(OpenFileDescription::File(OpenFile::new(
             devserial,
             AccessMode::WriteOnly,
             false,
-        ));
+        )));
         guard.insert(
             1.into(),
             FileDescriptor::new(

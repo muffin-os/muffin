@@ -36,6 +36,7 @@ KERNEL_CRATES = {
         deps = ["abi", "vfs"],
         crates = ["spin", "thiserror", "tracing", "x86_64"],
     ),
+    "unix_socket": struct(deps = ["abi", "vfs"], crates = ["spin"]),
     "vfs": struct(deps = ["abi"], crates = ["spin", "thiserror"]),
     "virtual_memory": struct(deps = [], crates = ["thiserror", "tracing", "x86_64"]),
 }

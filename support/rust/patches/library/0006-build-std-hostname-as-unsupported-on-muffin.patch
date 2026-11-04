@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:22:11 +0100
+Subject: [PATCH] build std hostname as unsupported on muffin
+
+The muffin kernel has no hostname, and muffinos-rt has no gethostname
+or strnlen symbol, so hostname stays unsupported as on espidf. The
+socket backend builds from the generic unix arms.
+
+diff --git a/library/std/src/sys/net/hostname/mod.rs b/library/std/src/sys/net/hostname/mod.rs
+index 65fcd6bfb00d7afe3dc5fe33c74c1869fcf1775e..919175a08c173b3100739028f6adfb89111e3a4c 100644
+--- a/library/std/src/sys/net/hostname/mod.rs
++++ b/library/std/src/sys/net/hostname/mod.rs
+@@ -1,5 +1,5 @@
+ cfg_select! {
+-    all(target_family = "unix", not(target_os = "espidf")) => {
++    all(target_family = "unix", not(any(target_os = "espidf", target_os = "muffin"))) => {
+         mod unix;
+         pub use unix::hostname;
+     }

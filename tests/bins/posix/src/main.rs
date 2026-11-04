@@ -9,6 +9,7 @@ mod fd;
 mod mem;
 mod process;
 mod signal;
+mod socket;
 mod time;
 
 minilib::entry!(main);
@@ -17,6 +18,7 @@ fn main() -> i32 {
     minilib::println!("posix: start");
 
     fd::run();
+    socket::run();
     mem::run();
     process::run();
     signal::run();
