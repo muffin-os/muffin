@@ -26,15 +26,8 @@ rust_binary(
 
 ext2_image(
     name = "disk",
-    contents = {
-        "etc/services/compositor.yaml": "exec: /bin/compositor\nrestart: no\n",
-        "etc/services/compositor-demo.yaml": "exec: /bin/compositor-demo\nrestart: no\n",
-        "var/hello.txt": "Hello, Muffin OS!\n",
-    },
-    empty_dirs = [
-        "dev/fd",
-        "var/tmp",
-    ],
+    base_dir = "disk",
+    base_files = glob(["disk/**"]),
     files = {
         "bin/compositor": "//userspace/compositor",
         "bin/compositor-demo": "//userspace/compositor-demo",

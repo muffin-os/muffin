@@ -45,6 +45,17 @@ def _ext2_image_impl(ctx):
     for directory in ctx.attr.empty_dirs:
         cmds.append('mkdir -p "$root/{}"'.format(directory))
 
+    base_prefix = ctx.label.package + "/" + ctx.attr.base_dir + "/"
+    for src in ctx.files.base_files:
+        if not src.short_path.startswith(base_prefix):
+            fail("{} is not under {}".format(src.short_path, base_prefix))
+        dest = src.short_path[len(base_prefix):]
+        if src.basename == ".gitkeep":
+            cmds.append('mkdir -p "$root/{}"'.format(dest.rsplit("/", 1)[0]))
+            continue
+        inputs.append(src)
+        cmds.extend(_stage(dest, src.path))
+
     for dest, target in ctx.attr.files.items():
         staged = _single_file(target)
         inputs.append(staged)
@@ -71,8 +82,15 @@ def _ext2_image_impl(ctx):
 
 ext2_image = rule(
     implementation = _ext2_image_impl,
-    doc = "Builds an ext2 filesystem image from staged files, literal contents, and empty dirs.",
+    doc = "Builds an ext2 filesystem image from a base directory, staged files, literal contents, and empty dirs. Later groups overwrite earlier ones.",
     attrs = {
+        "base_dir": attr.string(
+            doc = "Package-relative directory whose tree becomes the image root. Pair with `base_files = glob([\"<base_dir>/**\"])`.",
+        ),
+        "base_files": attr.label_list(
+            allow_files = True,
+            doc = "Every file under `base_dir`. A `.gitkeep` only creates its directory and is not copied.",
+        ),
         "contents": attr.string_dict(
             doc = "Destination path inside the image to literal file content.",
         ),
