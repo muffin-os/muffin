@@ -24,7 +24,7 @@ The project is structured as a modular Bazel build with a kernel and userspace c
 - **POSIX system interface** - Eventually POSIX-compatible system interface with support for file operations, threading primitives (pthread), memory management, and more (work in progress)
 - **ACPI support** - Power management and hardware discovery via ACPI tables
 - **ELF loader** - Dynamic ELF binary loading for userspace programs
-- **Userspace foundation** - Init process and minimal C library (minilib) for userspace development
+- **Userspace foundation** - Init process, a minimal C library (minilib) and the Rust standard library for userspace development
 - **Stack unwinding** - Kernel panic backtraces for debugging
 
 ## POSIX Compliance
@@ -74,6 +74,14 @@ bazel build -c opt //...
 `bazel build //muffinos:iso` produces the bootable ISO at
 `bazel-bin/muffinos/muffinos.iso`, and `bazel build //muffinos:disk` produces the
 ext2 disk image at `bazel-bin/muffinos/disk.img`.
+
+### Userspace
+
+Userspace programs link the Rust standard library, which `bazel build
+//support/rust` builds from the patch series in `support/rust/patches`.
+`bazel build //userspace/hello-world` builds the example, and `bazel test
+//tests:std_smoke` exercises `std` end to end. Programs that must stay
+`no_std` link `//userspace/minilib`.
 
 ### Testing
 
