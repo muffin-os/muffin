@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use kernel_device::block::BlockDevice;
@@ -6,6 +5,10 @@ use kernel_device::block::BlockDevice;
 use crate::{BlockAddress, Error, Ext2Fs, Inode, RegularFile};
 
 const SZ: usize = size_of::<BlockAddress>();
+
+/// Most bytes one pass of `read_from_file` stages in the kernel heap. A larger
+/// read loops, so the size of a user buffer cannot exhaust the heap.
+const MAX_STAGING_BYTES: usize = 256 * 1024;
 
 /// Exclusive upper bound of the file block index each pointer tier covers.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -30,16 +33,28 @@ where
             return Ok(0);
         }
         let len = buf.len().min(file_size - offset);
-        let start_block = self.file_block_index(offset)?;
-        let last_block = self.file_block_index(offset + len - 1)?;
-
         let block_size = self.superblock.block_size() as usize;
-        let relative_offset = offset % block_size;
-        let block_count = (last_block - start_block) as usize + 1;
-        let mut data: Vec<u8> = vec![0_u8; block_count * block_size];
-        let res = self.read_blocks_from_inode(file, start_block, last_block, &mut data)?;
-        let total_read = res.min(len);
-        buf[..total_read].copy_from_slice(&data[relative_offset..relative_offset + total_read]);
+        let max_chunk_blocks = (MAX_STAGING_BYTES / block_size).max(1);
+
+        let mut data: Vec<u8> = Vec::new();
+        let mut total_read = 0;
+        while total_read < len {
+            let position = offset + total_read;
+            let relative_offset = position % block_size;
+            let chunk = (len - total_read).min(max_chunk_blocks * block_size - relative_offset);
+            let start_block = self.file_block_index(position)?;
+            let last_block = self.file_block_index(position + chunk - 1)?;
+            data.resize((last_block - start_block) as usize * block_size + block_size, 0);
+            let read = self.read_blocks_from_inode(file, start_block, last_block, &mut data)?;
+
+            let copied = read.saturating_sub(relative_offset).min(chunk);
+            buf[total_read..total_read + copied]
+                .copy_from_slice(&data[relative_offset..relative_offset + copied]);
+            total_read += copied;
+            if copied < chunk {
+                break;
+            }
+        }
 
         Ok(total_read)
     }

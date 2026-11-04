@@ -10,4 +10,5 @@ PATCHES = [
     "0009-spawn-muffin-processes-without-the-exec-error-pipe.patch",
     "0010-use-the-unsupported-thread-name-on-muffin.patch",
     "0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch",
+    "0012-symbolize-backtraces-on-muffin-from-the-running-exec.patch",
 ]

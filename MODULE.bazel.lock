@@ -202,7 +202,7 @@
   "moduleExtensions": {
     "//support:extensions.bzl%rust_support": {
       "general": {
-        "bzlTransitiveDigest": "n13ouL/y736Qm1GVggxvpd7t5k8EfBUVOtwlLecbZYk=",
+        "bzlTransitiveDigest": "AbFUQGbEOg0Ims2pOyISW4jR2MtlrOHV+Ht+EeeZoGY=",
         "usagesDigest": "9TKtFbslhDwph+BAZV7lVpAGMjtJ0vX+YUmgSlD1HFI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
@@ -226,7 +226,8 @@
                 "@@//support/rust/patches/library:0008-add-muffin-to-the-std-fs-fd-and-errno-lists.patch",
                 "@@//support/rust/patches/library:0009-spawn-muffin-processes-without-the-exec-error-pipe.patch",
                 "@@//support/rust/patches/library:0010-use-the-unsupported-thread-name-on-muffin.patch",
-                "@@//support/rust/patches/library:0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch"
+                "@@//support/rust/patches/library:0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch",
+                "@@//support/rust/patches/library:0012-symbolize-backtraces-on-muffin-from-the-running-exec.patch"
               ],
               "sha256": "99c110f203f38294e3b1565950809a45a5b0a91749244fa3a2ea94dd77e5be5b",
               "strip_prefix": "rust-src-nightly/rust-src/lib/rustlib/src/rust",
@@ -254,6 +255,7 @@
                 "@@//support/rust/patches/library:0009-spawn-muffin-processes-without-the-exec-error-pipe.patch",
                 "@@//support/rust/patches/library:0010-use-the-unsupported-thread-name-on-muffin.patch",
                 "@@//support/rust/patches/library:0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch",
+                "@@//support/rust/patches/library:0012-symbolize-backtraces-on-muffin-from-the-running-exec.patch",
                 "@@//support/rust/patches/compiler:0001-add-the-x86_64-unknown-muffin-target.patch",
                 "@@//support/rust/patches/compiler:0002-document-the-x86_64-unknown-muffin-target.patch",
                 "@@//support/rust/patches/compiler:0003-let-bootstrap-accept-x86_64-unknown-muffin-as-a-targ.patch"

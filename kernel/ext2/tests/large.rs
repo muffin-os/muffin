@@ -80,6 +80,29 @@ fn read_whole_pattern_file(sector_size: usize) {
 }
 
 generate_tests!(
+    read_unaligned_past_eof_spans_staging_chunks:
+    512 - read_unaligned_past_eof_spans_staging_chunks_512,
+    1024 - read_unaligned_past_eof_spans_staging_chunks_1024,
+    4096 - read_unaligned_past_eof_spans_staging_chunks_4096,
+);
+
+// The kernel stages at most 256 KiB per pass, so this read takes three passes
+// and only the first starts inside a block.
+fn read_unaligned_past_eof_spans_staging_chunks(sector_size: usize) {
+    let fs = cow_fs!("kernel/ext2/tests/filesystems/large.img", sector_size);
+    let file = open_pattern(&fs);
+    let offset = 1000;
+
+    let mut buf = vec![0_u8; PATTERN_LEN];
+    let read = fs
+        .read_from_file(&file, offset, &mut buf)
+        .expect("read_from_file must succeed");
+
+    assert_eq!(PATTERN_LEN - offset, read, "read must stop at end of file");
+    assert_eq!(None, first_mismatch(&buf[..read], offset));
+}
+
+generate_tests!(
     read_across_direct_boundary:
     512 - read_across_direct_boundary_512,
     1024 - read_across_direct_boundary_1024,

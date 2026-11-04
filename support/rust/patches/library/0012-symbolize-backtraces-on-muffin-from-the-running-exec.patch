@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 13:45:33 +0100
+Subject: [PATCH] symbolize backtraces on muffin from the running executable
+
+muffin binaries are static ET_EXEC files and have no dl_iterate_phdr, so
+native_libraries listed no image and every frame printed as <unknown>. The
+executable from current_exe now covers every address with a zero bias.
+
+diff --git a/library/backtrace/src/symbolize/gimli.rs b/library/backtrace/src/symbolize/gimli.rs
+index cbc0b7685a45f575147f7d948f0f7727ba0afb10..0030a8377aa7673215403467bd00d9498b1ef2ce 100644
+--- a/library/backtrace/src/symbolize/gimli.rs
++++ b/library/backtrace/src/symbolize/gimli.rs
+@@ -247,6 +247,9 @@ cfg_if::cfg_if! {
+     } else if #[cfg(target_os = "aix")] {
+         mod libs_aix;
+         use libs_aix::native_libraries;
++    } else if #[cfg(target_os = "muffin")] {
++        mod libs_muffin;
++        use libs_muffin::native_libraries;
+     } else {
+         // Everything else should doesn't know how to load native libraries.
+         fn native_libraries() -> Vec<Library> {
+diff --git a/library/backtrace/src/symbolize/gimli/libs_muffin.rs b/library/backtrace/src/symbolize/gimli/libs_muffin.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6ffaed344e3c41c5b7340411366f36fa74abbbb
+--- /dev/null
++++ b/library/backtrace/src/symbolize/gimli/libs_muffin.rs
+@@ -0,0 +1,23 @@
++// muffin binaries are static, non-relocatable `ET_EXEC` files and the kernel
++// has no dynamic loader. The executable is the only image, it holds every
++// code address and loads at its linked addresses, hence one segment that
++// covers the whole address space and a zero bias.
++
++use super::mystd::env;
++use super::{Library, LibrarySegment};
++use alloc::vec;
++use alloc::vec::Vec;
++
++pub(super) fn native_libraries() -> Vec<Library> {
++    let Ok(exe) = env::current_exe() else {
++        return Vec::new();
++    };
++    vec![Library {
++        name: exe.into_os_string(),
++        segments: vec![LibrarySegment {
++            stated_virtual_memory_address: 0,
++            len: usize::MAX,
++        }],
++        bias: 0,
++    }]
++}

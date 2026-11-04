@@ -1,8 +1,17 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 fn main() {
     std::panic::set_hook(Box::new(|info| {
         eprintln!("{info}");
         eprintln!("{}", std::backtrace::Backtrace::force_capture());
     }));
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("realtime clock is after 1970")
+        .as_secs();
+    let (hours, minutes, seconds) = (secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    println!("Hello, world! It is {hours:02}:{minutes:02}:{seconds:02} UTC.");
 
     foo()
 }
