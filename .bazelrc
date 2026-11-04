@@ -3,6 +3,19 @@ common --@rules_rust//rust/toolchain/channel=nightly
 
 build --@rules_rust//rust/settings:rustfmt.toml=//:rustfmt.toml
 
+# Every command starts with "Checking for file changes", which stats every
+# source file Skyframe knows. @rustc_src globs 286k files, and Bazel 9 keeps
+# them in the repo contents cache, where they count as mutable host files.
+# That scan costs ~1.5s per command, and `bazel run //:fmt` runs six of them.
+# These flags make Bazel trust fetched repos and host files, and inotify
+# replaces the stat walk of the workspace itself. Edits inside
+# bazel-muffin/external or a `local_path_override` tree are not picked up;
+# `bazel shutdown` forces a full rescan.
+common --watchfs
+common --noexperimental_check_external_repository_files
+common --noexperimental_check_external_other_files
+common --noexperimental_check_output_files
+
 # QEMU integration tests need the host qemu-system-x86_64 and /dev/kvm.
 test --test_output=errors
 test --test_env=PATH
