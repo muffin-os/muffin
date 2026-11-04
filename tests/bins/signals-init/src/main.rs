@@ -109,10 +109,10 @@ extern "C" fn segv_handler(_signo: Signal) {
     exit(0);
 }
 
-/// Roughly 4 seconds. The victim has to be created, scheduled, and have its
-/// ELF loaded before it can answer, which alone took about 250ms in a run that
-/// exposed this race, so readiness gets generous slack.
-const READY_BUDGET: u32 = 300;
+/// Pings for readiness, each with `ACK_BUDGET`, so roughly 4 seconds. The
+/// victim has to be created, scheduled, and have its ELF loaded before it can
+/// answer, which alone took about 250ms in a run that exposed this race.
+const READY_PINGS: u32 = 5;
 
 /// Roughly 850ms, enough for one ping to the victim and its reply back.
 const ACK_BUDGET: u32 = 60;
@@ -145,7 +145,7 @@ fn role_a() {
     let _ = sigprocmask(SigMaskHow::Unblock, Some(&usr1_set), None);
     println!("A: after unblock");
 
-    let ready = if wait_acks(1, READY_BUDGET) { 1 } else { 0 };
+    let ready = if wait_ready() { 1 } else { 0 };
 
     // A ping answered while B runs normally is the baseline the later phases
     // are compared against.
@@ -197,10 +197,18 @@ fn role_a() {
     println!("A: UNREACHABLE");
 }
 
+/// Pings B until it answers. test-init forks B after A, but either can run
+/// first. A ping that reaches pid 3 before its `execve` or before `main` armed
+/// `on_ping` meets the default `Ignore` and is lost, so an unanswered ping is
+/// sent again.
+fn wait_ready() -> bool {
+    (0..READY_PINGS).any(|_| {
+        let _ = kill(Role::Victim.pid(), PING);
+        wait_acks(1, ACK_BUDGET)
+    })
+}
+
 fn role_b() -> ! {
-    // `main` armed the ping handler before the role was known. The driver is
-    // forked before the victim, so it always exists to receive this announcement.
-    let _ = kill(Role::Driver.pid(), ACK);
     println!("B: running");
 
     // Spin in user mode so ticks can deliver the ping handler.
@@ -213,11 +221,9 @@ minilib::entry!(main);
 
 fn main() -> i32 {
     // Both handshake handlers are armed before any other syscall, and before
-    // the role is even known, because the peer may already be running. Signals
-    // are delivered at timer ticks, so a peer signal that arrived first
-    // reaches the handler this call installs and never the default action.
-    // Ordering the ack first matters, it is the only one of the two that can
-    // already be pending here.
+    // the role is even known, because the peer may already be running. A
+    // signal that arrives before this point meets the default `Ignore`, so
+    // the driver retries its readiness ping.
     let _ = install_handler(ACK, on_ack);
     let _ = install_handler(PING, on_ping);
 
