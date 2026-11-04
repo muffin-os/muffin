@@ -36,14 +36,16 @@ jobs:
           DATE="${{ steps.nightly.outputs.date }}"
           sed -i "s/^channel = .*/channel = \"nightly-${DATE}\"/" rust-toolchain.toml
           sed -i "s|nightly/[0-9-]\{10\}|nightly/${DATE}|g" MODULE.bazel
-          sed -i "s|dist/[0-9-]\{10\}/rust-src-nightly|dist/${DATE}/rust-src-nightly|" MODULE.bazel
-          NEW_SHA=$(curl -sL "https://static.rust-lang.org/dist/${DATE}/rust-src-nightly.tar.xz" | sha256sum | cut -d ' ' -f1)
-          sed -i "/name = \"rust_src\"/,/^)/ s|sha256 = \"[0-9a-f]\{64\}\"|sha256 = \"${NEW_SHA}\"|" MODULE.bazel
-          # The muffin and bootstrap rust_toolchain rules live in separate
-          # packages (bazel/toolchains/muffin, bazel/toolchains/bootstrap) so
-          # their generated target spec files share a basename. Both iso_date
-          # fields need the same bump.
-          sed -i "s|iso_date = \"[0-9-]\{10\}\"|iso_date = \"${DATE}\"|" bazel/toolchains/muffin/BUILD.bazel bazel/toolchains/bootstrap/BUILD.bazel
+          # support/versions.bzl pins the upstream sources and the toolchains'
+          # iso_date. The full commit hash comes from `rustc -vV`; the short one
+          # in --version does not resolve on ci-artifacts.rust-lang.org.
+          COMMIT=$(rustc +nightly -vV | sed -n 's/^commit-hash: //p')
+          sed -i "s|^RUST_NIGHTLY_DATE = .*|RUST_NIGHTLY_DATE = \"${DATE}\"|" support/versions.bzl
+          sed -i "s|^RUST_COMMIT = .*|RUST_COMMIT = \"${COMMIT}\"|" support/versions.bzl
+          # patchdev reads the URLs from the bumped versions.bzl, so no URL lives here.
+          bazel run //support:patchdev -- sha | while read -r NAME SHA; do
+            sed -i "s|^${NAME} = .*|${NAME} = \"${SHA}\"|" support/versions.bzl
+          done
       - uses: peter-evans/create-pull-request@v8
         with:
           branch: rust/nightly-upgrade
