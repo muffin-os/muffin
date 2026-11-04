@@ -1,0 +1,15 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bazel:kernel_crates.bzl", "crate_label")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "sys",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "muffin_sys",
+    edition = "2024",
+    deps = [
+        "//kernel/abi",
+        crate_label("linked_list_allocator"),
+    ],
+)

@@ -23,10 +23,20 @@ const HEAP_BASE: usize = 0x100_0000_0000;
 /// how far the mapped range advances per growth call.
 const GROWTH_CHUNK: usize = 256 * 1024;
 
-#[global_allocator]
-static ALLOCATOR: GrowingHeap = GrowingHeap(LockedHeap::empty());
+/// Process heap that grows by `mmap` from [`HEAP_BASE`].
+pub struct GrowingHeap(LockedHeap);
 
-struct GrowingHeap(LockedHeap);
+impl GrowingHeap {
+    pub const fn new() -> Self {
+        Self(LockedHeap::empty())
+    }
+}
+
+impl Default for GrowingHeap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 unsafe impl GlobalAlloc for GrowingHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -42,11 +52,14 @@ unsafe impl GlobalAlloc for GrowingHeap {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let Some(ptr) = NonNull::new(ptr) else {
-            return;
-        };
-        // SAFETY: `GlobalAlloc` guarantees `ptr` came from `alloc` under `layout`.
-        unsafe { self.0.lock().deallocate(ptr, layout) }
+        debug_assert!(!ptr.is_null());
+        // SAFETY: `GlobalAlloc` guarantees `ptr` came from `alloc` under `layout`,
+        // and `alloc` never hands out null, so `ptr` is non-null.
+        unsafe {
+            self.0
+                .lock()
+                .deallocate(NonNull::new_unchecked(ptr), layout)
+        }
     }
 }
 
