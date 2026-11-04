@@ -33,34 +33,39 @@ impl Write for Stderr {
     }
 }
 
+/// The kernel holds the serial lock for one write syscall, so a line written
+/// in one call cannot be split by kernel log lines or other processes.
+#[doc(hidden)]
+pub fn _print(fd: c_int, args: core::fmt::Arguments) {
+    let _ = emit(fd, &alloc::fmt::format(args));
+}
+
 #[macro_export]
 macro_rules! print {
-    ($($arg:tt)*) => {{
-        let _ = ::core::fmt::Write::write_fmt(&mut $crate::Stdout, ::core::format_args!($($arg)*));
-    }};
+    ($($arg:tt)*) => {
+        $crate::_print(1, ::core::format_args!($($arg)*))
+    };
 }
 
 #[macro_export]
 macro_rules! println {
     () => { $crate::print!("\n") };
-    ($($arg:tt)*) => {{
-        let _ = ::core::fmt::Write::write_fmt(&mut $crate::Stdout, ::core::format_args!($($arg)*));
-        let _ = ::core::fmt::Write::write_str(&mut $crate::Stdout, "\n");
-    }};
+    ($($arg:tt)*) => {
+        $crate::_print(1, ::core::format_args!("{}\n", ::core::format_args!($($arg)*)))
+    };
 }
 
 #[macro_export]
 macro_rules! eprint {
-    ($($arg:tt)*) => {{
-        let _ = ::core::fmt::Write::write_fmt(&mut $crate::Stderr, ::core::format_args!($($arg)*));
-    }};
+    ($($arg:tt)*) => {
+        $crate::_print(2, ::core::format_args!($($arg)*))
+    };
 }
 
 #[macro_export]
 macro_rules! eprintln {
     () => { $crate::eprint!("\n") };
-    ($($arg:tt)*) => {{
-        let _ = ::core::fmt::Write::write_fmt(&mut $crate::Stderr, ::core::format_args!($($arg)*));
-        let _ = ::core::fmt::Write::write_str(&mut $crate::Stderr, "\n");
-    }};
+    ($($arg:tt)*) => {
+        $crate::_print(2, ::core::format_args!("{}\n", ::core::format_args!($($arg)*)))
+    };
 }

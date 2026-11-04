@@ -9,18 +9,10 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::fmt::{self, Write};
 
-use minilib::{Signal, Stdout, execve, exit, fork, println, read_dir, waitpid};
+use minilib::{Signal, execve, exit, fork, println, read_dir, waitpid};
 
 minilib::entry!(main);
-
-/// The children print concurrently and the serial port is shared, so a
-/// wire-contract line goes out in one write syscall, which holds the serial
-/// lock for the whole line.
-fn report(line: fmt::Arguments) {
-    let _ = Stdout.write_str(&alloc::fmt::format(line));
-}
 
 fn main() -> i32 {
     let mut names = match read_dir("/bin/tests") {
@@ -45,7 +37,7 @@ fn main() -> i32 {
                 exit(1);
             }
             Ok(pid) => {
-                report(format_args!("test-init: spawned {path} pid={pid}\n"));
+                println!("test-init: spawned {path} pid={pid}");
                 children.push(pid);
             }
             Err(e) => {
@@ -54,10 +46,7 @@ fn main() -> i32 {
             }
         }
     }
-    report(format_args!(
-        "test-init: spawn complete count={}\n",
-        children.len()
-    ));
+    println!("test-init: spawn complete count={}", children.len());
 
     for pid in children {
         let status = match waitpid(pid) {
@@ -69,11 +58,10 @@ fn main() -> i32 {
         };
         // shortcut: an exit code of 128 or more reads as a signal, no test exits that high
         match Signal::try_from(status - 128) {
-            Ok(signal) if status >= 128 => report(format_args!(
-                "test-init: outcome pid={pid} signal={}\n",
-                signal.name()
-            )),
-            _ => report(format_args!("test-init: outcome pid={pid} exit={status}\n")),
+            Ok(signal) if status >= 128 => {
+                println!("test-init: outcome pid={pid} signal={}", signal.name())
+            }
+            _ => println!("test-init: outcome pid={pid} exit={status}"),
         }
     }
     0
