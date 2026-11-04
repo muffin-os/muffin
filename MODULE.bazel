@@ -138,6 +138,7 @@ crate.spec(
     package = "serde",
     version = "1.0",
 )
+crate.spec(package = "serde_json", version = "1.0")
 crate.spec(
     default_features = False,
     package = "sha3",

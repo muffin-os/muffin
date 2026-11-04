@@ -27,7 +27,8 @@ rust_binary(
 ext2_image(
     name = "disk",
     contents = {
-        "etc/services/fbdemo.yaml": "exec: /bin/fbdemo\nrestart: no\n",
+        "etc/services/compositor.yaml": "exec: /bin/compositor\nrestart: no\n",
+        "etc/services/compositor-demo.yaml": "exec: /bin/compositor-demo\nrestart: no\n",
         "var/hello.txt": "Hello, Muffin OS!\n",
     },
     empty_dirs = [
@@ -35,7 +36,8 @@ ext2_image(
         "var/tmp",
     ],
     files = {
-        "bin/fbdemo": "//userspace/fbdemo",
+        "bin/compositor": "//userspace/compositor",
+        "bin/compositor-demo": "//userspace/compositor-demo",
         "bin/services": "//userspace/services",
         "bin/init": "//userspace/init",
         "bin/false": "//userspace/utilities/false",
@@ -43,7 +45,7 @@ ext2_image(
         "bin/poweroff": "//userspace/utilities/poweroff",
     },
     # The std binaries do not fit into the 64M default.
-    image_size = "128M",
+    image_size = "256M",
 )
 
 limine_iso(

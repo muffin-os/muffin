@@ -22,7 +22,7 @@ The project uses a modular Bazel build:
 │   ├── boot/                   # //kernel/boot, the bootable ELF + kernel lib
 │   │   └── linker-x86_64.ld    # Custom linker script
 │   └── <subsystem>/            # //kernel/abi, //kernel/pci, ... crate kernel_<name>
-├── userspace/                  # init, fbdemo, minilib, libs/gfx
+├── userspace/                  # init, compositor, compositor-demo, minilib, libs/gfx
 ├── tests/                      # QEMU integration tests, test-kernel, test bins
 ├── platforms/                  # The x86_64-unknown-none target platform
 ├── bazel/                      # Crate graph, image rules, external BUILD files

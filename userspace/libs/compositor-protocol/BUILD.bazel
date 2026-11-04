@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "compositor-protocol",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "compositor_protocol",
+    edition = "2024",
+    deps = [
+        "@crates//serde",
+        "@crates//serde_json",
+    ],
+)
+
+rust_test(
+    name = "test",
+    crate = ":compositor-protocol",
+    size = "small",
+)

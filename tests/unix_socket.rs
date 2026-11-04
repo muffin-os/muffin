@@ -12,7 +12,9 @@ fn unix_socket() {
     let report = KernelTest::new("unix_socket", host_env!()).run();
 
     report.assert_no_line_contains("unix-socket: FAIL");
-    report.assert_markers_in_order(&[
+    // The parent and the child print from two processes, so their lines have
+    // no fixed order.
+    for marker in [
         "unix-socket: listening",
         "unix-socket: child connected",
         "unix-socket: accepted",
@@ -21,6 +23,8 @@ fn unix_socket() {
         "unix-socket: child eof",
         "unix-socket: child epipe",
         "unix-socket: parent waited status=0",
-    ]);
+    ] {
+        report.assert_line_contains(marker);
+    }
     report.assert_exit_code(0, 0);
 }

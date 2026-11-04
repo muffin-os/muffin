@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "compositor",
+    srcs = ["src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = [
+        "//kernel/abi",
+        "//userspace/libs/compositor-protocol",
+        "//userspace/libs/gfx",
+        "//userspace/libs/sys",
+    ],
+)

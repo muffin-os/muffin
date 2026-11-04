@@ -328,6 +328,18 @@ ext2_image(
     },
 )
 
+ext2_image(
+    name = "compositor_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/compositor-smoke": "//tests/bins:compositor_smoke",
+        "bin/compositor": "//userspace/compositor",
+        "bin/compositor-demo": "//userspace/compositor-demo",
+    },
+    # Three std debug binaries do not fit into the 64M default.
+    image_size = "128M",
+)
+
 # `services` is `/bin/init` here because it never exits. `off` powers the
 # machine off after a delay, which is what ends the run.
 ext2_image(
@@ -350,8 +362,10 @@ ext2_image(
 # no-sandbox keeps /dev/kvm and the host qemu-system-x86_64 reachable. The
 # harness already degrades to TCG through accel=kvm:tcg when KVM is absent.
 #
-# Each case boots a QEMU guest with 4G and 4 vcpus, hence size large: it tells
-# Bazel to reserve real resources rather than run six emulators at once. The
+# Each case boots a QEMU guest with 4G and 4 vcpus. Bazel reserves only one CPU
+# and 300M for a large test, so on a 24-core host it starts 24 guests at once,
+# and the slowest one misses the harness deadline. The resources tags make Bazel
+# reserve the real footprint, which limits the host to six guests at once. The
 # timeout must stay above the harness's own 180s deadline plus its 2s grace,
 # otherwise Bazel kills the run before the harness can dump its transcript.
 [
@@ -376,11 +390,16 @@ ext2_image(
             "MUFFIN_E2FSCK": "$(rootpath @e2fsprogs//:e2fsck)",
         },
         size = "large",
-        tags = ["no-sandbox"],
+        tags = [
+            "no-sandbox",
+            "resources:cpu:4",
+            "resources:memory:4096",
+        ],
         timeout = "moderate",
         deps = ["//tests/support"],
     )
     for name in [
+        "compositor",
         "cow_clone",
         "exec_identity",
         "exit_codes",

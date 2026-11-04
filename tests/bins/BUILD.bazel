@@ -43,6 +43,7 @@ package(default_visibility = ["//visibility:public"])
         platform = "//platforms:x86_64-unknown-muffin",
     )
     for name, directory in {
+        "compositor_smoke": "compositor-smoke",
         "exit_code": "exit-code",
         "std_panic_exit": "std-panic-exit",
         "std_smoke": "std-smoke",
