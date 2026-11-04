@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
@@ -123,16 +125,19 @@ fn load_services(dir: &Path) -> Result<BTreeMap<String, Service>, String> {
         let path = entry
             .map(|e| e.path())
             .map_err(|e| format!("read {}: {e}", dir.display()))?;
-        // `metadata` follows symlinks, so a link to a regular file counts.
-        let metadata = fs::metadata(&path).map_err(|e| format!("stat {}: {e}", path.display()))?;
+        let mut file = File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
+        let metadata = file
+            .metadata()
+            .map_err(|e| format!("stat {}: {e}", path.display()))?;
         if !metadata.is_file() {
             continue;
         }
         let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
             return Err(format!("{}: file name is not UTF-8", path.display()));
         };
-        let text =
-            fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let mut text = String::new();
+        file.read_to_string(&mut text)
+            .map_err(|e| format!("read {}: {e}", path.display()))?;
         let service =
             rust_yaml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
         services.insert(name.to_owned(), service);
