@@ -1,0 +1,37 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "muffinos-rt",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "muffinos_rt",
+    edition = "2024",
+    # One codegen unit keeps `_start` and every C symbol in one archive member,
+    # so the linker pulls them in together.
+    rustc_flags = ["-Ccodegen-units=1"],
+    # Only the layer-2 sysroot builds this crate: it holds muffin-only asm
+    # and needs the libc muffin layouts.
+    target_compatible_with = ["//platforms:core_only"],
+    deps = [
+        "//kernel/abi",
+        "//userspace/libs/sys",
+        "@rust_libc//:libc",
+    ],
+)
+
+# Host build of the pure-logic modules only. It needs no libc, because the
+# modules that use libc are not part of a test build.
+rust_test(
+    name = "test",
+    size = "small",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "muffinos_rt",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//kernel/abi",
+        "//userspace/libs/sys",
+    ],
+)
