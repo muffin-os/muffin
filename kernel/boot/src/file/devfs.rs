@@ -1,8 +1,12 @@
+use core::arch::x86_64::_rdrand64_step;
 use core::fmt::Write;
 
 use conquer_once::spin::OnceCell;
-use kernel_devfs::{ArcLockedDevFs, Null, Serial};
+use kernel_abi::S_IFCHR;
+use kernel_devfs::{ArcLockedDevFs, DevFile, Null, Serial};
 use kernel_vfs::path::AbsolutePath;
+use kernel_vfs::{ReadError, Stat, StatError, WriteError};
+use raw_cpuid::CpuId;
 use tracing::{Level, instrument};
 
 use crate::serial_print;
@@ -39,6 +43,14 @@ pub fn init() {
                 Ok(Serial::<SerialWrite>::default())
             })
             .expect("should be able to register stderr");
+        if CpuId::new()
+            .get_feature_info()
+            .is_some_and(|info| info.has_rdrand())
+        {
+            guard
+                .register_file(AbsolutePath::try_new("/urandom").unwrap(), || Ok(Urandom))
+                .expect("should be able to register urandom");
+        }
     }
     DEVFS.init_once(|| devfs);
 }
@@ -51,4 +63,37 @@ impl Write for SerialWrite {
         serial_print!("{s}");
         Ok(())
     }
+}
+
+/// Random bytes from the CPU `rdrand` instruction.
+struct Urandom;
+
+impl DevFile for Urandom {
+    fn read(&mut self, buf: &mut [u8], _: usize) -> Result<usize, ReadError> {
+        for chunk in buf.chunks_mut(8) {
+            let word = rdrand().ok_or(ReadError::ReadFailed)?;
+            chunk.copy_from_slice(&word.to_ne_bytes()[..chunk.len()]);
+        }
+        Ok(buf.len())
+    }
+
+    fn write(&mut self, _: &[u8], _: usize) -> Result<usize, WriteError> {
+        Err(WriteError::NotWritable)
+    }
+
+    fn stat(&mut self, stat: &mut Stat) -> Result<(), StatError> {
+        stat.size = 0;
+        stat.mode = S_IFCHR | 0o444;
+        Ok(())
+    }
+}
+
+/// Intel recommends ten retries before `rdrand` counts as unavailable.
+fn rdrand() -> Option<u64> {
+    let mut word = 0;
+    (0..10).find_map(|_| {
+        // SAFETY: `init` registers `Urandom` only when cpuid reports `rdrand`.
+        let ok = unsafe { _rdrand64_step(&mut word) } == 1;
+        ok.then_some(word)
+    })
 }

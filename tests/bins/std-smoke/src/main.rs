@@ -3,6 +3,7 @@
 //! Each step prints `std-smoke: <step> ok`. The first failure prints
 //! `std-smoke: FAIL <step>: <error>` and exits 1 at once.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -20,6 +21,7 @@ const STEPS: &[(&str, Step)] = &[
     ("readdir", readdir),
     ("metadata", metadata),
     ("time", time),
+    ("random", random),
     ("exe", exe),
     ("process", process),
     ("child_env", child_env),
@@ -102,6 +104,18 @@ fn time() -> Result<(), Box<dyn Error>> {
         start.elapsed() >= Duration::from_millis(10),
         "sleep too short",
     )
+}
+
+fn random() -> Result<(), Box<dyn Error>> {
+    let mut a = [0_u8; 16];
+    let mut b = [0_u8; 16];
+    File::open("/dev/urandom")?.read_exact(&mut a)?;
+    File::open("/dev/urandom")?.read_exact(&mut b)?;
+    check(a != b, "two reads returned the same bytes")?;
+    check(a != [0; 16], "read returned only zeros")?;
+    // RandomState::new runs std's fill_bytes.
+    let map: HashMap<u8, u8> = (0..16).map(|k| (k, a[usize::from(k)])).collect();
+    check(map.len() == 16, "hashmap lost keys")
 }
 
 fn exe() -> Result<(), Box<dyn Error>> {

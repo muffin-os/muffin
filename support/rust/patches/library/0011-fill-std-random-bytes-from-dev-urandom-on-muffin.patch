@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Tue, 3 Nov 2026 12:27:45 +0100
+Subject: [PATCH] fill std random bytes from /dev/urandom on muffin
+
+The kernel serves rdrand bytes through /dev/urandom, so HashMap keys differ between runs.
+
+diff --git a/library/std/src/sys/random/mod.rs b/library/std/src/sys/random/mod.rs
+index e5a66dc463c6b9a351d2f5e89c29ab555aa12fd4..d63799069257fe320111a3e6e677a8228dd8d852 100644
+--- a/library/std/src/sys/random/mod.rs
++++ b/library/std/src/sys/random/mod.rs
+@@ -59,6 +59,10 @@ cfg_select! {
+         mod unix_legacy;
+         pub use unix_legacy::fill_bytes;
+     }
++    target_os = "muffin" => {
++        mod muffin;
++        pub use muffin::fill_bytes;
++    }
+     target_os = "redox" => {
+         mod redox;
+         pub use redox::fill_bytes;
+diff --git a/library/std/src/sys/random/muffin.rs b/library/std/src/sys/random/muffin.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..5f0ae030b28fbf03975bb737e51e57c7af08cdc7
+--- /dev/null
++++ b/library/std/src/sys/random/muffin.rs
+@@ -0,0 +1,10 @@
++//! Random data from the kernel's `/dev/urandom`, which serves `rdrand` bytes.
++
++use crate::fs::File;
++use crate::io::Read;
++
++pub fn fill_bytes(bytes: &mut [u8]) {
++    File::open("/dev/urandom")
++        .and_then(|mut dev| dev.read_exact(bytes))
++        .expect("failed to generate random data from /dev/urandom");
++}

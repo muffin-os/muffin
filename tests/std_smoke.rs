@@ -18,6 +18,7 @@ fn std_smoke() {
         "std-smoke: readdir ok",
         "std-smoke: metadata ok",
         "std-smoke: time ok",
+        "std-smoke: random ok",
         "std-smoke: exe ok",
         "std-smoke: process ok",
         "std-smoke: child env ok",

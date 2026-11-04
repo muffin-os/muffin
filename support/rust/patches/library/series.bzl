@@ -9,6 +9,6 @@ PATCHES = [
     "0008-add-muffin-to-the-std-fs-fd-and-errno-lists.patch",
     "0009-spawn-muffin-processes-without-the-exec-error-pipe.patch",
     "0010-use-the-unsupported-thread-name-on-muffin.patch",
-    "0011-fill-std-random-bytes-from-a-fixed-seed-on-muffin.patch",
+    "0011-fill-std-random-bytes-from-dev-urandom-on-muffin.patch",
     "0012-symbolize-backtraces-on-muffin-from-the-running-exec.patch",
 ]
