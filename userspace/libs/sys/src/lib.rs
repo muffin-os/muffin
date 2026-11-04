@@ -198,12 +198,12 @@ pub fn getppid() -> i64 {
     unsafe { syscall0(SYS_GETPPID) as i64 }
 }
 
-/// Waits until the child `pid` exits and returns its status: the exit code,
-/// or 128 plus the signal number.
-pub fn waitpid(pid: i64) -> Result<i32, Errno> {
-    let mut status = 0i32;
-    ret(unsafe { syscall2(SYS_WAITPID, pid as usize, &raw mut status as usize) })?;
-    Ok(status)
+/// Waits for a child that the POSIX `pid` forms select and returns the reaped
+/// pid. `status` receives the exit code, or 128 plus the signal number.
+pub fn waitpid(pid: i64, status: &mut i32) -> Result<i64, Errno> {
+    // Safety: `status` is a live, exclusive reference for the whole call.
+    ret(unsafe { syscall2(SYS_WAITPID, pid as usize, status as *mut i32 as usize) })
+        .map(|pid| pid as i64)
 }
 
 /// Builds an action that returns through [`sigreturn_restorer`].

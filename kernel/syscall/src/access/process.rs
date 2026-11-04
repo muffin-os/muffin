@@ -42,11 +42,19 @@ impl ExitOutcome {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Child {
+    pub pid: ProcessId,
+    pub process_group_id: ProcessId,
+    pub exit_outcome: Option<ExitOutcome>,
+}
+
 /// Process table lookups for `getppid` and `waitpid`.
 pub trait WaitAccess {
     /// `None` when no process has `pid`.
     fn parent_id(&self, pid: ProcessId) -> Option<ProcessId>;
-    fn exit_outcome(&self, pid: ProcessId) -> Option<ExitOutcome>;
+    /// Returns each child of `parent`, zombies included, in ascending pid order.
+    fn children(&self, parent: ProcessId) -> impl Iterator<Item = Child>;
     /// Removes `pid` from the process table after a parent collected its
     /// status. This is not the task reap of exec.
     fn remove_process(&self, pid: ProcessId);

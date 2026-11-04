@@ -15,7 +15,7 @@ use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::unistd::{
     sys_close, sys_fsync, sys_getcwd, sys_getdents, sys_ioctl, sys_lseek, sys_read, sys_write,
 };
-use kernel_syscall::wait::{sys_getppid, sys_waitpid};
+use kernel_syscall::wait::{WaitTarget, sys_getppid, sys_waitpid};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use tracing::{debug, error};
 use x86_64::VirtAddr;
@@ -116,7 +116,13 @@ fn dispatch_sys_waitpid(pid: usize, status: usize) -> Result<usize, Errno> {
         make_user_range_resident(ptr.addr(), size_of::<i32>(), UserAccess::Write)?;
         Some(ptr)
     };
-    sys_waitpid(&cx, ProcessId::from(pid as u64), status)
+    let target = match pid as isize {
+        1.. => WaitTarget::Child(ProcessId::from(pid as u64)),
+        0 => WaitTarget::CallerGroup,
+        -1 => WaitTarget::AnyChild,
+        v => WaitTarget::ProcessGroup(ProcessId::from(v.unsigned_abs() as u64)),
+    };
+    sys_waitpid(&cx, target, status)
 }
 
 fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {

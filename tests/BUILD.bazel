@@ -226,6 +226,14 @@ ext2_image(
     },
 )
 
+ext2_image(
+    name = "orphan_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/orphan": "//tests/bins:orphan",
+    },
+)
+
 # The same binary is the driver in `/bin/tests` and the exec target outside it.
 ext2_image(
     name = "exec_identity_disk",
@@ -290,14 +298,6 @@ ext2_image(
 )
 
 ext2_image(
-    name = "hello_world_disk",
-    files = {
-        "bin/init": "//tests/bins:test_init",
-        "bin/tests/hello-world": "//userspace/services",
-    },
-)
-
-ext2_image(
     name = "std_smoke_disk",
     contents = {"data/hello.txt": _HELLO},
     empty_dirs = ["var/tmp"],
@@ -358,10 +358,10 @@ ext2_image(
         "floats",
         "fork",
         "heap_bounds",
-        "hello_world",
         "kstack_overflow",
         "map_range_rollback",
         "mmap",
+        "orphan",
         "posix",
         "shutdown",
         "shutdown_ignore",

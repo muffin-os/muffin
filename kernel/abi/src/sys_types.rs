@@ -20,6 +20,10 @@ impl From<u64> for ProcessId {
 impl !Default for ProcessId {}
 
 impl ProcessId {
+    /// The process that adopts the children of a process that exits. The
+    /// kernel creates init first, so init is pid 1 and runs a wait loop.
+    pub const REAPER: Self = Self(1);
+
     #[must_use]
     pub fn is_root(&self) -> bool {
         self.0 == 0

@@ -30,12 +30,12 @@ fn main() -> ExitCode {
             if e.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            // ECHILD: no child is left, so the manager is gone too.
+            // ECHILD: no child is left
             eprintln!("init: waitpid failed: {e}");
             return ExitCode::FAILURE;
         }
         if pid == manager_pid {
-            eprintln!("init: {SERVICE_MANAGER} exited with status {status:#x}");
+            eprintln!("init: {SERVICE_MANAGER} exited with status {status:#}");
             return ExitCode::FAILURE;
         }
     }

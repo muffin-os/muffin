@@ -21,6 +21,7 @@ package(default_visibility = ["//visibility:public"])
         "floats": "floats",
         "fork": "fork",
         "mmap": "mmap",
+        "orphan": "orphan",
         "posix": "posix",
         "signals_edge": "signals-edge",
         "signals_init": "signals-init",

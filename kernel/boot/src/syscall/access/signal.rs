@@ -22,8 +22,7 @@ impl ProcessAccess for KernelProcess {
     }
 
     fn process_group_id(&self) -> ProcessId {
-        // Every process is its own group until setpgid exists.
-        self.0.pid()
+        self.0.process_group_id()
     }
 }
 

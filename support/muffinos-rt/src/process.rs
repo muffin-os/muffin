@@ -158,9 +158,10 @@ pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *const c_char)
     unsafe { execve(file, argv, environ) }
 }
 
-/// Waits for `pid` to exit and stores the status `WEXITSTATUS` and
-/// `WTERMSIG` decode. Fails with `ENOSYS` for any option, such as `WNOHANG`,
-/// because the kernel waitpid always blocks.
+/// Waits for a child that the POSIX `pid` forms select and returns the reaped
+/// pid. Stores the `WEXITSTATUS` and `WTERMSIG` decode in `status`. Fails
+/// with `ENOSYS` for each option, such as `WNOHANG`, because the kernel
+/// waitpid always blocks.
 ///
 /// # Safety
 ///
@@ -170,12 +171,15 @@ pub unsafe extern "C" fn waitpid(pid: pid_t, status: *mut c_int, options: c_int)
     if options != 0 {
         return fail(ENOSYS);
     }
-    let result = muffin_sys::waitpid(pid.into()).map(|code| {
-        if !status.is_null() {
-            unsafe { status.write(code) };
-        }
-        pid
-    });
+    let mut code = 0;
+    let result = muffin_sys::waitpid(pid.into(), &mut code)
+        .and_then(to_pid)
+        .map(|reaped| {
+            if !status.is_null() {
+                unsafe { status.write(code) };
+            }
+            reaped
+        });
     ret(result)
 }
 

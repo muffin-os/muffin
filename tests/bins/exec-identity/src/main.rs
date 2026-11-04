@@ -46,13 +46,11 @@ fn main() -> i32 {
             1
         }
         Ok(pid) => {
-            let status = match waitpid(pid) {
-                Ok(status) => status,
-                Err(e) => {
-                    println!("exec-identity: FAIL waitpid {e}");
-                    return 1;
-                }
-            };
+            let mut status = 0;
+            if let Err(e) = waitpid(pid, &mut status) {
+                println!("exec-identity: FAIL waitpid {e}");
+                return 1;
+            }
             println!("exec-identity: parent waited status={status}");
             if status != TARGET_EXIT {
                 println!("exec-identity: FAIL status {status}");

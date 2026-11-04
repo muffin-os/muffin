@@ -25,13 +25,11 @@ fn main() -> i32 {
             1
         }
         Ok(pid) => {
-            let status = match waitpid(pid) {
-                Ok(status) => status,
-                Err(e) => {
-                    println!("fork: FAIL waitpid {e}");
-                    return 1;
-                }
-            };
+            let mut status = 0;
+            if let Err(e) = waitpid(pid, &mut status) {
+                println!("fork: FAIL waitpid {e}");
+                return 1;
+            }
             println!("fork: parent waited pid={pid} status={status}");
             // Safety: the child's write landed in its own copy.
             let counter = unsafe { COUNTER };

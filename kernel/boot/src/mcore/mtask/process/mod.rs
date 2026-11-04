@@ -150,7 +150,7 @@ pub struct Process {
     pid: ProcessId,
     name: RwLock<String>,
 
-    ppid: ProcessId,
+    ppid: RwLock<ProcessId>,
 
     executable_path: RwLock<Option<AbsoluteOwnedPath>>,
     executable_segments: RwLock<Vec<LowerHalfAllocation<Writable>>>,
@@ -194,7 +194,7 @@ impl Process {
             let root = Arc::new(Self {
                 pid,
                 name: RwLock::new("root".to_string()),
-                ppid: pid,
+                ppid: RwLock::new(pid),
                 executable_path: RwLock::new(None),
                 executable_segments: RwLock::new(vec![]),
                 current_working_directory: RwLock::new(ROOT.to_owned()),
@@ -235,7 +235,7 @@ impl Process {
         let process = Self {
             pid,
             name: RwLock::new(name),
-            ppid: parent_pid,
+            ppid: RwLock::new(parent_pid),
             executable_path: RwLock::new(executable_path.map(|x| x.as_ref().to_owned())),
             executable_segments: RwLock::new(vec![]),
             current_working_directory: RwLock::new(parent.current_working_directory.read().clone()),
@@ -304,7 +304,12 @@ impl Process {
     }
 
     pub fn ppid(&self) -> ProcessId {
-        self.ppid
+        *self.ppid.read()
+    }
+
+    pub fn process_group_id(&self) -> ProcessId {
+        // TODO(tpdenk): return the group that setpgid sets, once setpgid exists
+        self.pid
     }
 
     pub fn name(&self) -> String {
@@ -494,7 +499,13 @@ impl Process {
 
     /// Records the first terminating event. A process that exits while being
     /// signaled keeps the first event, so a later outcome is dropped.
+    ///
+    /// The children move to the reaper before the outcome becomes visible. A
+    /// waiter that sees the outcome then never finds a child with a dead parent.
     pub fn set_exit_outcome(&self, outcome: ExitOutcome) {
+        for child in process_tree().read().all().filter(|p| p.ppid() == self.pid) {
+            *child.ppid.write() = ProcessId::REAPER;
+        }
         let _ = self.exit_outcome.try_init_once(|| outcome);
     }
 
@@ -507,7 +518,7 @@ impl Debug for Process {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Process")
             .field("pid", &self.pid)
-            .field("ppid", &self.ppid)
+            .field("ppid", &self.ppid())
             .field("name", &*self.name.read())
             .field("address_space", self.address_space())
             .finish_non_exhaustive()

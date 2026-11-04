@@ -1,7 +1,8 @@
+use alloc::vec::Vec;
 use core::time::Duration;
 
 use kernel_abi::{EINTR, Errno, ProcessId};
-use kernel_syscall::access::{ExitOutcome, WaitAccess};
+use kernel_syscall::access::{Child, WaitAccess};
 
 use crate::hpet::hpet;
 use crate::mcore::mtask::process::ParkOutcome;
@@ -15,12 +16,18 @@ impl WaitAccess for KernelAccess {
         process_tree().read().processes.get(&pid).map(|p| p.ppid())
     }
 
-    fn exit_outcome(&self, pid: ProcessId) -> Option<ExitOutcome> {
-        process_tree()
+    fn children(&self, parent: ProcessId) -> impl Iterator<Item = Child> {
+        let children: Vec<Child> = process_tree()
             .read()
-            .processes
-            .get(&pid)
-            .and_then(|p| p.exit_outcome())
+            .all()
+            .filter(|p| p.ppid() == parent)
+            .map(|p| Child {
+                pid: p.pid(),
+                process_group_id: p.process_group_id(),
+                exit_outcome: p.exit_outcome(),
+            })
+            .collect();
+        children.into_iter()
     }
 
     fn remove_process(&self, pid: ProcessId) {
