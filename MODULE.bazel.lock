@@ -200,6 +200,74 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//support:extensions.bzl%rust_support": {
+      "general": {
+        "bzlTransitiveDigest": "czI+vs+5iRpzswXgBiD1hN7uxc07K9YjDl1spqR3tl4=",
+        "usagesDigest": "9TKtFbslhDwph+BAZV7lVpAGMjtJ0vX+YUmgSlD1HFI=",
+        "recordedInputs": [
+          "REPO_MAPPING:,bazel_tools bazel_tools"
+        ],
+        "generatedRepoSpecs": {
+          "rust_src": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file": "@@//support/rust:rust_src.BUILD.bazel",
+              "patch_args": [
+                "-p1"
+              ],
+              "patches": [],
+              "sha256": "99c110f203f38294e3b1565950809a45a5b0a91749244fa3a2ea94dd77e5be5b",
+              "strip_prefix": "rust-src-nightly/rust-src/lib/rustlib/src/rust",
+              "urls": [
+                "https://static.rust-lang.org/dist/2026-07-12/rust-src-nightly.tar.xz"
+              ]
+            }
+          },
+          "rustc_src": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file": "@@//support/rust:rustc_src.BUILD.bazel",
+              "patch_args": [
+                "-p1"
+              ],
+              "patches": [],
+              "sha256": "e2f5d93dc43e4b3275817fd2897aad41deb64c15995b5ceee0ae347ee0673c88",
+              "strip_prefix": "rustc-nightly-src",
+              "urls": [
+                "https://static.rust-lang.org/dist/2026-07-12/rustc-nightly-src.tar.xz"
+              ]
+            }
+          },
+          "ci_llvm": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file": "@@//support/rust:ci_llvm.BUILD.bazel",
+              "sha256": "581b628a48e08111016201d0e6d1bddd3de5d23b82b6b5c0183e9afd99d46bfc",
+              "strip_prefix": "rust-dev-nightly-x86_64-unknown-linux-gnu",
+              "urls": [
+                "https://ci-artifacts.rust-lang.org/rustc-builds/be8e82435eb04fbe75ed5286b52735366e160bed/rust-dev-nightly-x86_64-unknown-linux-gnu.tar.xz"
+              ]
+            }
+          },
+          "rust_libc": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file": "@@//support/rust-libc:rust_libc.BUILD.bazel",
+              "patch_args": [
+                "-p1"
+              ],
+              "patches": [],
+              "sha256": "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f",
+              "strip_prefix": "libc-0.2.185",
+              "type": "tar.gz",
+              "urls": [
+                "https://static.crates.io/crates/libc/libc-0.2.185.crate"
+              ]
+            }
+          }
+        }
+      }
+    },
     "@@pybind11_bazel+//:internal_configure.bzl%internal_configure_extension": {
       "general": {
         "bzlTransitiveDigest": "NRXra7941UfmNUyIxnLt82V5hULluVGL2nBsijTl4j4=",

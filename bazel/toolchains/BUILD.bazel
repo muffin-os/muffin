@@ -1,5 +1,4 @@
 load("@rules_rust//rust:toolchain.bzl", "rust_stdlib_filegroup")
-load(":bootstrap.bzl", "bootstrap_sysroot")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -9,36 +8,36 @@ rust_stdlib_filegroup(
     srcs = [],
 )
 
-bootstrap_sysroot(
-    name = "sysroot_rlibs",
-    crates = [
-        "@rust_src//:core",
-        "@rust_src//:compiler_builtins",
-        "@rust_src//:alloc",
-    ],
+rust_stdlib_filegroup(
+    name = "core_std",
+    srcs = ["//support/rust:core_sysroot"],
 )
 
 # rules_rust turns each file into `-L <dir>`, which is how unmodifiable @crates
 # targets resolve core/alloc/compiler_builtins without per-crate deps.
 rust_stdlib_filegroup(
     name = "muffin_std",
-    srcs = [":sysroot_rlibs"],
+    srcs = ["//support/rust:core_sysroot"],
 )
 
+_EXEC = [
+    "@platforms//cpu:x86_64",
+    "@platforms//os:linux",
+]
+
+_TARGET = [
+    "@platforms//cpu:x86_64",
+    "@platforms//os:none",
+    "//platforms:hardfloat",
+]
+
+# Each toolchain lists its `std_source` value explicitly. Constraint matching
+# alone is only a subset test, so without it every layer's toolchain would match
+# every layer's platform.
 toolchain(
     name = "x86_64-unknown-muffin",
-    exec_compatible_with = [
-        "@platforms//cpu:x86_64",
-        "@platforms//os:linux",
-    ],
-    target_compatible_with = [
-        "@platforms//cpu:x86_64",
-        "@platforms//os:none",
-        "//platforms:hardfloat",
-        # Listing :prebuilt excludes this toolchain from the bootstrap platform.
-        # Constraint matching alone is only a subset test.
-        "//platforms:prebuilt",
-    ],
+    exec_compatible_with = _EXEC,
+    target_compatible_with = _TARGET + ["//platforms:prebuilt"],
     target_settings = ["@rules_rust//rust/toolchain/channel:nightly"],
     toolchain = "//bazel/toolchains/muffin:impl",
     toolchain_type = "@rules_rust//rust:toolchain",
@@ -46,17 +45,18 @@ toolchain(
 
 toolchain(
     name = "x86_64-unknown-muffin-bootstrap",
-    exec_compatible_with = [
-        "@platforms//cpu:x86_64",
-        "@platforms//os:linux",
-    ],
-    target_compatible_with = [
-        "@platforms//cpu:x86_64",
-        "@platforms//os:none",
-        "//platforms:hardfloat",
-        "//platforms:bootstrap",
-    ],
+    exec_compatible_with = _EXEC,
+    target_compatible_with = _TARGET + ["//platforms:bootstrap"],
     target_settings = ["@rules_rust//rust/toolchain/channel:nightly"],
     toolchain = "//bazel/toolchains/bootstrap:impl",
+    toolchain_type = "@rules_rust//rust:toolchain",
+)
+
+toolchain(
+    name = "x86_64-unknown-muffin-std-bootstrap",
+    exec_compatible_with = _EXEC,
+    target_compatible_with = _TARGET + ["//platforms:core_only"],
+    target_settings = ["@rules_rust//rust/toolchain/channel:nightly"],
+    toolchain = "//bazel/toolchains/std_bootstrap:impl",
     toolchain_type = "@rules_rust//rust:toolchain",
 )

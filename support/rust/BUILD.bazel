@@ -1,0 +1,14 @@
+load("//bazel/toolchains:bootstrap.bzl", "bootstrap_sysroot")
+
+package(default_visibility = ["//visibility:public"])
+
+# Layer 1 of the sysroot, see platforms/BUILD.bazel.
+bootstrap_sysroot(
+    name = "core_sysroot",
+    crates = [
+        "@rust_src//:core",
+        "@rust_src//:compiler_builtins",
+        "@rust_src//:alloc",
+    ],
+    platform = "//platforms:x86_64-unknown-muffin-bootstrap",
+)

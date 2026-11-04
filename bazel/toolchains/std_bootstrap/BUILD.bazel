@@ -1,0 +1,4 @@
+load("//bazel/toolchains:common.bzl", "muffin_toolchain")
+
+# Name "impl": see the common.bzl docstring.
+muffin_toolchain(rust_std = "//bazel/toolchains:core_std")

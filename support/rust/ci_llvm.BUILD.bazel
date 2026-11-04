@@ -1,0 +1,11 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "all",
+    srcs = glob(["**"]),
+)
+
+filegroup(
+    name = "llvm_config",
+    srcs = ["rust-dev/bin/llvm-config"],
+)

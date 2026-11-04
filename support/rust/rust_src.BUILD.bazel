@@ -70,3 +70,21 @@ rust_library(
     ],
     tags = _TAGS,
 )
+
+# `#![no_core]` turns off the implicit `core` prelude, so `pub use core::*`
+# needs an explicit `--extern`. Without a path, rustc resolves the name from the
+# `-L` search path, which is the layer-1 sysroot. A Bazel dep on `:core` would
+# instead rebuild core in the layer-2 configuration, a second crate with a
+# different metadata hash than the one every other crate links.
+rust_library(
+    name = "rustc_std_workspace_core",
+    srcs = ["library/rustc-std-workspace-core/lib.rs"],
+    crate_name = "rustc_std_workspace_core",
+    crate_root = "library/rustc-std-workspace-core/lib.rs",
+    edition = "2024",
+    rustc_flags = [
+        "--extern=core",
+        "--extern=compiler_builtins",
+    ],
+    tags = _TAGS,
+)
