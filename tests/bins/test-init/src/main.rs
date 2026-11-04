@@ -1,7 +1,8 @@
 //! The init process of the integration tests. It lists `/bin/tests`, sorts the
 //! names byte-wise, spawns one child per file and reaps every child. It prints
-//! the wire-contract lines the host harness parses: `spawned`, `spawn complete`
-//! and `outcome`.
+//! the wire-contract lines the host harness parses: `spawned`, `spawn complete`,
+//! `outcome` and `complete`, then shuts the machine down. Pid 1 must not exit,
+//! the kernel panics on that.
 
 use std::fs;
 use std::os::unix::process::ExitStatusExt;
@@ -61,5 +62,6 @@ fn main() -> ExitCode {
             None => println!("test-init: outcome pid={pid} exit={}", status.into_raw()),
         }
     }
-    ExitCode::SUCCESS
+    println!("test-init: complete");
+    muffin_sys::shutdown()
 }

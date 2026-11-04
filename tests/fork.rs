@@ -20,6 +20,5 @@ fn fork() {
         "fork: parent waited pid=3 status=42",
         "fork: parent local=5 counter=1",
     ]);
-    report.assert_no_line_contains("terminating process");
     report.assert_exit_code(0, 42);
 }

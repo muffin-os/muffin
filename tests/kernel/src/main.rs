@@ -17,7 +17,7 @@ use kernel::file::vfs;
 use kernel::limine::BASE_REVISION;
 use kernel::mcore;
 use kernel::mcore::mtask::process::mem::{MemoryRegion, PrivateMemoryRegion};
-use kernel::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
+use kernel::mcore::mtask::process::{ParkOutcome, Process};
 use kernel::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use kernel::mcore::mtask::task::Task;
 use kernel::mem::address_space::AddressSpace;
@@ -53,9 +53,9 @@ static COW_CLONE_DONE: AtomicBool = AtomicBool::new(false);
 static COW_PROBE_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Boots the real kernel, mounts the root ext2 filesystem, then starts the
-/// `init=` executable from the kernel cmdline as pid 1 and waits for it to
-/// exit. The integration disks put `test-init` there, which spawns every file
-/// in `/bin/tests` and reports every outcome.
+/// `init=` executable from the kernel cmdline as pid 1. The integration disks
+/// put `test-init` there, which spawns every file in `/bin/tests`, reports
+/// every outcome, then shuts the machine down.
 #[unsafe(export_name = "kernel_main")]
 unsafe extern "C" fn main() -> ! {
     assert!(BASE_REVISION.is_supported());
@@ -195,27 +195,6 @@ unsafe extern "C" fn main() -> ! {
             .expect("should be able to create init process")
     };
     kernel::serial_println!("test-kernel: init {} pid={}", init_path, init.pid());
-
-    // The other CPUs run the scheduler, so CPU 0 can poll here without
-    // stalling user tasks.
-    let outcome = loop {
-        if let Some(outcome) = init.exit_outcome() {
-            break outcome;
-        }
-        x86_64::instructions::hlt();
-    };
-    // the harness pulls the plug once the init outcome is printed, so the
-    // disk the host inspects must be complete before that
-    vfs()
-        .read()
-        .sync_all()
-        .expect("should be able to sync file systems");
-    match outcome {
-        ExitOutcome::Exited(code) => kernel::serial_println!("test-kernel: init exit={}", code),
-        ExitOutcome::Signaled(signo) => {
-            kernel::serial_println!("test-kernel: init signal={}", signo.name());
-        }
-    }
 
     mcore::exit_bootstrap()
 }

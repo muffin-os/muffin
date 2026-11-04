@@ -69,6 +69,10 @@ pub(crate) fn note_cpu_halted() {
     HALTED_CPUS.fetch_add(1, Release);
 }
 
+pub fn is_shutdown_in_progress() -> bool {
+    SHUTDOWN_IN_PROGRESS.load(Acquire)
+}
+
 /// Powers the machine off. SIGTERMs every process, waits bounded for exits,
 /// halts the other cores, then writes SLP_EN to the PM1 control ports.
 ///

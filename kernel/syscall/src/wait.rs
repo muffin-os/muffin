@@ -50,8 +50,7 @@ pub fn sys_waitpid<Cx: WaitAccess + PermissionAccess>(
         if matching.peek().is_none() {
             return Err(ECHILD);
         }
-        if let Some(reaped) =
-            matching.find_map(|child| child.exit_outcome.map(|o| (child.pid, o)))
+        if let Some(reaped) = matching.find_map(|child| child.exit_outcome.map(|o| (child.pid, o)))
         {
             break reaped;
         }
@@ -263,9 +262,6 @@ mod tests {
             sys_waitpid(&cx, WaitTarget::ProcessGroup(pid(9)), None),
             Err(ECHILD)
         );
-        assert_eq!(
-            sys_waitpid(&cx, WaitTarget::CallerGroup, None),
-            Err(ECHILD)
-        );
+        assert_eq!(sys_waitpid(&cx, WaitTarget::CallerGroup, None), Err(ECHILD));
     }
 }

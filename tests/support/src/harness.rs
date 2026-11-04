@@ -12,10 +12,9 @@
 //! `test-init: spawned {path} pid={N}` per `/bin/tests` entry, then
 //! `test-init: spawn complete count={N}`, then per child
 //! `test-init: outcome pid={N} exit={code}` or
-//! `test-init: outcome pid={N} signal={NAME}`. The test kernel prints
-//! `test-kernel: init exit={code}` or `test-kernel: init signal={NAME}` after
-//! pid 1 ended and the disk is synced, which completes the run. Every parser
-//! below tolerates a leading log prefix (timestamp, level, target) by
+//! `test-init: outcome pid={N} signal={NAME}`, then `test-init: complete` and
+//! shuts the machine down, which syncs the disk and powers QEMU off. Every
+//! parser below tolerates a leading log prefix (timestamp, level, target) by
 //! anchoring on a substring inside the payload rather than matching from the
 //! start.
 //!
@@ -33,8 +32,6 @@ use std::{fs, thread};
 
 /// Overall wall-clock budget for a single boot. QEMU under TCG in CI is slow.
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(180);
-/// Extra window to keep draining serial output after completion is detected.
-const FINAL_MARKER_GRACE: Duration = Duration::from_secs(2);
 
 /// Paths to the images and firmware a single test boots.
 ///
@@ -177,86 +174,17 @@ impl KernelTest {
     /// and per-process outcomes.
     ///
     /// # Panics
-    /// Panics if QEMU exits before the init process reports its outcome, if the
-    /// deadline expires first, or if any serial line contains `kernel
+    /// Panics if the guest powers off before `test-init` reports completion,
+    /// if the deadline expires first, or if any serial line contains `kernel
     /// panicked`.
     #[must_use]
     pub fn run(self) -> RunReport {
-        let mut child = self.boot();
-        let (rx, reader) = spawn_serial_reader(&mut child);
-
-        let mut transcript: Vec<String> = vec![];
         let mut tracker = SpawnTracker::default();
-        let deadline = Instant::now() + self.deadline;
-        let mut complete_at: Option<Instant> = None;
-        let mut child_exited_early = false;
-
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                break;
-            }
-            // Once completion is detected, only wait out the grace window so any
-            // trailing lines still land in the transcript.
-            let timeout = match complete_at {
-                Some(seen) => {
-                    let grace_end = seen + FINAL_MARKER_GRACE;
-                    if now >= grace_end {
-                        break;
-                    }
-                    (grace_end - now).min(deadline - now)
-                }
-                None => deadline - now,
-            };
-            match rx.recv_timeout(timeout) {
-                Ok(Err(e)) => fail(&mut child, format!("serial read failed: {e}")),
-                Ok(Ok(line)) => {
-                    eprintln!("{line}");
-                    if line.contains("kernel panicked") {
-                        fail(
-                            &mut child,
-                            format!("kernel panicked during the run: {line:?}"),
-                        );
-                    }
-                    if let Err(message) = tracker.observe(&line) {
-                        fail(&mut child, message);
-                    }
-                    transcript.push(line);
-
-                    // Completion is the init outcome. `observe` guarantees
-                    // every announced process has an outcome by then, so the
-                    // transcript carries all outcomes before we stop reading.
-                    if complete_at.is_none() && tracker.complete() {
-                        complete_at = Some(Instant::now());
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => {
-                    // stdout closed: QEMU exited on its own.
-                    child_exited_early = complete_at.is_none();
-                    break;
-                }
-            }
-        }
-
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = reader.join();
-
-        if child_exited_early {
-            fail(
-                &mut child,
-                "QEMU exited before the init process reported an outcome; kernel likely \
-                     panicked or triple-faulted"
-                    .to_owned(),
-            );
-        }
-        if complete_at.is_none() {
-            fail(
-                &mut child,
-                "deadline expired before the init process reported an outcome".to_owned(),
-            );
-        }
+        let transcript = self.run_until_poweroff_observing(|line| tracker.observe(line));
+        assert!(
+            tracker.complete(),
+            "the guest powered off before test-init reported completion"
+        );
 
         let processes = tracker
             .pending
@@ -279,14 +207,22 @@ impl KernelTest {
         }
     }
 
-    /// Boots and waits for the guest to power QEMU off by itself.
-    ///
+    /// Boots and waits for the guest to power QEMU off by itself, without
+    /// parsing the `test-init` contract.
+    #[must_use]
+    pub fn run_until_poweroff(self) -> Vec<String> {
+        self.run_until_poweroff_observing(|_| Ok(()))
+    }
+
     /// Success is QEMU exiting with status 0 before the deadline. Guest-initiated
     /// ACPI poweroff is the only way that happens: a panic parks in a hlt loop
     /// (deadline), a triple fault reboots (deadline). Panics on a `kernel
-    /// panicked` line, on the deadline, and on a nonzero exit status.
-    #[must_use]
-    pub fn run_until_poweroff(self) -> Vec<String> {
+    /// panicked` line, on the deadline, on a nonzero exit status, and when
+    /// `observe` rejects a line.
+    fn run_until_poweroff_observing(
+        &self,
+        mut observe: impl FnMut(&str) -> Result<(), String>,
+    ) -> Vec<String> {
         let mut child = self.boot();
         let (rx, reader) = spawn_serial_reader(&mut child);
 
@@ -310,6 +246,9 @@ impl KernelTest {
                             &mut child,
                             format!("kernel panicked during the run: {line:?}"),
                         );
+                    }
+                    if let Err(message) = observe(&line) {
+                        fail(&mut child, message);
                     }
                     transcript.push(line);
                 }
@@ -401,7 +340,7 @@ impl SpawnTracker {
     /// Records `line` if it is one of the wire-contract lines, ignoring every
     /// other line. A contract line that does not parse, a spawn count that
     /// disagrees with the announcements, an outcome for an unannounced pid, or
-    /// an init outcome while a child still has none is an error.
+    /// a completion while a child still has no outcome is an error.
     fn observe(&mut self, line: &str) -> Result<(), String> {
         if let Some(rest) = anchor_after(line, "test-init: spawned ") {
             let (path, pid) =
@@ -431,12 +370,10 @@ impl SpawnTracker {
                 .find(|p| p.pid == pid)
                 .ok_or_else(|| format!("outcome for a pid never announced {line:?}"))?;
             proc.outcome = Some(outcome);
-        } else if line.contains("test-kernel: init exit=")
-            || line.contains("test-kernel: init signal=")
-        {
+        } else if line.contains("test-init: complete") {
             if let Some(p) = self.pending.iter().find(|p| p.outcome.is_none()) {
                 return Err(format!(
-                    "init ended before pid {} ({}) reported an outcome",
+                    "test-init completed before pid {} ({}) reported an outcome",
                     p.pid, p.path
                 ));
             }
@@ -445,7 +382,7 @@ impl SpawnTracker {
         Ok(())
     }
 
-    /// True once the init process has ended.
+    /// True once `test-init` has reported completion.
     fn complete(&self) -> bool {
         self.init_done
     }
@@ -674,17 +611,17 @@ mod tests {
     }
 
     #[test]
-    fn init_ending_before_a_child_outcome_is_an_error() {
+    fn completion_before_a_child_outcome_is_an_error() {
         let result = observe_all(&[
             "test-init: spawned /bin/a pid=2",
             "test-init: spawn complete count=1",
-            "test-kernel: init exit=0",
+            "test-init: complete",
         ]);
         assert!(result.is_err(), "missing child outcome was accepted");
     }
 
     #[test]
-    fn completes_on_the_init_outcome() {
+    fn completes_on_the_complete_line() {
         let mut tracker = observe_all(&[
             "test-init: spawned /bin/a pid=2",
             "[INFO] test-init: spawned /bin/b pid=3",
@@ -694,7 +631,7 @@ mod tests {
         ])
         .unwrap();
         assert!(!tracker.complete());
-        tracker.observe("test-kernel: init exit=0").unwrap();
+        tracker.observe("test-init: complete").unwrap();
         assert!(tracker.complete());
         assert_eq!(tracker.pending[0].outcome, Some(Outcome::Exited(0)));
     }

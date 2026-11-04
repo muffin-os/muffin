@@ -174,11 +174,10 @@ pub unsafe extern "C" fn waitpid(pid: pid_t, status: *mut c_int, options: c_int)
     let mut code = 0;
     let result = muffin_sys::waitpid(pid.into(), &mut code)
         .and_then(to_pid)
-        .map(|reaped| {
+        .inspect(|_| {
             if !status.is_null() {
                 unsafe { status.write(code) };
             }
-            reaped
         });
     ret(result)
 }

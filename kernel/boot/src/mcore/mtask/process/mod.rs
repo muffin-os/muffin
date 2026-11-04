@@ -503,6 +503,10 @@ impl Process {
     /// The children move to the reaper before the outcome becomes visible. A
     /// waiter that sees the outcome then never finds a child with a dead parent.
     pub fn set_exit_outcome(&self, outcome: ExitOutcome) {
+        // Shutdown SIGTERMs init like every other process.
+        if self.pid == ProcessId::REAPER && !crate::power::is_shutdown_in_progress() {
+            panic!("init (pid {}) exited: {outcome:?}", self.pid);
+        }
         for child in process_tree().read().all().filter(|p| p.ppid() == self.pid) {
             *child.ppid.write() = ProcessId::REAPER;
         }
