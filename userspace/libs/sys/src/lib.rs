@@ -199,15 +199,20 @@ pub fn waitpid(pid: i64) -> Result<i32, Errno> {
     Ok(status)
 }
 
-/// Builds the action that runs `handler` with an empty mask and returns
-/// through [`sigreturn_restorer`].
-pub fn handler_action(handler: extern "C" fn(Signal), flags: SaFlags) -> SigAction {
+/// Builds an action that returns through [`sigreturn_restorer`].
+pub fn action(handler: SigHandler, mask: SigSet, flags: SaFlags) -> SigAction {
     SigAction {
-        handler: SigHandler::new(handler as usize),
-        mask: SigSet::EMPTY,
+        handler,
+        mask,
         flags,
         restorer: sigreturn_restorer as *const () as usize,
     }
+}
+
+/// Builds the action that runs `handler` with an empty mask and returns
+/// through [`sigreturn_restorer`].
+pub fn handler_action(handler: extern "C" fn(Signal), flags: SaFlags) -> SigAction {
+    action(SigHandler::new(handler as usize), SigSet::EMPTY, flags)
 }
 
 pub fn install_handler(signo: Signal, handler: extern "C" fn(Signal)) -> Result<(), Errno> {
