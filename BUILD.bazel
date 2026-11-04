@@ -8,3 +8,8 @@ alias(
     name = "fmt",
     actual = "@rules_rust//tools/rustfmt",
 )
+
+alias(
+    name = "project",
+    actual = "@rules_rust//tools/rust_analyzer:gen_rust_project",
+)

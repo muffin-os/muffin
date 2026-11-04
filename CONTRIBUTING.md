@@ -112,7 +112,7 @@ Commit the resulting `bazel/Cargo.Bazel.lock` and `bazel/cargo-bazel-lock.json`.
 ### IDE Support
 
 ```bash
-bazel run @rules_rust//tools/rust_analyzer:gen_rust_project
+bazel run //:project
 ```
 
 This writes a gitignored `rust-project.json` that rust-analyzer picks up.
