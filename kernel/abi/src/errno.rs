@@ -136,8 +136,9 @@ n! {
     ESPIPE = 71,
     ESRCH = 72,
     ESTALE = 73,
-    ETIMEDEOUT = 74,
+    ETIMEDOUT = 74,
     ETXTBSY = 75,
     EWOULDBLOCK = 76,
     EXDEV = 77,
+    ECONNRESET = 78,
 }
