@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 use core::pin::Pin;
 
 use conquer_once::spin::OnceCell;
+use x86_64::instructions::interrupts;
 
 use crate::mcore::mtask::task::{Task, TaskQueue};
 
@@ -20,7 +21,9 @@ impl GlobalTaskQueue {
     }
 
     pub fn enqueue(task: Pin<Box<Task>>) {
-        global_queue().enqueue(task);
+        // `dequeue` spins on a half-finished enqueue, so a tick must not
+        // interrupt one.
+        interrupts::without_interrupts(|| global_queue().enqueue(task));
     }
 
     #[must_use]

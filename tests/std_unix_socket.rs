@@ -1,9 +1,6 @@
-//! End-to-end test for `std::os::unix::net` on muffin.
-//!
-//! `/bin/tests/std-unix-socket` binds a `UnixListener`, spawns itself as the
-//! client, and exchanges one line in each direction. The client's
-//! `shutdown(Write)` gives the server EOF on `read_line`. The drop of the
-//! server stream gives the client EOF on `read_to_string`.
+//! End-to-end test for `std::os::unix::net` on muffin, driven by
+//! `/bin/tests/std-unix-socket`. The echo phase blocks both sides on every
+//! message, which finds a wakeup that loses bytes the reader has consumed.
 
 use test_support::{KernelTest, host_env};
 
@@ -15,6 +12,7 @@ fn std_unix_socket() {
     report.assert_markers_in_order(&[
         "std-unix-socket: server listening",
         "std-unix-socket: client connected",
+        "std-unix-socket: client 20000 round trips ok",
         "std-unix-socket: server got hello from client",
         "std-unix-socket: client got hello from server",
         "std-unix-socket: server child exit=0",

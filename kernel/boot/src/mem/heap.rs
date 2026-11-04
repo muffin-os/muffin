@@ -8,6 +8,7 @@ use conquer_once::spin::OnceCell;
 use kernel_virtual_memory::Segment;
 use tracing::info;
 use x86_64::VirtAddr;
+use x86_64::instructions::interrupts;
 use x86_64::structures::paging::page::PageRangeInclusive;
 use x86_64::structures::paging::{Page, PageTableFlags, Size2MiB, Size4KiB};
 
@@ -61,6 +62,12 @@ impl HeapSizes {
 
 static MAIN_HEAP: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
 
+// Callers with interrupts off also take this lock, so a holder must not be
+// switched out.
+fn with_main_heap<R>(f: impl FnOnce(&mut linked_list_allocator::Heap) -> R) -> R {
+    interrupts::without_interrupts(|| f(&mut MAIN_HEAP.lock()))
+}
+
 /// Size of the bootstrap heap used before the main heap is mapped.
 const BOOTSTRAP_HEAP_SIZE: usize = 16 * 1024;
 
@@ -95,7 +102,10 @@ impl KernelAllocator {
 unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if HEAP_INITIALIZED.load(Relaxed) {
-            return unsafe { MAIN_HEAP.alloc(layout) };
+            return with_main_heap(|heap| {
+                heap.allocate_first_fit(layout)
+                    .map_or(core::ptr::null_mut(), NonNull::as_ptr)
+            });
         }
 
         let mut heap = BOOTSTRAP_HEAP.lock();
@@ -111,12 +121,14 @@ unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let (start, end) = Self::bootstrap_range();
         let addr = ptr as usize;
+        let Some(ptr) = NonNull::new(ptr) else {
+            return;
+        };
         if addr >= start && addr < end {
-            if let Some(ptr) = NonNull::new(ptr) {
-                unsafe { BOOTSTRAP_HEAP.lock().deallocate(ptr, layout) };
-            }
+            unsafe { BOOTSTRAP_HEAP.lock().deallocate(ptr, layout) };
         } else {
-            unsafe { MAIN_HEAP.dealloc(ptr, layout) };
+            // Safety: `alloc` returned `ptr` from the main heap for `layout`.
+            with_main_heap(|heap| unsafe { heap.deallocate(ptr, layout) });
         }
     }
 }
@@ -150,9 +162,7 @@ pub(in crate::mem) fn init(address_space: &AddressSpace, usable_physical_memory_
         .expect("should be able to map heap");
 
     unsafe {
-        MAIN_HEAP
-            .lock()
-            .init(HEAP_START.as_mut_ptr(), initial_heap_size);
+        with_main_heap(|heap| heap.init(HEAP_START.as_mut_ptr(), initial_heap_size));
     }
 
     HEAP_INITIALIZED.store(true, Relaxed);
@@ -191,7 +201,7 @@ pub(in crate::mem) fn init_stage2() {
         .expect("should be able to map more heap");
 
     unsafe {
-        MAIN_HEAP.lock().extend(total_heap_size - initial_heap_size);
+        with_main_heap(|heap| heap.extend(total_heap_size - initial_heap_size));
     }
 }
 
@@ -204,19 +214,19 @@ impl Heap {
     }
 
     pub fn free() -> usize {
-        MAIN_HEAP.lock().free()
+        with_main_heap(|heap| heap.free())
     }
 
     pub fn used() -> usize {
-        MAIN_HEAP.lock().used()
+        with_main_heap(|heap| heap.used())
     }
 
     pub fn size() -> usize {
-        MAIN_HEAP.lock().size()
+        with_main_heap(|heap| heap.size())
     }
 
     pub fn bottom() -> VirtAddr {
-        VirtAddr::new(MAIN_HEAP.lock().bottom() as u64)
+        VirtAddr::new(with_main_heap(|heap| heap.bottom()) as u64)
     }
 }
 

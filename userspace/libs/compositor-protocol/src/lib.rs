@@ -35,14 +35,39 @@ impl NewWindowRequest {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewWindowResponse {}
 
+/// Marks a window rectangle as changed. Nothing is shown until the next
+/// `Finish`. The part outside the window is ignored.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DamageRequest {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DamageResponse {}
+
+/// Ends a frame: every rectangle marked by `Damage` since the last `Finish`
+/// reaches the screen before the response.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinishRequest {}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinishResponse {}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Request {
     NewWindow(NewWindowRequest),
+    Damage(DamageRequest),
+    Finish(FinishRequest),
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Response {
     NewWindow(NewWindowResponse),
+    Damage(DamageResponse),
+    Finish(FinishResponse),
 }
 
 /// Writes one frame: a `u32` little-endian byte length, then the JSON body.

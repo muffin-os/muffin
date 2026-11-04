@@ -1,16 +1,24 @@
-use std::fs::{self, OpenOptions};
+use std::f32::consts::{FRAC_PI_2, TAU};
+use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::exit;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use compositor_protocol::{
-    NewWindowRequest, NewWindowResponse, Request, Response, SOCKET_PATH, read_message,
-    write_message,
+    DamageRequest, DamageResponse, FinishRequest, FinishResponse, NewWindowRequest,
+    NewWindowResponse, Request, Response, SOCKET_PATH, read_message, write_message,
 };
-use muffin_sys::{MapFlags, ProtFlags, mmap, munmap};
+use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
+use gfx::backend::software::{
+    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftBuffer, SoftCompiler, SoftPipeline,
+    SoftQueue, SoftShaderDef,
+};
+use gfx::error::GfxError;
+use kernel_abi::gfx::BufferDesc;
+use muffin_sys::{MapFlags, ProtFlags, mmap};
 
 const CONNECT_ATTEMPTS: u32 = 50;
 const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -18,6 +26,183 @@ const WIDTH: u32 = 256;
 const HEIGHT: u32 = 128;
 const PIXEL: u32 = 0xFF20_60C0;
 const SHM_PATH: &str = "/dev/shm/compositor-demo";
+
+const FRAME_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / 30);
+const TURN: Duration = Duration::from_secs(8);
+const REPORT_FRAME: u32 = 30;
+
+/// Leaves a margin so the window background stays visible around the circle.
+const CIRCLE_RADIUS_PX: u32 = 56;
+const CIRCLE_SEGMENTS: u32 = 64;
+
+/// The triangle the compositor draws; the circle shows its colour gradient.
+const TRIANGLE: [[f32; 2]; 3] = [[0.0, 0.75], [-0.75, -0.75], [0.75, -0.75]];
+/// Circumcircle of `TRIANGLE`, so each corner keeps its pure colour on the rim.
+const CIRCUMCENTER_Y: f32 = -0.1875;
+const CIRCUMRADIUS: f32 = 0.9375;
+
+// Vertex layout (x, y, r, g, b).
+fn color_vert(input: &[f32], output: &mut [f32]) {
+    output[..5].copy_from_slice(&input[..5]);
+}
+
+#[inline(always)]
+fn channel_to_u8(value: f32) -> u32 {
+    if value <= 0.0 {
+        0
+    } else if value >= 1.0 {
+        255
+    } else {
+        (value * 255.0) as u32
+    }
+}
+
+fn color_frag(interp: &[f32]) -> u32 {
+    let r = channel_to_u8(interp[0]);
+    let g = channel_to_u8(interp[1]);
+    let b = channel_to_u8(interp[2]);
+    0xFF00_0000 | (r << 16) | (g << 8) | b
+}
+
+fn gfx_error(e: GfxError) -> io::Error {
+    io::Error::other(format!("gfx {e:?}"))
+}
+
+// The muffin target has no `libm`, so `f32::sin_cos` does not link. Sixteen
+// Taylor terms over one quadrant exceed `f32` precision.
+fn sin_cos(angle: f32) -> (f32, f32) {
+    let quadrant = (angle / FRAC_PI_2) as u32;
+    let reduced = f64::from(angle - quadrant as f32 * FRAC_PI_2);
+    let (mut sin, mut cos) = (0.0f64, 0.0f64);
+    let mut term = 1.0f64;
+    for n in 1..=16u32 {
+        match (n - 1) % 4 {
+            0 => cos += term,
+            1 => sin += term,
+            2 => cos -= term,
+            _ => sin -= term,
+        }
+        term *= reduced / f64::from(n);
+    }
+    let (sin, cos) = (sin as f32, cos as f32);
+    match quadrant % 4 {
+        0 => (sin, cos),
+        1 => (cos, -sin),
+        2 => (-sin, -cos),
+        _ => (-cos, sin),
+    }
+}
+
+// The barycentric weights double as the RGB channels; the fragment shader
+// saturates weights outside the triangle.
+fn triangle_color(x: f32, y: f32) -> [f32; 3] {
+    let [[ax, ay], [bx, by], [cx, cy]] = TRIANGLE;
+    let det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    let a = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) / det;
+    let b = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / det;
+    [a, b, 1.0 - a - b]
+}
+
+fn rim_vertex(segment: u32, phase: f32) -> [f32; 5] {
+    let angle = segment as f32 * TAU / CIRCLE_SEGMENTS as f32;
+    let (sin, cos) = sin_cos(angle);
+    let (color_sin, color_cos) = sin_cos(angle + phase);
+    let [r, g, b] = triangle_color(
+        CIRCUMRADIUS * color_cos,
+        CIRCUMCENTER_Y + CIRCUMRADIUS * color_sin,
+    );
+    let radius = CIRCLE_RADIUS_PX as f32;
+    [
+        radius * cos / (WIDTH as f32 / 2.0),
+        radius * sin / (HEIGHT as f32 / 2.0),
+        r,
+        g,
+        b,
+    ]
+}
+
+// Only the colours depend on `phase`; the geometry never changes, so no
+// clear is needed between frames.
+fn circle_vertices(phase: f32) -> Vec<u8> {
+    let [r, g, b] = triangle_color(0.0, CIRCUMCENTER_Y);
+    let center = [0.0, 0.0, r, g, b];
+    (0..CIRCLE_SEGMENTS)
+        .flat_map(|segment| {
+            [
+                center,
+                rim_vertex(segment, phase),
+                rim_vertex((segment + 1) % CIRCLE_SEGMENTS, phase),
+            ]
+        })
+        .flatten()
+        .flat_map(f32::to_ne_bytes)
+        .collect()
+}
+
+struct Circle<'fb> {
+    pipeline: SoftPipeline,
+    vertices: SoftBuffer,
+    queue: SoftQueue<'fb>,
+}
+
+impl<'fb> Circle<'fb> {
+    fn new(pixels: &'fb mut [u32]) -> io::Result<Self> {
+        let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+        let vert = backend
+            .compile_shader(&SoftShaderDef::Vertex {
+                func: color_vert,
+                output_count: 5,
+            })
+            .map_err(gfx_error)?;
+        let frag = backend
+            .compile_shader(&SoftShaderDef::Fragment(color_frag))
+            .map_err(gfx_error)?;
+        let pipeline = backend
+            .compile_pipeline(&PipelineDesc {
+                vertex_shader: &vert,
+                pixel_shader: &frag,
+                vertex_stride: 5 * ATTRIBUTE_BYTES,
+            })
+            .map_err(gfx_error)?;
+        let vertices = backend
+            .alloc_buffer(&BufferDesc {
+                size: CIRCLE_SEGMENTS as usize * 3 * 5 * ATTRIBUTE_BYTES,
+                is_dynamic: true,
+            })
+            .map_err(gfx_error)?;
+        Ok(Self {
+            pipeline,
+            vertices,
+            queue: SoftQueue::new(pixels, WIDTH, HEIGHT, WIDTH as usize),
+        })
+    }
+
+    fn damage() -> DamageRequest {
+        DamageRequest {
+            x: WIDTH / 2 - CIRCLE_RADIUS_PX,
+            y: HEIGHT / 2 - CIRCLE_RADIUS_PX,
+            width: 2 * CIRCLE_RADIUS_PX,
+            height: 2 * CIRCLE_RADIUS_PX,
+        }
+    }
+
+    fn draw(&mut self, phase: f32) -> io::Result<()> {
+        self.vertices
+            .data
+            .copy_from_slice(&circle_vertices(phase));
+        self.queue
+            .submit(|rec| {
+                rec.bind_pipeline(&self.pipeline);
+                rec.bind_vertex_buffer(&self.vertices);
+                rec.draw(CIRCLE_SEGMENTS * 3)
+            })
+            .map_err(gfx_error)
+    }
+}
+
+fn phase(elapsed: Duration) -> f32 {
+    (elapsed.as_millis() % TURN.as_millis()) as f32 * TAU / TURN.as_millis() as f32
+}
 
 /// Retries because `services` spawns the compositor first but does not wait for its socket.
 fn connect() -> io::Result<UnixStream> {
@@ -32,6 +217,16 @@ fn connect() -> io::Result<UnixStream> {
             }
         }
     }
+}
+
+fn call(stream: &UnixStream, request: &Request) -> io::Result<Response> {
+    write_message(&mut &*stream, request)?;
+    read_message::<Response>(&mut &*stream)?
+        .ok_or_else(|| io::Error::other("compositor closed the connection"))
+}
+
+fn unexpected(response: Response) -> io::Error {
+    io::Error::other(format!("unexpected response {response:?}"))
 }
 
 fn run() -> io::Result<()> {
@@ -64,22 +259,42 @@ fn run() -> io::Result<()> {
     )
     .map_err(|_| io::Error::other("mmap"))?;
     // SAFETY: the mapping is writable, covers `len` bytes and is page-aligned,
-    // hence u32-aligned. `pixels` is not used after the `munmap` below.
+    // thus u32-aligned. The demo never unmaps it, because the demo runs until
+    // it is killed.
     let pixels =
         unsafe { std::slice::from_raw_parts_mut(addr.cast::<u32>(), len / size_of::<u32>()) };
     pixels.fill(PIXEL);
+    let mut circle = Circle::new(pixels)?;
+    let start = Instant::now();
+    circle.draw(phase(start.elapsed()))?;
 
-    write_message(&mut &stream, &Request::NewWindow(request))?;
-    let Some(response) = read_message::<Response>(&mut &stream)? else {
-        return Err(io::Error::other("compositor closed the connection"));
-    };
-    unsafe { munmap(addr, len) }.map_err(|_| io::Error::other("munmap"))?;
-    drop(file);
-    fs::remove_file(SHM_PATH)?;
-    match response {
+    match call(&stream, &Request::NewWindow(request))? {
         Response::NewWindow(NewWindowResponse {}) => println!("compositor-demo: window created"),
+        other => return Err(unexpected(other)),
     }
-    Ok(())
+
+    let mut frame = 0u32;
+    loop {
+        frame += 1;
+        if let Some(wait) = (start + FRAME_PERIOD * frame).checked_duration_since(Instant::now()) {
+            sleep(wait);
+        }
+        circle.draw(phase(start.elapsed()))?;
+        match call(&stream, &Request::Damage(Circle::damage()))? {
+            Response::Damage(DamageResponse {}) => {}
+            other => return Err(unexpected(other)),
+        }
+        match call(&stream, &Request::Finish(FinishRequest {}))? {
+            Response::Finish(FinishResponse {}) => {}
+            other => return Err(unexpected(other)),
+        }
+        if frame == REPORT_FRAME {
+            println!(
+                "compositor-demo: {REPORT_FRAME} frames finished in {}ms",
+                start.elapsed().as_millis()
+            );
+        }
+    }
 }
 
 fn main() {

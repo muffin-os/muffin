@@ -1,9 +1,10 @@
-//! Starts `/bin/compositor` as a detached child and runs `/bin/compositor-demo`
-//! to completion. test-init waits for this binary only, so the compositor may
-//! keep running until the poweroff.
-
 use std::io;
 use std::process::{Command, exit};
+use std::thread::sleep;
+use std::time::Duration;
+
+/// Long enough for the demo to print its frame report.
+const DEMO_RUN_TIME: Duration = Duration::from_secs(3);
 
 fn main() {
     if let Err(e) = run() {
@@ -14,12 +15,10 @@ fn main() {
 
 fn run() -> io::Result<()> {
     Command::new("/bin/compositor").spawn()?;
-    let status = Command::new("/bin/compositor-demo").status()?;
-    if status.code() != Some(0) {
-        return Err(io::Error::other(format!(
-            "compositor-demo exited with {status}"
-        )));
-    }
-    println!("compositor-smoke: demo exit=0");
+    let mut demo = Command::new("/bin/compositor-demo").spawn()?;
+    sleep(DEMO_RUN_TIME);
+    demo.kill()?;
+    let status = demo.wait()?;
+    println!("compositor-smoke: demo killed, {status}");
     Ok(())
 }

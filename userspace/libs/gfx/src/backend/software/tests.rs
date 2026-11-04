@@ -5,7 +5,7 @@ use kernel_abi::gfx::BufferDesc;
 
 use crate::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
 use crate::backend::software::{
-    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftRecorder,
+    ATTRIBUTE_BYTES, Rect, SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftRecorder,
     SoftShaderDef,
 };
 use crate::error::GfxError;
@@ -467,6 +467,52 @@ fn blit_clips_to_the_target_and_skips_padding() {
     q.blit(&image, 4, 3);
 
     assert_eq!(target, [1, 2, 3, 0xDEAD_BEEF, 5, 6, 7, 0xDEAD_BEEF]);
+}
+
+#[test]
+fn blit_region_copies_only_the_rect_and_clips_to_the_target() {
+    let image: Vec<u32> = (1..=16).collect();
+    let mut target = [0u32; 9];
+    let mut q = SoftQueue::new(&mut target, 3, 3, 3);
+
+    q.blit_region(
+        &image,
+        4,
+        Rect {
+            x: 1,
+            y: 2,
+            width: 2,
+            height: 2,
+        },
+    );
+
+    assert_eq!(target, [0, 0, 0, 0, 0, 0, 0, 10, 11]);
+}
+
+#[test]
+fn rect_union_is_the_bounding_box() {
+    let a = Rect {
+        x: 4,
+        y: 1,
+        width: 2,
+        height: 5,
+    };
+    let b = Rect {
+        x: 1,
+        y: 3,
+        width: 2,
+        height: 1,
+    };
+
+    assert_eq!(
+        a.union(b),
+        Rect {
+            x: 1,
+            y: 1,
+            width: 5,
+            height: 5,
+        }
+    );
 }
 
 fn blue_frag(_: &[f32]) -> u32 {

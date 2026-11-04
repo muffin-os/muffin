@@ -6,13 +6,13 @@ use std::process::exit;
 use std::time::Instant;
 
 use compositor_protocol::{
-    NewWindowRequest, NewWindowResponse, Request, Response, SOCKET_PATH, read_message,
-    write_message,
+    DamageRequest, DamageResponse, FinishRequest, FinishResponse, NewWindowRequest,
+    NewWindowResponse, Request, Response, SOCKET_PATH, read_message, write_message,
 };
 use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
 use gfx::backend::software::{
-    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftBuffer, SoftCompiler, SoftPipeline, SoftQueue,
-    SoftShaderDef,
+    ATTRIBUTE_BYTES, Rect, SoftAllocator, SoftBackend, SoftBuffer, SoftCompiler, SoftPipeline,
+    SoftQueue, SoftShaderDef,
 };
 use gfx::error::GfxError;
 use kernel_abi::gfx::BufferDesc;
@@ -162,19 +162,103 @@ impl Frame<'_> {
         self.fb.sync_all()
     }
 
-    /// Copies `pixels` of `width` by `height` to the top-left corner and
-    /// flushes the framebuffer.
-    fn blit(&mut self, pixels: &[u32], width: u32, height: u32) -> io::Result<()> {
-        self.queue.blit(pixels, width, height);
+    fn blit_region(&mut self, pixels: &[u32], width: u32, rect: Rect) -> io::Result<()> {
+        self.queue.blit_region(pixels, width as usize, rect);
         self.fb.sync_all()
     }
+}
+
+struct Window {
+    addr: *mut u8,
+    len: usize,
+    width: u32,
+    height: u32,
+    damage: Option<Rect>,
+    // Keeps the shm object alive while the mapping exists.
+    _file: File,
+}
+
+impl Window {
+    fn open(request: &NewWindowRequest) -> io::Result<Self> {
+        let len = request
+            .buffer_len()
+            .ok_or_else(|| io::Error::other("size"))?;
+        let file = File::open(&request.path)?;
+        if file.metadata()?.len() < len as u64 {
+            return Err(io::Error::other("short buffer"));
+        }
+        let addr = mmap(
+            0,
+            len,
+            ProtFlags::READ,
+            MapFlags::SHARED,
+            file.as_raw_fd(),
+            0,
+        )
+        .map_err(|_| io::Error::other("mmap"))?;
+        Ok(Self {
+            addr,
+            len,
+            width: request.width,
+            height: request.height,
+            damage: None,
+            _file: file,
+        })
+    }
+
+    fn pixels(&self) -> &[u32] {
+        // SAFETY: the mapping is read-only, covers `len` bytes and is
+        // page-aligned, thus u32-aligned. It lives until `drop`.
+        unsafe { std::slice::from_raw_parts(self.addr.cast::<u32>(), self.len / size_of::<u32>()) }
+    }
+
+    fn full_rect(&self) -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width: self.width,
+            height: self.height,
+        }
+    }
+
+    fn damage(&mut self, request: &DamageRequest) {
+        let x = request.x.min(self.width);
+        let y = request.y.min(self.height);
+        let width = request.x.saturating_add(request.width).min(self.width) - x;
+        let height = request.y.saturating_add(request.height).min(self.height) - y;
+        if width == 0 || height == 0 {
+            return;
+        }
+        let rect = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        self.damage = Some(self.damage.map_or(rect, |damage| damage.union(rect)));
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        // SAFETY: `addr` and `len` name the mapping that `open` made. No
+        // slice from `pixels` outlives `self`.
+        if unsafe { munmap(self.addr, self.len) }.is_err() {
+            println!("compositor: munmap failed");
+        }
+    }
+}
+
+fn no_window() -> io::Error {
+    io::Error::other("request before NewWindow")
 }
 
 fn serve(stream: &UnixStream, frame: &mut Frame<'_>) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut writer = stream;
+    let mut window: Option<Window> = None;
     while let Some(request) = read_message::<Request>(&mut reader)? {
-        match request {
+        let response = match request {
             Request::NewWindow(request) => {
                 let NewWindowRequest {
                     path,
@@ -190,37 +274,26 @@ fn serve(stream: &UnixStream, frame: &mut Frame<'_>) -> io::Result<()> {
                     frame.height,
                     start.elapsed().as_micros()
                 );
-                let len = request
-                    .buffer_len()
-                    .ok_or_else(|| io::Error::other("size"))?;
-                let file = File::open(path)?;
-                if file.metadata()?.len() < len as u64 {
-                    return Err(io::Error::other("short buffer"));
-                }
-                let addr = mmap(
-                    0,
-                    len,
-                    ProtFlags::READ,
-                    MapFlags::SHARED,
-                    file.as_raw_fd(),
-                    0,
-                )
-                .map_err(|_| io::Error::other("mmap"))?;
-                // SAFETY: the mapping is read-only, covers `len` bytes and is
-                // page-aligned, hence u32-aligned. `pixels` is not used after
-                // the `munmap` below.
-                let pixels = unsafe {
-                    std::slice::from_raw_parts(addr.cast::<u32>(), len / size_of::<u32>())
-                };
-                let blitted = frame.blit(pixels, *width, *height);
-                let first = pixels.first().copied().unwrap_or(0);
-                unsafe { munmap(addr, len) }.map_err(|_| io::Error::other("munmap"))?;
-                blitted?;
+                let opened = Window::open(&request)?;
+                frame.blit_region(opened.pixels(), opened.width, opened.full_rect())?;
+                let first = opened.pixels().first().copied().unwrap_or(0);
                 println!("compositor: blit {width}x{height} first=0x{first:08x}");
-                drop(file);
-                write_message(&mut writer, &Response::NewWindow(NewWindowResponse {}))?;
+                window = Some(opened);
+                Response::NewWindow(NewWindowResponse {})
             }
-        }
+            Request::Damage(request) => {
+                window.as_mut().ok_or_else(no_window)?.damage(&request);
+                Response::Damage(DamageResponse {})
+            }
+            Request::Finish(FinishRequest {}) => {
+                let window = window.as_mut().ok_or_else(no_window)?;
+                if let Some(rect) = window.damage.take() {
+                    frame.blit_region(window.pixels(), window.width, rect)?;
+                }
+                Response::Finish(FinishResponse {})
+            }
+        };
+        write_message(&mut writer, &response)?;
     }
     Ok(())
 }

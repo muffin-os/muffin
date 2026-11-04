@@ -88,7 +88,10 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_FTRUNCATE => dispatch_sys_ftruncate(arg1, arg2),
         kernel_abi::SYS_UNLINK => dispatch_sys_unlink(arg1, arg2),
         kernel_abi::SYS_MUNMAP => dispatch_sys_munmap(arg1, arg2),
-        _ => Err(ENOSYS),
+        _ => {
+            error!("unknown syscall number {n}");
+            Err(ENOSYS)
+        }
     };
 
     match result {

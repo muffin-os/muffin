@@ -8,7 +8,9 @@ rust_binary(
     edition = "2024",
     platform = "//platforms:x86_64-unknown-muffin",
     deps = [
+        "//kernel/abi",
         "//userspace/libs/compositor-protocol",
+        "//userspace/libs/gfx",
         "//userspace/libs/sys",
     ],
 )

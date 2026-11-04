@@ -389,12 +389,11 @@ impl Process {
         }
     }
 
-    /// Parks the current task until `should_wake` holds or an exec reap
-    /// targets it, reparking on spurious wakeups. A deadline only arms a
-    /// wakeup, the closure must observe it to end the wait. A `queue` arms a
-    /// wakeup from `WaitQueue::wake_all`. Parking anywhere else hides the task
-    /// from signal generation and the exec reaper, so every blocking syscall
-    /// must wait through here.
+    /// Parks the current task until `should_wake` returns true or an exec reap
+    /// targets the task. `should_wake` is not called again after it returns
+    /// true, so it can consume data. A `deadline` or a `queue` only arms a
+    /// wakeup; `should_wake` decides. Every blocking syscall must wait through
+    /// this function, or signals and the exec reaper cannot reach the task.
     pub fn park_current_task(
         &self,
         deadline: Option<Instant>,
@@ -424,11 +423,18 @@ impl Process {
             if let Some(queue) = queue {
                 queue.register(waker.clone());
             }
-            if should_wake() || self.reap_requested_for(tid) {
+            // The condition can become true before the wakers are armed. The
+            // block on the woken ticket consumes the ticket, so the
+            // registrations above stay balanced.
+            let ready = should_wake();
+            if ready || self.reap_requested_for(tid) {
                 wake(&waker);
             }
             block_current(park_ticket);
             self.clear_interruptible_waker(tid);
+            if ready {
+                return ParkOutcome::Ready;
+            }
         }
     }
 

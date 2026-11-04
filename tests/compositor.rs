@@ -21,7 +21,8 @@ fn compositor() {
         "compositor: frame drawn 800x600",
         "compositor: blit 256x128 first=0xff2060c0",
         "compositor-demo: window created",
-        "compositor-smoke: demo exit=0",
+        "compositor-demo: 30 frames finished",
+        "compositor-smoke: demo killed",
     ]);
     report.assert_exit_code(0, 0);
 }
