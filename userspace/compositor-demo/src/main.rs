@@ -30,6 +30,8 @@ const PIXEL: u32 = 0xFF20_60C0;
 
 const TURN: Duration = Duration::from_secs(8);
 const REPORT_PERIOD: Duration = Duration::from_secs(1);
+/// After this many frame reports the demo goes silent and keeps drawing.
+const MAX_REPORTS: u32 = 3;
 
 /// Leaves a margin so the window background stays visible around the circle.
 const CIRCLE_RADIUS_PX: u32 = 56;
@@ -241,6 +243,7 @@ fn run() -> io::Result<()> {
 
     let mut report_start = Instant::now();
     let mut report_frames = 0u32;
+    let mut reports_left = MAX_REPORTS;
     loop {
         let fence = circle.draw(phase(start.elapsed()))?;
         match call(&stream, &Request::Damage(Circle::damage()))? {
@@ -252,13 +255,14 @@ fn run() -> io::Result<()> {
             other => return Err(unexpected(other)),
         }
         report_frames += 1;
-        if report_start.elapsed() >= REPORT_PERIOD {
+        if reports_left > 0 && report_start.elapsed() >= REPORT_PERIOD {
             println!(
                 "compositor-demo: {report_frames} frames in the last {}ms",
                 report_start.elapsed().as_millis()
             );
             report_start = Instant::now();
             report_frames = 0;
+            reports_left -= 1;
         }
     }
 }

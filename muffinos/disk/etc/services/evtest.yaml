@@ -1,0 +1,2 @@
+exec: /bin/evtest
+restart: no

@@ -10,7 +10,7 @@ use kernel_abi::{
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
-    MemoryRegion as _, SignalAccess,
+    MemoryRegion as _, SignalAccess, WaitAccess,
 };
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
@@ -149,30 +149,42 @@ impl FileAccess for KernelAccess {
     }
 
     fn read(&self, fd: Self::Fd, buf: &mut [u8]) -> Result<usize, Errno> {
-        let fds = self.process.file_descriptors();
-        let guard = fds.read();
+        loop {
+            let fds = self.process.file_descriptors();
+            let guard = fds.read();
 
-        let desc = guard.get(&fd).ok_or(EBADF)?;
-        let socket = match desc.file_description().as_ref() {
-            OpenFileDescription::File(ofd) => {
-                if !ofd.access().can_read() {
-                    return Err(EBADF);
+            let desc = guard.get(&fd).ok_or(EBADF)?;
+            let socket = match desc.file_description().as_ref() {
+                OpenFileDescription::File(ofd) => {
+                    if !ofd.access().can_read() {
+                        return Err(EBADF);
+                    }
+                    let offset = ofd.position().load(Relaxed);
+                    let read = match ofd.read(&mut *buf, offset.into_usize()) {
+                        Ok(read) => read,
+                        Err(ReadError::WouldBlock) => {
+                            // The wait must not hold the descriptor table lock.
+                            drop(guard);
+                            // TODO(tpdenk): park on a wait queue the device wakes, once
+                            // device IRQs reach the IO APIC. Until then the read polls.
+                            self.sleep_one_poll()?;
+                            continue;
+                        }
+                        Err(ReadError::NotReadable) => return Err(EISDIR),
+                        Err(ReadError::BufferTooSmall) => return Err(EINVAL),
+                        Err(ReadError::FsError(_) | ReadError::ReadFailed) => return Err(EIO),
+                    };
+                    // The load and the store are separate. A fork shares the description
+                    // between processes, so a concurrent read can lose an offset update.
+                    ofd.position().store(offset + read.into_u64(), Relaxed);
+                    return Ok(read);
                 }
-                let offset = ofd.position().load(Relaxed);
-                let read = ofd.read(buf, offset.into_usize()).map_err(|e| match e {
-                    ReadError::NotReadable => EISDIR,
-                    ReadError::FsError(_) | ReadError::ReadFailed => EIO,
-                })?;
-                // The load and the store are separate. A fork shares the description
-                // between processes, so a concurrent read can lose an offset update.
-                ofd.position().store(offset + read.into_u64(), Relaxed);
-                return Ok(read);
-            }
-            OpenFileDescription::Socket(socket) => socket.clone(),
-        };
-        // The wait must not hold the descriptor table lock.
-        drop(guard);
-        self.block_on(socket.waiters(), || socket.try_read(buf))
+                OpenFileDescription::Socket(socket) => socket.clone(),
+            };
+            // The wait must not hold the descriptor table lock.
+            drop(guard);
+            return self.block_on(socket.waiters(), || socket.try_read(buf));
+        }
     }
 
     fn write(&self, fd: Self::Fd, buf: &[u8]) -> Result<usize, Errno> {

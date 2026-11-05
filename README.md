@@ -18,7 +18,7 @@ The project is structured as a modular Bazel build with a kernel and userspace c
 ## Key Features
 
 - **Multi-threading support** - Cooperative and preemptive multitasking with process and thread management
-- **VirtIO drivers** - Support for VirtIO block devices and GPU with PCI device discovery
+- **VirtIO drivers** - Support for VirtIO block devices, GPU, and input devices (`/dev/input/eventN`) with PCI device discovery
 - **Virtual filesystem (VFS)** - Abstraction layer with ext2 filesystem support and devfs
 - **Memory management** - Physical and virtual memory allocators with custom address space management
 - **POSIX system interface** - Eventually POSIX-compatible system interface with support for file operations, threading primitives (pthread), memory management, and more (work in progress)

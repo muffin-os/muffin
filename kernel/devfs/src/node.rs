@@ -5,7 +5,7 @@ use core::ops::{Deref, DerefMut};
 
 use kernel_vfs::OpenError;
 
-use crate::DevFile;
+use crate::{DevFile, RegisterError};
 
 pub struct DevNode {
     name: String,
@@ -92,8 +92,13 @@ impl DevDirectoryNode {
         self.children.iter_mut().find(|node| node.name() == name)
     }
 
-    pub fn children_mut(&mut self) -> &mut Vec<DevNode> {
-        &mut self.children
+    /// Rejects a second child with the name of `node`.
+    pub fn add_child(&mut self, node: DevNode) -> Result<(), RegisterError> {
+        if self.lookup_child(node.name()).is_some() {
+            return Err(RegisterError::AlreadyExists);
+        }
+        self.children.push(node);
+        Ok(())
     }
 }
 

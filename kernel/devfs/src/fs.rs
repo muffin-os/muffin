@@ -87,18 +87,29 @@ impl DevFs {
             .ok_or(RegisterError::ResolveError(
                 ResolveError::ParentNotDirectory,
             ))?;
-        if parent_dir.lookup_child(filename).is_some() {
-            return Err(RegisterError::AlreadyExists);
-        }
-
         let file_node = DevNode::new(
             filename.to_string(),
             DevNodeKind::File(DevFileNode::new(Box::new(move || {
                 open_fn().map(|file| Box::new(file) as Box<dyn DevFile>)
             }))),
         );
-        parent_dir.children_mut().push(file_node);
-        Ok(())
+        parent_dir.add_child(file_node)
+    }
+
+    pub fn register_directory(&mut self, path: &AbsolutePath) -> Result<(), RegisterError> {
+        let parent = path.parent().ok_or(ResolveError::ParentNotFound)?;
+        let name = path.file_name().ok_or(ResolveError::ParentNotFound)?;
+
+        let parent_node = self.resolve_node_mut(parent)?;
+        let parent_dir = parent_node
+            .directory_mut()
+            .ok_or(RegisterError::ResolveError(
+                ResolveError::ParentNotDirectory,
+            ))?;
+        parent_dir.add_child(DevNode::new(
+            name.to_string(),
+            DevNodeKind::Directory(DevDirectoryNode::new()),
+        ))
     }
 
     fn resolve_node(&self, path: &AbsolutePath) -> Result<&DevNode, ResolveError> {

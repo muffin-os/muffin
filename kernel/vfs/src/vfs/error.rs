@@ -59,6 +59,12 @@ pub enum ReadError {
     ReadFailed,
     #[error("file is not readable")]
     NotReadable,
+    /// No data is ready yet. The caller waits and reads again.
+    #[error("no data is ready yet")]
+    WouldBlock,
+    /// The buffer cannot hold one record of the device.
+    #[error("the buffer cannot hold one record")]
+    BufferTooSmall,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]

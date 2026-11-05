@@ -122,7 +122,9 @@ impl DevFile for FbDevFile {
             | IoctlRequest::GpuFenceInfo
             | IoctlRequest::GpuWaitFence
             | IoctlRequest::GpuSetScanout
-            | IoctlRequest::GpuFlush => Err(IoctlError::NotSupported),
+            | IoctlRequest::GpuFlush
+            | IoctlRequest::InputGetInfo
+            | IoctlRequest::InputGetSupportedCodes => Err(IoctlError::NotSupported),
         }
     }
 }
@@ -296,7 +298,9 @@ impl DevFile for GpuDevFile {
                     .map_err(ioctl_error)?;
                 Ok(0)
             }
-            IoctlRequest::FbGetScreenInfo => Err(IoctlError::NotSupported),
+            IoctlRequest::FbGetScreenInfo
+            | IoctlRequest::InputGetInfo
+            | IoctlRequest::InputGetSupportedCodes => Err(IoctlError::NotSupported),
         }
     }
 }

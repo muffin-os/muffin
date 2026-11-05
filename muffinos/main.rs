@@ -159,6 +159,11 @@ continue"
     cmd.arg("-vga");
     cmd.arg("none");
 
+    cmd.arg("-device");
+    cmd.arg("virtio-keyboard-pci");
+    cmd.arg("-device");
+    cmd.arg("virtio-mouse-pci");
+
     cmd.stdout(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().expect("unable to start qemu");

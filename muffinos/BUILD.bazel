@@ -31,6 +31,7 @@ ext2_image(
     files = {
         "bin/compositor": "//userspace/compositor",
         "bin/compositor-demo": "//userspace/compositor-demo",
+        "bin/evtest": "//userspace/utilities/evtest",
         "bin/services": "//userspace/services",
         "bin/init": "//userspace/init",
         "bin/false": "//userspace/utilities/false",

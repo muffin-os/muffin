@@ -19,7 +19,8 @@ pub use kernel_abi::{
     EAFNOSUPPORT, EBADF, EBUSY, ECONNREFUSED, ECONNRESET, EDESTADDRREQ, EEXIST, EFAULT, EINTR,
     EINVAL, EISDIR, EMSGSIZE, ENAMETOOLONG, ENOBUFS, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTCONN,
     ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW, EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE, ERANGE,
-    ESPIPE, ESRCH, Errno, FbScreenInfo, IoVec, IoctlRequest, MSG_CTRUNC, MapFlags, MsgHdr,
+    ESPIPE, ESRCH, Errno, FbScreenInfo, InputDeviceInfo, InputEventKind, InputSupportedCodes,
+    IoVec, IoctlRequest, MSG_CTRUNC, MapFlags, MsgHdr,
     O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC,
     O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC,
     O_TTY_INIT, O_WRONLY, PATH_MAX, ProtFlags, S_IFMT, S_IFSOCK, SCM_RIGHTS, SOCK_STREAM,
@@ -94,6 +95,21 @@ pub fn fstat(fd: c_int, stat: &mut Stat) -> Result<(), Errno> {
 pub fn ioctl<T>(fd: c_int, request: IoctlRequest, arg: &mut T) -> Result<usize, Errno> {
     // Safety: `arg` is a live, exclusive reference for the whole call.
     unsafe { ioctl_raw(fd, request, core::ptr::from_mut(arg).cast()) }
+}
+
+pub fn input_device_info(fd: c_int) -> Result<InputDeviceInfo, Errno> {
+    let mut info = InputDeviceInfo::default();
+    ioctl(fd, IoctlRequest::InputGetInfo, &mut info)?;
+    Ok(info)
+}
+
+pub fn input_supported_codes(
+    fd: c_int,
+    kind: InputEventKind,
+) -> Result<InputSupportedCodes, Errno> {
+    let mut codes = InputSupportedCodes::for_kind(kind);
+    ioctl(fd, IoctlRequest::InputGetSupportedCodes, &mut codes)?;
+    Ok(codes)
 }
 
 /// Issues `request` on `fd` with an untyped argument buffer.

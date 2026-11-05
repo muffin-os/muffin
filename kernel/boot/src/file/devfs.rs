@@ -51,6 +51,9 @@ pub fn init() {
                 .register_file(AbsolutePath::try_new("/urandom").unwrap(), || Ok(Urandom))
                 .expect("should be able to register urandom");
         }
+        guard
+            .register_directory(AbsolutePath::try_new("/input").unwrap())
+            .expect("should be able to register the input directory");
     }
     DEVFS.init_once(|| devfs);
 }

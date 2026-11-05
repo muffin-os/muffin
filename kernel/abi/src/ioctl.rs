@@ -1,6 +1,6 @@
 use crate::{
     ENOTTY, Errno, GpuFenceInfo, GpuFlush, GpuImport, GpuInfo, GpuSetScanout, GpuTransfer,
-    GpuWaitFence,
+    GpuWaitFence, InputDeviceInfo, InputSupportedCodes,
 };
 
 /// A device control request, the typed form of the raw request number
@@ -24,11 +24,15 @@ pub enum IoctlRequest {
     GpuSetScanout = 7,
     /// Updates a rectangle of the scanout, see [`GpuFlush`].
     GpuFlush = 8,
+    /// Fills an [`InputDeviceInfo`].
+    InputGetInfo = 9,
+    /// Fills the codes of one event type, see [`InputSupportedCodes`].
+    InputGetSupportedCodes = 10,
 }
 
 impl IoctlRequest {
     /// All requests, in the order of their numbers.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::FbGetScreenInfo,
         Self::GpuGetInfo,
         Self::GpuImport,
@@ -37,6 +41,8 @@ impl IoctlRequest {
         Self::GpuWaitFence,
         Self::GpuSetScanout,
         Self::GpuFlush,
+        Self::InputGetInfo,
+        Self::InputGetSupportedCodes,
     ];
 }
 
@@ -54,6 +60,8 @@ impl IoctlRequest {
             Self::GpuWaitFence => GpuWaitFence::SIZE,
             Self::GpuSetScanout => GpuSetScanout::SIZE,
             Self::GpuFlush => GpuFlush::SIZE,
+            Self::InputGetInfo => InputDeviceInfo::SIZE,
+            Self::InputGetSupportedCodes => InputSupportedCodes::SIZE,
         }
     }
 
@@ -77,6 +85,8 @@ impl TryFrom<usize> for IoctlRequest {
             6 => Ok(Self::GpuWaitFence),
             7 => Ok(Self::GpuSetScanout),
             8 => Ok(Self::GpuFlush),
+            9 => Ok(Self::InputGetInfo),
+            10 => Ok(Self::InputGetSupportedCodes),
             _ => Err(ENOTTY),
         }
     }
