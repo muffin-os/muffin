@@ -1,4 +1,4 @@
-use kernel_abi::{ECHILD, ESRCH, Errno, ProcessId};
+use kernel_abi::{ECHILD, ESRCH, Errno, ProcessId, WaitOptions};
 use tracing::{Level, instrument};
 
 use crate::access::{Child, Identity, PermissionAccess, WaitAccess};
@@ -19,9 +19,10 @@ pub enum WaitTarget {
     ProcessGroup(ProcessId),
 }
 
-/// POSIX waitpid without options. Writes the status to `status` when it is
-/// `Some`, removes the reaped child from the process table and returns its
-/// pid.
+/// POSIX waitpid. Writes the status to `status` when it is `Some`, removes
+/// the reaped child from the process table and returns its pid. With
+/// `WaitOptions::NOHANG` it returns `0` instead of blocking when a child
+/// matches `target` but none has exited.
 ///
 /// # Errors
 /// `ECHILD` when no child matches `target`. `EINTR` when a signal interrupts
@@ -30,6 +31,7 @@ pub enum WaitTarget {
 pub fn sys_waitpid<Cx: WaitAccess + PermissionAccess>(
     cx: &Cx,
     target: WaitTarget,
+    options: WaitOptions,
     status: Option<UserspaceMutPtr<i32>>,
 ) -> Result<usize, Errno> {
     let Identity {
@@ -53,6 +55,9 @@ pub fn sys_waitpid<Cx: WaitAccess + PermissionAccess>(
         if let Some(reaped) = matching.find_map(|child| child.exit_outcome.map(|o| (child.pid, o)))
         {
             break reaped;
+        }
+        if options.contains(WaitOptions::NOHANG) {
+            return Ok(0);
         }
         cx.sleep_one_poll()?;
     };
@@ -168,11 +173,11 @@ mod tests {
         let cx = TestContext::new(pid(1));
         cx.add(pid(3), pid(2), None);
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::Child(pid(9)), None),
+            sys_waitpid(&cx, WaitTarget::Child(pid(9)), WaitOptions::empty(), None),
             Err(ECHILD)
         );
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::Child(pid(3)), None),
+            sys_waitpid(&cx, WaitTarget::Child(pid(3)), WaitOptions::empty(), None),
             Err(ECHILD)
         );
     }
@@ -184,7 +189,7 @@ mod tests {
         let mut status = 0i32;
         let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::Child(pid(2)), Some(ptr)),
+            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty(), Some(ptr)),
             Ok(2)
         );
         assert_eq!(status, 128 + Signal::Kill.number());
@@ -198,7 +203,7 @@ mod tests {
         let mut status = 0i32;
         let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::Child(pid(2)), Some(ptr)),
+            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty(), Some(ptr)),
             Ok(2)
         );
         assert_eq!(status, 7);
@@ -210,7 +215,7 @@ mod tests {
         cx.interrupt_sleep = true;
         cx.add(pid(2), pid(1), None);
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::Child(pid(2)), None),
+            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty(), None),
             Err(EINTR)
         );
         assert!(cx.has(pid(2)), "an interrupted wait keeps the child");
@@ -223,7 +228,10 @@ mod tests {
         cx.add(pid(3), pid(1), Some(ExitOutcome::Exited(3)));
         let mut status = 0i32;
         let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
-        assert_eq!(sys_waitpid(&cx, WaitTarget::AnyChild, Some(ptr)), Ok(3));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::empty(), Some(ptr)),
+            Ok(3)
+        );
         assert_eq!(status, 3);
         assert!(cx.has(pid(2)));
         assert!(!cx.has(pid(3)));
@@ -236,7 +244,10 @@ mod tests {
         cx.add(pid(3), pid(1), None);
         let mut status = 0i32;
         let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
-        assert_eq!(sys_waitpid(&cx, WaitTarget::AnyChild, Some(ptr)), Ok(2));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::empty(), Some(ptr)),
+            Ok(2)
+        );
         assert_eq!(status, 7);
     }
 
@@ -244,7 +255,10 @@ mod tests {
     fn waitpid_any_without_children_is_echild() {
         let cx = TestContext::new(pid(1));
         cx.add(pid(3), pid(2), None);
-        assert_eq!(sys_waitpid(&cx, WaitTarget::AnyChild, None), Err(ECHILD));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::empty(), None),
+            Err(ECHILD)
+        );
     }
 
     #[test]
@@ -252,16 +266,79 @@ mod tests {
         let cx = TestContext::new(pid(1));
         cx.add(pid(2), pid(1), Some(ExitOutcome::Exited(1)));
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::ProcessGroup(pid(2)), None),
+            sys_waitpid(
+                &cx,
+                WaitTarget::ProcessGroup(pid(2)),
+                WaitOptions::empty(),
+                None
+            ),
             Ok(2)
         );
 
         let cx = TestContext::new(pid(1));
         cx.add(pid(2), pid(1), Some(ExitOutcome::Exited(1)));
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::ProcessGroup(pid(9)), None),
+            sys_waitpid(
+                &cx,
+                WaitTarget::ProcessGroup(pid(9)),
+                WaitOptions::empty(),
+                None
+            ),
             Err(ECHILD)
         );
-        assert_eq!(sys_waitpid(&cx, WaitTarget::CallerGroup, None), Err(ECHILD));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::CallerGroup, WaitOptions::empty(), None),
+            Err(ECHILD)
+        );
+    }
+
+    #[test]
+    fn waitpid_nohang_returns_zero_while_the_child_runs() {
+        let cx = TestContext::new(pid(1));
+        cx.add(pid(2), pid(1), None);
+        let mut status = -1i32;
+        let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
+        assert_eq!(
+            sys_waitpid(
+                &cx,
+                WaitTarget::Child(pid(2)),
+                WaitOptions::NOHANG,
+                Some(ptr)
+            ),
+            Ok(0)
+        );
+        assert_eq!(status, -1, "no status is written without a reap");
+        assert!(cx.has(pid(2)), "the running child stays in the process table");
+        // The test sleep ends every child, so a second 0 proves no sleep ran.
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::NOHANG, None),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn waitpid_nohang_reaps_an_exited_child() {
+        let cx = TestContext::new(pid(1));
+        cx.add(pid(2), pid(1), None);
+        cx.add(pid(3), pid(1), Some(ExitOutcome::Exited(5)));
+        let mut status = 0i32;
+        let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::NOHANG, Some(ptr)),
+            Ok(3)
+        );
+        assert_eq!(status, 5);
+        assert!(cx.has(pid(2)));
+        assert!(!cx.has(pid(3)));
+    }
+
+    #[test]
+    fn waitpid_nohang_without_children_is_echild() {
+        let cx = TestContext::new(pid(1));
+        cx.add(pid(3), pid(2), None);
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::NOHANG, None),
+            Err(ECHILD)
+        );
     }
 }

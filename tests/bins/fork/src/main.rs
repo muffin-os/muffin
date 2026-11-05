@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use minilib::{execve, fork, getpid, getppid, println, waitpid};
+use minilib::{WaitOptions, execve, fork, getpid, getppid, println, waitpid};
 
 static mut COUNTER: u64 = 1;
 
@@ -26,7 +26,7 @@ fn main() -> i32 {
         }
         Ok(pid) => {
             let mut status = 0;
-            if let Err(e) = waitpid(pid, &mut status) {
+            if let Err(e) = waitpid(pid, &mut status, WaitOptions::empty()) {
                 println!("fork: FAIL waitpid {e}");
                 return 1;
             }

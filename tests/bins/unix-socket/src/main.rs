@@ -12,8 +12,9 @@ use core::ffi::c_int;
 use core::time::Duration;
 
 use minilib::{
-    AF_UNIX, EPIPE, SOCK_STREAM, SaFlags, SigAction, SigHandler, SigSet, Signal, accept, bind,
-    close, connect, fork, listen, nanosleep, println, read, sigaction, socket, waitpid, write,
+    AF_UNIX, EPIPE, SOCK_STREAM, SaFlags, SigAction, SigHandler, SigSet, Signal, WaitOptions,
+    accept, bind, close, connect, fork, listen, nanosleep, println, read, sigaction, socket,
+    waitpid, write,
 };
 
 const PATH: &str = "/unix-socket-test";
@@ -105,7 +106,7 @@ fn parent(l: c_int, child: i64) -> i32 {
     require!("parent close", close(c));
 
     let mut status = 0;
-    require!("waitpid", waitpid(child, &mut status));
+    require!("waitpid", waitpid(child, &mut status, WaitOptions::empty()));
     if status != 0 {
         println!("unix-socket: FAIL child status {status}");
         return 1;

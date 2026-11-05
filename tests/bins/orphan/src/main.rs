@@ -4,7 +4,9 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
-use minilib::{Signal, fork, getppid, install_handler, kill, nanosleep, println, waitpid};
+use minilib::{
+    Signal, WaitOptions, fork, getppid, install_handler, kill, nanosleep, println, waitpid,
+};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_POLLS: usize = 500;
@@ -53,14 +55,14 @@ fn middle() -> i32 {
 
 fn parent() -> i32 {
     let mut status = 0;
-    match waitpid(-1, &mut status) {
+    match waitpid(-1, &mut status, WaitOptions::empty()) {
         Ok(pid) => println!("orphan: reaped pid={pid} status={status}"),
         Err(e) => {
             println!("orphan: FAIL waitpid {e}");
             return 1;
         }
     }
-    match waitpid(-1, &mut status) {
+    match waitpid(-1, &mut status, WaitOptions::empty()) {
         Ok(pid) => {
             println!("orphan: FAIL second wait returned {pid}");
             return 1;

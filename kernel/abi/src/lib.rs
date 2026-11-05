@@ -13,6 +13,7 @@ mod stat;
 mod sys_types;
 mod syscall;
 mod time;
+mod wait;
 
 pub mod gfx;
 
@@ -28,3 +29,4 @@ pub use stat::*;
 pub use sys_types::*;
 pub use syscall::*;
 pub use time::*;
+pub use wait::*;

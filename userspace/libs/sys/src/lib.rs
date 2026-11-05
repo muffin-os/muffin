@@ -28,7 +28,7 @@ pub use kernel_abi::{
     SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION,
     SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE,
     SaFamily, SaFlags, ShutdownHow, SigAction, SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn,
-    SockLen, Stat, StrSlice, Timespec, Whence,
+    SockLen, Stat, StrSlice, Timespec, WaitOptions, Whence,
 };
 
 pub fn exit(code: i32) -> ! {
@@ -222,11 +222,20 @@ pub fn getppid() -> i64 {
 }
 
 /// Waits for a child that the POSIX `pid` forms select and returns the reaped
-/// pid. `status` receives the exit code, or 128 plus the signal number.
-pub fn waitpid(pid: i64, status: &mut i32) -> Result<i64, Errno> {
+/// pid. `status` receives the exit code, or 128 plus the signal number. With
+/// `WaitOptions::NOHANG` it returns `Ok(0)` instead of blocking while the
+/// selected children run; `status` is left as is then.
+pub fn waitpid(pid: i64, status: &mut i32, options: WaitOptions) -> Result<i64, Errno> {
     // Safety: `status` is a live, exclusive reference for the whole call.
-    ret(unsafe { syscall2(SYS_WAITPID, pid as usize, status as *mut i32 as usize) })
-        .map(|pid| pid as i64)
+    ret(unsafe {
+        syscall3(
+            SYS_WAITPID,
+            pid as usize,
+            status as *mut i32 as usize,
+            options.bits() as usize,
+        )
+    })
+    .map(|pid| pid as i64)
 }
 
 /// Builds an action that returns through [`sigreturn_restorer`].

@@ -13,6 +13,9 @@ use std::{env, hint, panic, thread};
 
 type Step = fn() -> Result<(), Box<dyn Error>>;
 
+const SLEEPER_LIFETIME: Duration = Duration::from_millis(500);
+const TRY_WAIT_DEADLINE: Duration = Duration::from_secs(10);
+
 const STEPS: &[(&str, Step)] = &[
     ("args", args),
     ("env", environment),
@@ -26,16 +29,24 @@ const STEPS: &[(&str, Step)] = &[
     ("exe", exe),
     ("process", process),
     ("child_env", child_env),
+    ("try_wait", try_wait),
     ("panic", catch_panic),
 ];
 
 fn main() {
-    if env::var_os("STD_SMOKE_CHILD").is_some() {
-        if let Err(e) = child() {
-            println!("std-smoke: FAIL child: {e}");
-            std::process::exit(1);
+    match env::var("STD_SMOKE_CHILD").as_deref() {
+        Ok("sleep") => {
+            thread::sleep(SLEEPER_LIFETIME);
+            return;
         }
-        return;
+        Ok(_) => {
+            if let Err(e) = child() {
+                println!("std-smoke: FAIL child: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Err(_) => {}
     }
     for (name, step) in STEPS {
         if let Err(e) = step() {
@@ -187,6 +198,27 @@ fn child() -> Result<(), Box<dyn Error>> {
         check(status.success(), "grandchild failed")?;
     }
     Ok(())
+}
+
+/// Re-executes this binary as a child that sleeps `SLEEPER_LIFETIME` and
+/// exits 0. The poll right after `spawn` must see it running, later polls
+/// must reap it. `spawn` returns right after the fork, so the child cannot
+/// have exited before the first poll unless the parent lost the CPU for
+/// the whole sleeper lifetime.
+fn try_wait() -> Result<(), Box<dyn Error>> {
+    let mut child = Command::new(env::current_exe()?)
+        .env("STD_SMOKE_CHILD", "sleep")
+        .spawn()?;
+    check(child.try_wait()?.is_none(), "child reaped on the first poll")?;
+    let deadline = Instant::now() + TRY_WAIT_DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        check(Instant::now() < deadline, "child never exited")?;
+        thread::sleep(Duration::from_millis(20));
+    };
+    check(status.code() == Some(0), &format!("child status {status:?}"))
 }
 
 fn catch_panic() -> Result<(), Box<dyn Error>> {

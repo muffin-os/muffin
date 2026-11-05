@@ -4,8 +4,8 @@ use core::ops::Deref;
 use core::slice;
 
 use kernel_abi::{
-    E2BIG, EINVAL, ENOMEM, ENOSYS, EOVERFLOW, Errno, SaFlags, SigAction, SigHandler, SigMaskHow,
-    SigSet, Signal,
+    E2BIG, EINVAL, ENOMEM, EOVERFLOW, Errno, SaFlags, SigAction, SigHandler, SigMaskHow, SigSet,
+    Signal, WaitOptions,
 };
 use libc::{
     _SC_GETPW_R_SIZE_MAX, _SC_NPROCESSORS_ONLN, _SC_PAGESIZE, _SC_THREAD_STACK_MIN,
@@ -159,23 +159,24 @@ pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *const c_char)
 }
 
 /// Waits for a child that the POSIX `pid` forms select and returns the reaped
-/// pid. Stores the `WEXITSTATUS` and `WTERMSIG` decode in `status`. Fails
-/// with `ENOSYS` for each option, such as `WNOHANG`, because the kernel
-/// waitpid always blocks.
+/// pid. Stores the `WEXITSTATUS` and `WTERMSIG` decode in `status`. Supports
+/// `WNOHANG`, which returns 0 while the selected children run; every other
+/// option bit fails with `EINVAL`.
 ///
 /// # Safety
 ///
 /// `status` must be null or valid for one `c_int` write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waitpid(pid: pid_t, status: *mut c_int, options: c_int) -> pid_t {
-    if options != 0 {
-        return fail(ENOSYS);
-    }
+    let Some(options) = WaitOptions::from_bits(options) else {
+        return fail(EINVAL);
+    };
     let mut code = 0;
-    let result = muffin_sys::waitpid(pid.into(), &mut code)
+    let result = muffin_sys::waitpid(pid.into(), &mut code, options)
         .and_then(to_pid)
-        .inspect(|_| {
-            if !status.is_null() {
+        .inspect(|&pid| {
+            // 0 is "still running"; POSIX leaves `status` unspecified then.
+            if pid != 0 && !status.is_null() {
                 unsafe { status.write(code) };
             }
         });

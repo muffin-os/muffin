@@ -7,7 +7,8 @@ use access::KernelAccess;
 use kernel_abi::{
     AF_UNIX, ClockId, EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno,
     IoctlRequest, MapFlags, ProcessId, ProtFlags, SOMAXCONN, SaFamily, ShutdownHow, SigAction,
-    SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, Timespec, Whence, syscall_name,
+    SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, Timespec, WaitOptions, Whence,
+    syscall_name,
 };
 use kernel_syscall::access::{
     FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess, SocketAccess,
@@ -60,7 +61,7 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_EXIT => dispatch_sys_exit(arg1),
         kernel_abi::SYS_GETPID => dispatch_sys_getpid(),
         kernel_abi::SYS_GETPPID => dispatch_sys_getppid(),
-        kernel_abi::SYS_WAITPID => dispatch_sys_waitpid(arg1, arg2),
+        kernel_abi::SYS_WAITPID => dispatch_sys_waitpid(arg1, arg2, arg3),
         kernel_abi::SYS_GETDENTS => dispatch_sys_getdents(arg1, arg2, arg3),
         kernel_abi::SYS_KILL => dispatch_sys_kill(arg1, arg2),
         kernel_abi::SYS_SIGACTION => dispatch_sys_sigaction(arg1, arg2, arg3),
@@ -123,7 +124,7 @@ fn dispatch_sys_getppid() -> Result<usize, Errno> {
     sys_getppid(&KernelAccess::new())
 }
 
-fn dispatch_sys_waitpid(pid: usize, status: usize) -> Result<usize, Errno> {
+fn dispatch_sys_waitpid(pid: usize, status: usize, options: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
     // POSIX allows a null status, which skips the status writeback.
@@ -141,7 +142,8 @@ fn dispatch_sys_waitpid(pid: usize, status: usize) -> Result<usize, Errno> {
         -1 => WaitTarget::AnyChild,
         v => WaitTarget::ProcessGroup(ProcessId::from(v.unsigned_abs() as u64)),
     };
-    sys_waitpid(&cx, target, status)
+    let options = WaitOptions::from_bits(i32::try_from(options)?).ok_or(EINVAL)?;
+    sys_waitpid(&cx, target, options, status)
 }
 
 fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {

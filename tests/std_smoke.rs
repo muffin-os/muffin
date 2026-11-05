@@ -25,6 +25,7 @@ fn std_smoke() {
         "std-smoke: child env ok",
         "std-smoke: child inherit ok",
         "std-smoke: child_env ok",
+        "std-smoke: try_wait ok",
         "std-smoke: panic ok",
         "std-smoke: done",
     ]);

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use minilib::{args, exe_path, execve, fork, println, waitpid};
+use minilib::{WaitOptions, args, exe_path, execve, fork, println, waitpid};
 
 const TARGET: &str = "/bin/exec-identity-target";
 const TARGET_EXIT: i32 = 42;
@@ -47,7 +47,7 @@ fn main() -> i32 {
         }
         Ok(pid) => {
             let mut status = 0;
-            if let Err(e) = waitpid(pid, &mut status) {
+            if let Err(e) = waitpid(pid, &mut status, WaitOptions::empty()) {
                 println!("exec-identity: FAIL waitpid {e}");
                 return 1;
             }
