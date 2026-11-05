@@ -10,7 +10,8 @@ use std::os::fd::FromRawFd;
 use std::process::exit;
 
 use muffin_sys::{
-    EBUSY, EINVAL, ENOENT, Errno, MapFlags, O_CREAT, O_EXCL, O_RDWR, ProtFlags, mmap, munmap,
+    EACCES, EBUSY, EINVAL, ENOENT, Errno, MapFlags, O_CREAT, O_EXCL, O_RDWR, ProtFlags, mmap,
+    munmap,
 };
 
 unsafe extern "C" {
@@ -83,6 +84,13 @@ fn run() -> Result<(), &'static str> {
         return Err("mapped writes visible through read");
     }
 
+    let other = std::process::Command::new(std::env::current_exe().map_err(|_| "current_exe")?)
+        .arg("open-as-other")
+        .status();
+    if !other.is_ok_and(|status| status.success()) {
+        return Err("open-as-other");
+    }
+
     if !is_errno(&file.set_len(4096), EBUSY) {
         return Err("set_len while mapped is EBUSY");
     }
@@ -128,7 +136,20 @@ fn run() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A child process has a new pid, so it must not open the parent's object by name.
+fn open_as_other() -> ! {
+    let fd = unsafe { shm_open(c"/shm-test".as_ptr(), O_RDWR, 0) };
+    if fd < 0 && errno() == Some(c_int::from(EACCES)) {
+        exit(0);
+    }
+    println!("shm: FAIL open-as-other fd={fd} errno={:?}", errno());
+    exit(1);
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("open-as-other") {
+        open_as_other();
+    }
     if let Err(step) = run() {
         println!("shm: FAIL {step}");
         exit(1);

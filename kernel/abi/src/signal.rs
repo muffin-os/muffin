@@ -71,6 +71,19 @@ pub struct SigInfo {
     pub info: SigInfoField,
 }
 
+impl SigInfo {
+    /// A kernel-raised signal: `code` and `errno` are zero.
+    #[must_use]
+    pub const fn new(signo: Signal, info: SigInfoField) -> Self {
+        Self {
+            signo,
+            code: 0,
+            errno: 0,
+            info,
+        }
+    }
+}
+
 #[derive(Debug, Default, Copy, Clone)]
 pub enum SigInfoField {
     #[default]

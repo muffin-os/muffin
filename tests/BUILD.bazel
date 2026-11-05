@@ -116,6 +116,22 @@ ext2_image(
 )
 
 ext2_image(
+    name = "sendfd_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/sendfd": "//tests/bins:sendfd",
+    },
+)
+
+ext2_image(
+    name = "gpu_nodes_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/gpu-nodes": "//tests/bins:gpu_nodes",
+    },
+)
+
+ext2_image(
     name = "shm_disk",
     files = {
         "bin/init": "//tests/bins:test_init",
@@ -419,12 +435,14 @@ ext2_image(
         "file_write",
         "floats",
         "fork",
+        "gpu_nodes",
         "heap_bounds",
         "kstack_overflow",
         "map_range_rollback",
         "mmap",
         "orphan",
         "posix",
+        "sendfd",
         "services",
         "shm",
         "shutdown",

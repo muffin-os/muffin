@@ -6,7 +6,7 @@ use core::ptr::copy_nonoverlapping;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
-use kernel_abi::S_IFREG;
+use kernel_abi::{ProcessId, S_IFREG};
 use kernel_memapi::{Guarded, Location, MemoryApi};
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::{AbsolutePath, ROOT};
@@ -18,15 +18,23 @@ use spin::Mutex;
 use x86_64::structures::paging::{PageSize, Size4KiB};
 
 use crate::U64Ext;
+use crate::mcore::mtask::process::Process;
 use crate::mem::memapi::{FrameContiguity, HigherHalfAllocation, HigherHalfMemoryApi, Writable};
 
 /// An object exists until a process unlinks its name and the last handle on
 /// it closes. Each mapping holds a share of the frames, so the frames stay
 /// valid until the last mapping drops.
+///
+/// Only the creating process opens or unlinks an object by name.
 #[derive(Default)]
 pub struct ShmFs {
-    objects: BTreeMap<String, Arc<Mutex<ShmState>>>,
+    objects: BTreeMap<String, ShmObject>,
     handles: BTreeMap<FsHandle, Arc<Mutex<ShmState>>>,
+}
+
+struct ShmObject {
+    owner: ProcessId,
+    state: Arc<Mutex<ShmState>>,
 }
 
 #[derive(Default)]
@@ -135,12 +143,24 @@ impl FileSystem for ShmFs {
         static FS_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let name = object_name(path).ok_or(OpenError::NotFound)?;
+        let caller = Process::current().pid();
         let object = match (self.objects.get(name), create) {
+            (Some(object), _) if object.owner != caller => {
+                return Err(OpenError::PermissionDenied);
+            }
             (Some(_), CreateMode::Exclusive) => return Err(OpenError::AlreadyExists),
-            (Some(object), CreateMode::Never | CreateMode::IfMissing) => object.clone(),
+            (Some(object), CreateMode::Never | CreateMode::IfMissing) => object.state.clone(),
             (None, CreateMode::Never) => return Err(OpenError::NotFound),
             (None, CreateMode::IfMissing | CreateMode::Exclusive) => {
-                self.objects.entry(name.into()).or_default().clone()
+                let state = Arc::<Mutex<ShmState>>::default();
+                self.objects.insert(
+                    name.into(),
+                    ShmObject {
+                        owner: caller,
+                        state: state.clone(),
+                    },
+                );
+                state
             }
         };
         let handle = FsHandle::from(FS_COUNTER.fetch_add(1, Relaxed));
@@ -150,10 +170,12 @@ impl FileSystem for ShmFs {
 
     fn unlink(&mut self, path: &AbsolutePath) -> Result<(), UnlinkError> {
         let name = object_name(path).ok_or(UnlinkError::NotFound)?;
-        self.objects
-            .remove(name)
-            .map(|_| ())
-            .ok_or(UnlinkError::NotFound)
+        let object = self.objects.get(name).ok_or(UnlinkError::NotFound)?;
+        if object.owner != Process::current().pid() {
+            return Err(UnlinkError::PermissionDenied);
+        }
+        self.objects.remove(name);
+        Ok(())
     }
 
     fn create_directory(&mut self, _path: &AbsolutePath) -> Result<(), MkdirError> {

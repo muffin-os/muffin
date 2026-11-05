@@ -92,6 +92,17 @@ impl KernelAccess {
         }
         result
     }
+
+    fn broken_pipe(&self) -> Errno {
+        // POSIX: a write to a socket whose peer is gone raises SIGPIPE and
+        // fails with EPIPE.
+        SignalAccess::deliver(
+            self,
+            self.process.pid(),
+            SigInfo::new(Signal::Pipe, SigInfoField::None),
+        );
+        EPIPE
+    }
 }
 
 impl CwdAccess for KernelAccess {
@@ -118,6 +129,7 @@ impl FileAccess for KernelAccess {
             OpenError::NoSpace => ENOSPC,
             OpenError::CreateUnsupported => EACCES,
             OpenError::NameTooLong => ENAMETOOLONG,
+            OpenError::PermissionDenied => EACCES,
         })?;
         Ok(FileInfo { node })
     }
@@ -132,6 +144,7 @@ impl FileAccess for KernelAccess {
             UnlinkError::NotFound => ENOENT,
             UnlinkError::NotSupported => EPERM,
             UnlinkError::FsError(_) => EIO,
+            UnlinkError::PermissionDenied => EACCES,
         })
     }
 
@@ -198,19 +211,7 @@ impl FileAccess for KernelAccess {
                 Ok(n) => done += n,
                 // POSIX reports a partial count when some bytes reached the peer.
                 Err(_) if done > 0 => break,
-                Err(EPIPE) => {
-                    SignalAccess::deliver(
-                        self,
-                        self.process.pid(),
-                        SigInfo {
-                            signo: Signal::Pipe,
-                            code: 0,
-                            errno: 0,
-                            info: SigInfoField::None,
-                        },
-                    );
-                    return Err(EPIPE);
-                }
+                Err(EPIPE) => return Err(self.broken_pipe()),
                 Err(e) => return Err(e),
             }
         }
@@ -272,6 +273,7 @@ impl FileAccess for KernelAccess {
             .map_err(|e| match e {
                 IoctlError::NotSupported => ENOTTY,
                 IoctlError::InvalidArgument | IoctlError::FsError(_) => EINVAL,
+                IoctlError::Busy => EBUSY,
             })
     }
 

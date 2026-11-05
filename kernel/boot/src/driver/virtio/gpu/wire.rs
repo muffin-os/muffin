@@ -100,10 +100,53 @@ impl CtrlHeader {
         }
     }
 
-    pub const fn with_ctx(type_: u32, ctx_id: u32) -> Self {
+    pub const fn with_ctx(type_: u32, ctx: ContextId) -> Self {
         let mut hdr = Self::new(type_);
-        hdr.ctx_id = ctx_id;
+        hdr.ctx_id = ctx.0;
         hdr
+    }
+}
+
+/// A virgl rendering context. Exists only on a device with 3D support. The
+/// driver numbers contexts from 1, because the device reads 0 as "no context".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ContextId(u32);
+
+impl ContextId {
+    pub const FIRST: Self = Self(1);
+
+    #[must_use]
+    pub const fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
+/// A device resource, 2D or 3D. The driver numbers resources from 1, because
+/// the device reads 0 as "no resource".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResourceId(u32);
+
+impl ResourceId {
+    /// The 2D resource that backs `/dev/fb0`.
+    pub const FRAMEBUFFER: Self = Self(1);
+
+    /// Wraps a number from the ioctl ABI. Only a lookup tells whether it names
+    /// a live resource.
+    pub const fn from_abi(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    pub const fn to_abi(self) -> u32 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+
+    pub const fn to_wire(self) -> u32 {
+        self.0
     }
 }
 

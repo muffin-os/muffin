@@ -21,10 +21,11 @@ use crate::api::{
 };
 use crate::error::{GfxError, Result};
 
-const DEVICE_PATH: &str = "/dev/gpu0";
+const DISPLAY_PATH: &str = "/dev/gpu0";
+const RENDER_PATH: &str = "/dev/render0";
 const BYTES_PER_PIXEL: usize = 4;
 
-/// One open descriptor of `/dev/gpu0`. The kernel gives it its own virgl
+/// One open descriptor of `/dev/gpu0` or `/dev/render0`. The kernel gives it its own virgl
 /// context, so every object handle below is private to this device.
 pub struct VirtioDevice {
     fd: c_int,
@@ -44,8 +45,17 @@ fn ioctl<T>(fd: c_int, request: IoctlRequest, arg: &mut T) -> Result<()> {
 impl VirtioDevice {
     /// Opens `/dev/gpu0`. Fails with `DeviceUnavailable` when the file is
     /// missing or the device has no 3D support.
-    pub fn open() -> Result<Rc<Self>> {
-        let fd = muffin_sys::open(DEVICE_PATH, O_RDWR).map_err(|_| GfxError::DeviceUnavailable)?;
+    pub fn open_display() -> Result<Rc<Self>> {
+        Self::open_path(DISPLAY_PATH)
+    }
+
+    /// `set_scanout` and `flush` fail with `ENOTTY` on this device.
+    pub fn open_render() -> Result<Rc<Self>> {
+        Self::open_path(RENDER_PATH)
+    }
+
+    fn open_path(path: &str) -> Result<Rc<Self>> {
+        let fd = muffin_sys::open(path, O_RDWR).map_err(|_| GfxError::DeviceUnavailable)?;
         // `device` owns `fd` from here on, so an early error closes it.
         let mut device = Self {
             fd,
@@ -160,24 +170,21 @@ impl VirtioDevice {
         height: u32,
     ) -> Result<(u32, Mapping)> {
         let pid = muffin_sys::getpid();
-        let (fd, path) = loop {
+        let (file, path) = loop {
             let suffix = self.next_shm.get();
             self.next_shm.set(suffix + 1);
             let path = format!("/dev/shm/gfx-{pid}-{suffix}");
             match muffin_sys::open(&path, O_RDWR | O_CREAT | O_EXCL) {
-                Ok(fd) => break (fd, path),
+                Ok(fd) => break (FileHandle(fd), path),
                 Err(EEXIST) => continue,
                 Err(errno) => return Err(GfxError::Device(errno)),
             }
         };
-        let imported = muffin_sys::ftruncate(fd, len as i64)
-            .map_err(|errno| {
-                let _ = muffin_sys::close(fd);
-                GfxError::Device(errno)
-            })
-            .and_then(|()| Mapping::new(fd, len))
+        let imported = muffin_sys::ftruncate(file.0, len as i64)
+            .map_err(GfxError::Device)
+            .and_then(|()| Mapping::new(file, len))
             .and_then(|mapping| {
-                let resource = self.import(mapping.file, kind, width, height)?;
+                let resource = self.import(mapping.file.0, kind, width, height)?;
                 Ok((resource, mapping))
             });
         let _ = muffin_sys::unlink(&path);
@@ -192,35 +199,38 @@ impl Drop for VirtioDevice {
     }
 }
 
+/// Closes the descriptor on drop.
+struct FileHandle(c_int);
+
+impl Drop for FileHandle {
+    fn drop(&mut self) {
+        let _ = muffin_sys::close(self.0);
+    }
+}
+
 /// A shared memory object mapped into this process. The descriptor stays
 /// open for the lifetime of the mapping.
 struct Mapping {
     ptr: NonNull<u8>,
     len: usize,
-    file: c_int,
+    file: FileHandle,
 }
 
 impl Mapping {
-    /// Maps `len` bytes of `file` shared and writable. Closes `file` on failure.
-    fn new(file: c_int, len: usize) -> Result<Self> {
+    /// Maps `len` bytes of `file` shared and writable.
+    fn new(file: FileHandle, len: usize) -> Result<Self> {
         let mapped = muffin_sys::mmap(
             0,
             len,
             ProtFlags::READ | ProtFlags::WRITE,
             MapFlags::SHARED,
-            file,
+            file.0,
             0,
         );
         match mapped.map(NonNull::new) {
             Ok(Some(ptr)) => Ok(Self { ptr, len, file }),
-            Ok(None) => {
-                let _ = muffin_sys::close(file);
-                Err(GfxError::Device(EINVAL))
-            }
-            Err(errno) => {
-                let _ = muffin_sys::close(file);
-                Err(GfxError::Device(errno))
-            }
+            Ok(None) => Err(GfxError::Device(EINVAL)),
+            Err(errno) => Err(GfxError::Device(errno)),
         }
     }
 
@@ -238,9 +248,9 @@ impl Mapping {
 
 impl Drop for Mapping {
     fn drop(&mut self) {
-        // Safety: no reference into the mapping outlives `self`.
+        // Safety: no reference into the mapping outlives `self`. `file` drops
+        // after this body runs, so the object is unmapped before it closes.
         let _ = unsafe { muffin_sys::munmap(self.ptr.as_ptr(), self.len) };
-        let _ = muffin_sys::close(self.file);
     }
 }
 
@@ -299,6 +309,12 @@ impl VirtioTexture {
     pub fn height(&self) -> u32 {
         self.height
     }
+
+    /// Stays open for the life of the texture.
+    #[must_use]
+    pub fn fd(&self) -> c_int {
+        self.mapping.file.0
+    }
 }
 
 fn texture_len(width: u32, height: u32) -> usize {
@@ -316,23 +332,24 @@ impl VirtioBackend {
         Self { device }
     }
 
-    /// Imports an existing shared memory object at `path` as a texture.
-    pub fn import_texture(&mut self, path: &str, width: u32, height: u32) -> Result<VirtioTexture> {
+    /// Takes ownership of `file`.
+    pub fn import_texture_fd(
+        &mut self,
+        file: c_int,
+        width: u32,
+        height: u32,
+    ) -> Result<VirtioTexture> {
+        let file = FileHandle(file);
         let len = texture_len(width, height);
-        let file = muffin_sys::open(path, O_RDWR).map_err(GfxError::Device)?;
         let mut stat = Stat::default();
-        if let Err(errno) = muffin_sys::fstat(file, &mut stat) {
-            let _ = muffin_sys::close(file);
-            return Err(GfxError::Device(errno));
-        }
+        muffin_sys::fstat(file.0, &mut stat).map_err(GfxError::Device)?;
         if stat.size < len as u64 {
-            let _ = muffin_sys::close(file);
             return Err(GfxError::Device(EINVAL));
         }
         let mapping = Mapping::new(file, len)?;
-        let resource = self
-            .device
-            .import(mapping.file, GpuResourceKind::Texture, width, height)?;
+        let resource =
+            self.device
+                .import(mapping.file.0, GpuResourceKind::Texture, width, height)?;
         Ok(VirtioTexture {
             resource,
             width,

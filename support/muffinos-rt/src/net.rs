@@ -2,7 +2,7 @@ use core::ffi::{c_char, c_int, c_void};
 use core::slice;
 
 use kernel_abi::{ENOSYS, EOPNOTSUPP, ShutdownHow};
-use libc::{addrinfo, nfds_t, pollfd, size_t, sockaddr, socklen_t, ssize_t};
+use libc::{addrinfo, msghdr, nfds_t, pollfd, size_t, sockaddr, socklen_t, ssize_t};
 
 use crate::errno::{fail, ret, set_errno};
 
@@ -83,6 +83,26 @@ pub unsafe extern "C" fn send(fd: c_int, buf: *const c_void, len: size_t, flags:
     }
     let buf = unsafe { slice::from_raw_parts(buf.cast::<u8>(), len) };
     ret(muffin_sys::write(fd, buf).map(|n| n as ssize_t))
+}
+
+/// Supports no flags, as `send` does.
+///
+/// # Safety
+///
+/// `msg` and every buffer it names must be valid for reads.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const msghdr, flags: c_int) -> ssize_t {
+    ret(unsafe { muffin_sys::sendmsg_raw(fd, msg.cast(), flags) }.map(|n| n as ssize_t))
+}
+
+/// Supports no flags, as `recv` does.
+///
+/// # Safety
+///
+/// `msg` and every buffer it names must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn recvmsg(fd: c_int, msg: *mut msghdr, flags: c_int) -> ssize_t {
+    ret(unsafe { muffin_sys::recvmsg_raw(fd, msg.cast(), flags) }.map(|n| n as ssize_t))
 }
 
 // shortcut: kernel has no syscall for these; upgrade when

@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tim Denk <tim.denk@zymtrace.com>
+Date: Thu, 5 Nov 2026 17:29:12 +0100
+Subject: [PATCH] add muffin sendmsg and recvmsg definitions
+
+
+diff --git a/src/unix/muffin/mod.rs b/src/unix/muffin/mod.rs
+index c0c176cba81250e3f1a2cd7cf83d1565ea4d7f1b..84dfc536a4c59cf37a7148ff95cedc31bcec21fe 100644
+--- a/src/unix/muffin/mod.rs
++++ b/src/unix/muffin/mod.rs
+@@ -193,6 +193,22 @@ s! {
+         pub imr_interface: in_addr,
+     }
+ 
++    pub struct msghdr {
++        pub msg_name: *mut c_void,
++        pub msg_namelen: socklen_t,
++        pub msg_iov: *mut crate::iovec,
++        pub msg_iovlen: size_t,
++        pub msg_control: *mut c_void,
++        pub msg_controllen: size_t,
++        pub msg_flags: c_int,
++    }
++
++    pub struct cmsghdr {
++        pub cmsg_len: size_t,
++        pub cmsg_level: c_int,
++        pub cmsg_type: c_int,
++    }
++
+     pub struct termios {
+         pub c_iflag: tcflag_t,
+         pub c_oflag: tcflag_t,
+@@ -496,6 +512,10 @@ pub const AF_INET6: c_int = 10;
+ pub const SOCK_DGRAM: c_int = 2;
+ pub const MSG_PEEK: c_int = 2;
+ pub const SOL_SOCKET: c_int = 1;
++// sys/socket.h: `kernel_abi::socket`, the Linux values.
++pub const SCM_RIGHTS: c_int = 1;
++pub const MSG_CTRUNC: c_int = 8;
++pub const MSG_TRUNC: c_int = 0x20;
+ pub const SO_ERROR: c_int = 4;
+ pub const SO_REUSEADDR: c_int = 11;
+ pub const SO_LINGER: c_int = 6;
+@@ -568,7 +588,45 @@ pub const SIG_BLOCK: c_int = 0;
+ pub const SIG_UNBLOCK: c_int = 1;
+ pub const SIG_SETMASK: c_int = 2;
+ 
++f! {
++    // sys/socket.h
++    pub fn CMSG_FIRSTHDR(mhdr: *const msghdr) -> *mut cmsghdr {
++        if (*mhdr).msg_controllen as usize >= size_of::<cmsghdr>() {
++            (*mhdr).msg_control.cast::<cmsghdr>()
++        } else {
++            core::ptr::null_mut::<cmsghdr>()
++        }
++    }
++
++    pub fn CMSG_NXTHDR(mhdr: *const msghdr, cmsg: *const cmsghdr) -> *mut cmsghdr {
++        let next = (cmsg as usize + CMSG_ALIGN((*cmsg).cmsg_len as usize)) as *mut cmsghdr;
++        let max = (*mhdr).msg_control as usize + (*mhdr).msg_controllen as usize;
++        if (next.offset(1)) as usize > max {
++            core::ptr::null_mut::<cmsghdr>()
++        } else {
++            next as *mut cmsghdr
++        }
++    }
++
++    pub fn CMSG_DATA(cmsg: *const cmsghdr) -> *mut c_uchar {
++        cmsg.offset(1) as *mut c_uchar
++    }
++}
++
+ safe_f! {
++    // sys/socket.h
++    pub const fn CMSG_ALIGN(len: size_t) -> size_t {
++        (len + size_of::<size_t>() - 1) & !(size_of::<size_t>() - 1)
++    }
++
++    pub const fn CMSG_LEN(length: c_uint) -> c_uint {
++        (CMSG_ALIGN(size_of::<cmsghdr>()) + length as usize) as c_uint
++    }
++
++    pub const fn CMSG_SPACE(len: c_uint) -> c_uint {
++        (CMSG_ALIGN(len as size_t) + CMSG_ALIGN(size_of::<cmsghdr>())) as c_uint
++    }
++
+     // muffin wait status: exit code, or 128 + signo.
+     pub const fn WIFEXITED(status: c_int) -> bool {
+         status < 128
+@@ -608,6 +666,8 @@ extern "C" {
+     pub fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int;
+     pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;
+     pub fn bind(socket: c_int, address: *const sockaddr, address_len: socklen_t) -> c_int;
++    pub fn sendmsg(socket: c_int, msg: *const msghdr, flags: c_int) -> ssize_t;
++    pub fn recvmsg(socket: c_int, msg: *mut msghdr, flags: c_int) -> ssize_t;
+     pub fn recvfrom(
+         socket: c_int,
+         buf: *mut c_void,

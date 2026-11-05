@@ -79,4 +79,6 @@ n! {
     SYS_FTRUNCATE = 65,
     SYS_UNLINK = 66,
     SYS_MUNMAP = 67,
+    SYS_SENDMSG = 68,
+    SYS_RECVMSG = 69,
 }

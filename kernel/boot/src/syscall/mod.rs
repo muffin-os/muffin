@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::ffi::c_int;
 use core::ops::Neg;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
@@ -6,9 +8,9 @@ use core::time::Duration;
 use access::KernelAccess;
 use kernel_abi::{
     AF_UNIX, ClockId, EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno,
-    IoctlRequest, MapFlags, ProcessId, ProtFlags, SOMAXCONN, SaFamily, ShutdownHow, SigAction,
-    SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, Timespec, WaitOptions, Whence,
-    syscall_name,
+    IoVec, IoctlRequest, MapFlags, MsgHdr, ProcessId, ProtFlags, SOMAXCONN, SaFamily, ShutdownHow,
+    SigAction, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, Timespec, WaitOptions,
+    Whence, syscall_name,
 };
 use kernel_syscall::access::{
     FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess, SocketAccess,
@@ -17,7 +19,8 @@ use kernel_syscall::fcntl::{sys_open, sys_unlink};
 use kernel_syscall::mman::{sys_mmap, sys_munmap};
 use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::socket::{
-    sys_accept, sys_bind, sys_connect, sys_listen, sys_shutdown, sys_socket,
+    sys_accept, sys_bind, sys_connect, sys_listen, sys_recvmsg, sys_sendmsg, sys_shutdown,
+    sys_socket,
 };
 use kernel_syscall::unistd::{
     sys_close, sys_fsync, sys_ftruncate, sys_getcwd, sys_getdents, sys_ioctl, sys_lseek, sys_read,
@@ -25,6 +28,7 @@ use kernel_syscall::unistd::{
 };
 use kernel_syscall::wait::{WaitTarget, sys_getppid, sys_waitpid};
 use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
+use kernel_unix_socket::SOCKET_BUFFER_BYTES;
 use tracing::{debug, error};
 use x86_64::VirtAddr;
 use x86_64::structures::idt::InterruptStackFrame;
@@ -86,6 +90,8 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_ACCEPT => dispatch_sys_accept(arg1, arg2, arg3),
         kernel_abi::SYS_CONNECT => dispatch_sys_connect(arg1, arg2, arg3),
         kernel_abi::SYS_SHUTDOWN => dispatch_sys_shutdown(arg1, arg2),
+        kernel_abi::SYS_SENDMSG => dispatch_sys_sendmsg(arg1, arg2, arg3),
+        kernel_abi::SYS_RECVMSG => dispatch_sys_recvmsg(arg1, arg2, arg3),
         kernel_abi::SYS_FTRUNCATE => dispatch_sys_ftruncate(arg1, arg2),
         kernel_abi::SYS_UNLINK => dispatch_sys_unlink(arg1, arg2),
         kernel_abi::SYS_MUNMAP => dispatch_sys_munmap(arg1, arg2),
@@ -534,6 +540,91 @@ fn dispatch_sys_shutdown(fd: usize, how: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
     let fd = socket_fd(fd)?;
     sys_shutdown(&cx, fd, ShutdownHow::try_from(how as c_int)?)
+}
+
+fn user_iovecs(hdr: &MsgHdr) -> Result<Vec<IoVec>, Errno> {
+    let count = hdr.iovec_count()?;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if hdr.msg_iov == 0 {
+        return Err(EFAULT);
+    }
+    make_user_range_resident(hdr.msg_iov, count * size_of::<IoVec>(), UserAccess::Read)?;
+    Ok((0..count)
+        .map(|i| unsafe { (hdr.msg_iov as *const IoVec).add(i).read_unaligned() })
+        .collect())
+}
+
+fn copy_in_user(ptr: usize, len: usize) -> Result<Vec<u8>, Errno> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    make_user_range_resident(ptr, len, UserAccess::Read)?;
+    let src = unsafe { slice_from_ptr_and_len::<u8>(ptr, len) }?;
+    Ok(src.to_vec())
+}
+
+fn copy_out_user(ptr: usize, src: &[u8]) -> Result<(), Errno> {
+    if src.is_empty() {
+        return Ok(());
+    }
+    make_user_range_resident(ptr, src.len(), UserAccess::Write)?;
+    let dst = unsafe { slice_from_ptr_and_len_mut::<u8>(ptr, src.len()) }?;
+    dst.copy_from_slice(src);
+    Ok(())
+}
+
+/// Gathers at most `SOCKET_BUFFER_BYTES`, because a socket takes no more than
+/// that in one call.
+fn gather_send_bytes(hdr: &MsgHdr) -> Result<Vec<u8>, Errno> {
+    let mut data = Vec::new();
+    for iov in user_iovecs(hdr)? {
+        let room = SOCKET_BUFFER_BYTES - data.len();
+        if room == 0 {
+            break;
+        }
+        data.extend_from_slice(&copy_in_user(iov.base, iov.len.min(room))?);
+    }
+    Ok(data)
+}
+
+fn dispatch_sys_sendmsg(fd: usize, msg: usize, flags: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    let fd = socket_fd(fd)?;
+    let flags = i32::try_from(flags).map_err(|_| EINVAL)?;
+    let hdr = read_user::<MsgHdr>(msg)?;
+    let control = copy_in_user(hdr.msg_control, hdr.control_len()?)?;
+    let data = gather_send_bytes(&hdr)?;
+    sys_sendmsg(&cx, fd, flags, &data, &control)
+}
+
+fn dispatch_sys_recvmsg(fd: usize, msg: usize, flags: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+    let fd = socket_fd(fd)?;
+    let flags = i32::try_from(flags).map_err(|_| EINVAL)?;
+    let mut hdr = read_user::<MsgHdr>(msg)?;
+    let iovecs = user_iovecs(&hdr)?;
+    let capacity = iovecs
+        .iter()
+        .fold(0usize, |sum, iov| sum.saturating_add(iov.len))
+        .min(SOCKET_BUFFER_BYTES);
+    let mut data = vec![0u8; capacity];
+    let mut control = vec![0u8; hdr.control_len()?];
+    let outcome = sys_recvmsg(&cx, fd, flags, &mut data, &mut control)?;
+    let mut rest = &data[..outcome.len];
+    for iov in iovecs {
+        if rest.is_empty() {
+            break;
+        }
+        let (chunk, tail) = rest.split_at(iov.len.min(rest.len()));
+        copy_out_user(iov.base, chunk)?;
+        rest = tail;
+    }
+    copy_out_user(hdr.msg_control, &control[..outcome.controllen])?;
+    outcome.write_to(&mut hdr);
+    write_user(msg, hdr)?;
+    Ok(outcome.len)
 }
 
 /// POSIX clock_gettime backed by the HPET main counter.

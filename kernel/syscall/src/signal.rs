@@ -28,15 +28,13 @@ pub fn sys_kill<Cx: SignalAccess + PermissionAccess + ProcessesAccess>(
         process_group_id: current_pgid,
     } = cx.current_identity();
 
-    let info = SigInfo {
-        signo: signal,
-        code: 0,
-        errno: 0,
-        info: SigInfoField::Kill {
+    let info = SigInfo::new(
+        signal,
+        SigInfoField::Kill {
             pid: current_pid,
             uid: current_uid,
         },
-    };
+    );
 
     match target {
         SignalTarget::SpecificProcess(pid) => {

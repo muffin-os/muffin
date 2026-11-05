@@ -202,7 +202,7 @@
   "moduleExtensions": {
     "//support:extensions.bzl%rust_support": {
       "general": {
-        "bzlTransitiveDigest": "VDrBGvX/GrkBGB+LMlOYRbyXev1r0KSorC62r5ffhE4=",
+        "bzlTransitiveDigest": "snl98PMT8ChNUGZfMCdGnr7PwF8hBb3wX8gy6WWMDzw=",
         "usagesDigest": "9TKtFbslhDwph+BAZV7lVpAGMjtJ0vX+YUmgSlD1HFI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
@@ -287,7 +287,8 @@
               ],
               "patches": [
                 "@@//support/rust-libc/patches:0001-add-muffin-target.patch",
-                "@@//support/rust-libc/patches:0002-add-muffin-socket-definitions.patch"
+                "@@//support/rust-libc/patches:0002-add-muffin-socket-definitions.patch",
+                "@@//support/rust-libc/patches:0003-add-muffin-sendmsg-and-recvmsg-definitions.patch"
               ],
               "sha256": "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f",
               "strip_prefix": "libc-0.2.185",

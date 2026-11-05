@@ -1,4 +1,5 @@
 use std::io::{self, BufReader};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::exit;
 use std::rc::Rc;
@@ -57,7 +58,7 @@ struct Frame {
 
 impl Frame {
     fn new() -> io::Result<Self> {
-        let device = VirtioDevice::open().map_err(gfx_error)?;
+        let device = VirtioDevice::open_display().map_err(gfx_error)?;
         let info = device.info();
         let (width, height) = (info.width, info.height);
         let mut backend = VirtioBackend::new(device.clone());
@@ -168,29 +169,15 @@ impl Frame {
 struct Window {
     texture: VirtioTexture,
     damage: Option<Rect>,
+    has_blitted: bool,
 }
 
 impl Window {
-    fn open(request: &NewWindowRequest, backend: &mut VirtioBackend) -> io::Result<Self> {
-        let path = request
-            .path
-            .to_str()
-            .ok_or_else(|| io::Error::other("path"))?;
-        let texture = backend
-            .import_texture(path, request.width, request.height)
-            .map_err(gfx_error)?;
-        Ok(Self {
+    fn new(texture: VirtioTexture) -> Self {
+        Self {
             texture,
             damage: None,
-        })
-    }
-
-    fn full_rect(&self) -> Rect {
-        Rect {
-            x: 0,
-            y: 0,
-            width: self.texture.width(),
-            height: self.texture.height(),
+            has_blitted: false,
         }
     }
 
@@ -223,13 +210,9 @@ fn serve(stream: &UnixStream, frame: &mut Frame) -> io::Result<()> {
     let mut writer = stream;
     let mut window: Option<Window> = None;
     while let Some(request) = read_message::<Request>(&mut reader)? {
+        let mut pending_fd = None;
         let response = match request {
-            Request::NewWindow(request) => {
-                let NewWindowRequest {
-                    path,
-                    width,
-                    height,
-                } = &request;
+            Request::NewWindow(NewWindowRequest { width, height }) => {
                 let start = Instant::now();
                 frame.draw()?;
                 println!(
@@ -239,17 +222,18 @@ fn serve(stream: &UnixStream, frame: &mut Frame) -> io::Result<()> {
                     start.elapsed().as_micros()
                 );
                 frame.print_probes()?;
-                println!("compositor: new window {} {width}x{height}", path.display());
-                let opened = Window::open(&request, &mut frame.backend)?;
-                let rect = opened.full_rect();
-                frame.blit_region(&opened, rect)?;
-                frame
-                    .device
-                    .read_back(&frame.scanout, rect)
+                let texture = frame
+                    .backend
+                    .alloc_texture(&TextureDesc {
+                        width,
+                        height,
+                        format: TextureFormat::Rgba8Unorm,
+                    })
                     .map_err(gfx_error)?;
-                let first = frame.scanout.pixels()[0];
-                println!("compositor: blit {width}x{height} first=0x{first:08x}");
-                window = Some(opened);
+                println!("compositor: new window {width}x{height}");
+                let created = Window::new(texture);
+                pending_fd = Some(created.texture.fd());
+                window = Some(created);
                 Response::NewWindow(NewWindowResponse {})
             }
             Request::Damage(request) => {
@@ -266,11 +250,23 @@ fn serve(stream: &UnixStream, frame: &mut Frame) -> io::Result<()> {
                 }
                 if let Some(rect) = window.damage.take() {
                     frame.blit_region(window, rect)?;
+                    if !window.has_blitted {
+                        window.has_blitted = true;
+                        let first = frame.probe((rect.x, rect.y))?;
+                        println!(
+                            "compositor: blit {}x{} first=0x{first:08x}",
+                            rect.width, rect.height
+                        );
+                    }
                 }
                 Response::Finish(FinishResponse {})
             }
         };
         write_message(&mut writer, &response)?;
+        if let Some(fd) = pending_fd.take() {
+            muffin_sys::send_fd(stream.as_raw_fd(), fd)
+                .map_err(|e| io::Error::other(format!("send_fd {e:?}")))?;
+        }
     }
     Ok(())
 }

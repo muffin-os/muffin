@@ -209,7 +209,14 @@ same_value!(
     libc::SHUT_RD = ShutdownHow::Read as c_int,
     libc::SHUT_WR = ShutdownHow::Write as c_int,
     libc::SHUT_RDWR = ShutdownHow::Both as c_int,
+    libc::SOL_SOCKET = kernel_abi::SOL_SOCKET,
+    libc::SCM_RIGHTS = kernel_abi::SCM_RIGHTS,
+    libc::MSG_CTRUNC = kernel_abi::MSG_CTRUNC,
 );
 
 const _: () = assert!(libc::PATH_MAX as usize == kernel_abi::PATH_MAX);
 const _: () = assert!(size_of::<libc::sockaddr_un>() == size_of::<kernel_abi::SockAddrUn>());
+// `sendmsg` and `recvmsg` pass the libc structs to the kernel as they are.
+const _: () = assert!(size_of::<libc::msghdr>() == size_of::<kernel_abi::MsgHdr>());
+const _: () = assert!(size_of::<libc::cmsghdr>() == size_of::<kernel_abi::CmsgHdr>());
+const _: () = assert!(size_of::<libc::iovec>() == size_of::<kernel_abi::IoVec>());

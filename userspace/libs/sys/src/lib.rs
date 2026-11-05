@@ -15,20 +15,22 @@ use core::ffi::{c_int, c_void};
 
 pub use heap::GrowingHeap;
 pub use kernel_abi::{
-    AF_UNIX, ARG_MAX, ClockId, DefaultAction, DirentHeader, E2BIG, EACCES, EADDRINUSE,
-    EAFNOSUPPORT, EBADF, EBUSY, ECONNREFUSED, EDESTADDRREQ, EEXIST, EFAULT, EINTR, EINVAL, EISDIR,
-    ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTCONN, ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW,
-    EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE, ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo,
-    IoctlRequest, MapFlags, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY,
-    O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH,
-    O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX, ProtFlags, S_IFMT, S_IFSOCK, SOCK_STREAM,
-    SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME, SYS_CLOSE, SYS_CONNECT,
-    SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_FTRUNCATE, SYS_GETCWD,
-    SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LISTEN, SYS_LSEEK, SYS_MMAP,
-    SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_SHUTDOWN, SYS_SIGACTION,
-    SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE,
-    SaFamily, SaFlags, ShutdownHow, SigAction, SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn,
-    SockLen, Stat, StrSlice, Timespec, WaitOptions, Whence,
+    AF_UNIX, ARG_MAX, ClockId, CmsgHdr, DefaultAction, DirentHeader, E2BIG, EACCES, EADDRINUSE,
+    EAFNOSUPPORT, EBADF, EBUSY, ECONNREFUSED, ECONNRESET, EDESTADDRREQ, EEXIST, EFAULT, EINTR,
+    EINVAL, EISDIR, EMSGSIZE, ENAMETOOLONG, ENOBUFS, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTCONN,
+    ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW, EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE, ERANGE,
+    ESPIPE, ESRCH, Errno, FbScreenInfo, IoVec, IoctlRequest, MSG_CTRUNC, MapFlags, MsgHdr,
+    O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC,
+    O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC,
+    O_TTY_INIT, O_WRONLY, PATH_MAX, ProtFlags, S_IFMT, S_IFSOCK, SCM_RIGHTS, SOCK_STREAM,
+    SOL_SOCKET, SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME, SYS_CLOSE,
+    SYS_CONNECT, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_FTRUNCATE,
+    SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LISTEN, SYS_LSEEK,
+    SYS_MMAP, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_RECVMSG,
+    SYS_SENDMSG, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN,
+    SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE, SaFamily, SaFlags, ShutdownHow, SigAction,
+    SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, StrSlice, Timespec,
+    WaitOptions, Whence,
 };
 
 pub fn exit(code: i32) -> ! {
@@ -462,6 +464,79 @@ pub fn listen(fd: c_int, backlog: c_int) -> Result<(), Errno> {
 
 pub fn shutdown(fd: c_int, how: ShutdownHow) -> Result<(), Errno> {
     ret(unsafe { syscall2(SYS_SHUTDOWN, fd as usize, how as usize) }).map(|_| ())
+}
+
+/// # Safety
+/// `msg` and every buffer it names must be valid for reads for the whole call.
+pub unsafe fn sendmsg_raw(fd: c_int, msg: *const MsgHdr, flags: c_int) -> Result<usize, Errno> {
+    ret(unsafe { syscall3(SYS_SENDMSG, fd as usize, msg as usize, flags as usize) })
+}
+
+/// # Safety
+/// `msg` and every buffer it names must be valid for writes for the whole call.
+pub unsafe fn recvmsg_raw(fd: c_int, msg: *mut MsgHdr, flags: c_int) -> Result<usize, Errno> {
+    ret(unsafe { syscall3(SYS_RECVMSG, fd as usize, msg as usize, flags as usize) })
+}
+
+const ONE_FD_CONTROL: usize = CmsgHdr::scm_rights_space(1);
+
+/// Sends `fd` over the connected socket `sock`, attached to one zero byte.
+pub fn send_fd(sock: c_int, fd: c_int) -> Result<(), Errno> {
+    let byte = [0u8];
+    let iov = IoVec {
+        base: byte.as_ptr() as usize,
+        len: 1,
+    };
+    let mut control = [0u8; ONE_FD_CONTROL];
+    // Safety: `ONE_FD_CONTROL` is `CMSG_SPACE` of one `c_int`, so `control`
+    // holds a `CmsgHdr` at 0 and a `c_int` at `CmsgHdr::len(0)`;
+    // `write_unaligned` needs no alignment.
+    unsafe {
+        control
+            .as_mut_ptr()
+            .cast::<CmsgHdr>()
+            .write_unaligned(CmsgHdr::scm_rights(1));
+        control
+            .as_mut_ptr()
+            .add(CmsgHdr::len(0))
+            .cast::<c_int>()
+            .write_unaligned(fd);
+    }
+    let msg = MsgHdr::new(&iov, &mut control);
+    // Safety: `byte`, `iov`, `control` and `msg` live on the stack for the whole call.
+    unsafe { sendmsg_raw(sock, &msg, 0) }.map(|_| ())
+}
+
+/// Receives one descriptor that `send_fd` sent over `sock`.
+///
+/// Returns `ECONNRESET` when the peer closed first, and `EINVAL` when the
+/// message carried no descriptor or more than one.
+pub fn recv_fd(sock: c_int) -> Result<c_int, Errno> {
+    let mut byte = [0u8];
+    let iov = IoVec {
+        base: byte.as_mut_ptr() as usize,
+        len: 1,
+    };
+    let mut control = [0u8; ONE_FD_CONTROL];
+    let mut msg = MsgHdr::new(&iov, &mut control);
+    // Safety: `byte`, `iov`, `control` and `msg` live on the stack for the whole call.
+    let n = unsafe { recvmsg_raw(sock, &mut msg, 0) }?;
+    if n == 0 {
+        return Err(ECONNRESET);
+    }
+    if msg.msg_controllen != ONE_FD_CONTROL || msg.msg_flags & MSG_CTRUNC != 0 {
+        return Err(EINVAL);
+    }
+    // Safety: `msg_controllen == ONE_FD_CONTROL` was checked above, so `control`
+    // holds a header and one `c_int` at `CmsgHdr::len(0)`; `read_unaligned`
+    // needs no alignment.
+    Ok(unsafe {
+        control
+            .as_ptr()
+            .add(CmsgHdr::len(0))
+            .cast::<c_int>()
+            .read_unaligned()
+    })
 }
 
 /// Returns `ENAMETOOLONG` when `path` does not fit `SockAddrUn`.

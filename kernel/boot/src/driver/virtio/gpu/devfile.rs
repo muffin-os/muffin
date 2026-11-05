@@ -1,4 +1,4 @@
-//! The device files `/dev/fb0` and `/dev/gpu0`.
+//! The device files `/dev/fb0`, `/dev/gpu0`, and `/dev/render0`.
 //!
 //! Lock order: the `DevFs` lock (held by the caller) comes first, then the
 //! process fd table (inside `FdLookup`, released before the device lock), then
@@ -20,6 +20,7 @@ use kernel_vfs::{
 use spin::Mutex;
 
 use super::device::{GpuDevice, GpuError};
+use super::wire::{ContextId, ResourceId};
 
 /// The framebuffer bytes that `/dev/fb0` lends out for shared mappings.
 #[derive(Debug)]
@@ -126,32 +127,41 @@ impl DevFile for FbDevFile {
     }
 }
 
-/// Device file behind `/dev/gpu0`. Each open file owns one virgl context.
-/// `ctx` is 0 on a device without 3D support.
+/// `Display` is `/dev/gpu0`; it may change and flush the display. `Render` is
+/// `/dev/render0`; it renders into imported resources only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuNode {
+    Display,
+    Render,
+}
+
+/// Device file behind `/dev/gpu0` and `/dev/render0`. Each open file owns one
+/// virgl context; a device without 3D support gives none.
 pub struct GpuDevFile {
     device: Arc<Mutex<GpuDevice>>,
-    ctx: u32,
+    ctx: Option<ContextId>,
+    node: GpuNode,
 }
 
 impl GpuDevFile {
-    pub fn open(device: Arc<Mutex<GpuDevice>>) -> Result<Self, GpuError> {
+    pub fn open(device: Arc<Mutex<GpuDevice>>, node: GpuNode) -> Result<Self, GpuError> {
         let ctx = {
             let mut guard = device.lock();
-            if guard.has_3d() {
-                guard.create_context()?
-            } else {
-                0
-            }
+            guard.has_3d().then(|| guard.create_context()).transpose()?
         };
-        Ok(Self { device, ctx })
+        Ok(Self { device, ctx, node })
+    }
+
+    fn context(&self) -> Result<ContextId, IoctlError> {
+        self.ctx.ok_or(IoctlError::NotSupported)
     }
 }
 
 impl Drop for GpuDevFile {
     fn drop(&mut self) {
-        if self.ctx != 0 {
+        if let Some(ctx) = self.ctx {
             // The context is gone either way; a device error leaves nothing to undo.
-            let _ = self.device.lock().destroy_context(self.ctx);
+            let _ = self.device.lock().destroy_context(ctx);
         }
     }
 }
@@ -159,6 +169,7 @@ impl Drop for GpuDevFile {
 fn ioctl_error(err: GpuError) -> IoctlError {
     match err {
         GpuError::No3d => IoctlError::NotSupported,
+        GpuError::DisplayOwned => IoctlError::Busy,
         GpuError::InvalidArgument | GpuError::Device(_) | GpuError::Queue(_) => {
             IoctlError::InvalidArgument
         }
@@ -189,9 +200,11 @@ impl DevFile for GpuDevFile {
     /// Submits `buf` as one virgl command stream. `sys_write` made `buf`
     /// resident, so the device lock never faults on user memory.
     fn write(&mut self, buf: &[u8], _offset: usize) -> Result<usize, WriteError> {
-        match self.device.lock().submit(self.ctx, buf) {
+        let Some(ctx) = self.ctx else {
+            return Err(WriteError::NotWritable);
+        };
+        match self.device.lock().submit(ctx, buf) {
             Ok(_) => Ok(buf.len()),
-            Err(GpuError::No3d) => Err(WriteError::NotWritable),
             Err(_) => Err(WriteError::WriteFailed),
         }
     }
@@ -208,6 +221,14 @@ impl DevFile for GpuDevFile {
         arg: &mut [u8],
         lookup: &dyn FdLookup,
     ) -> Result<usize, IoctlError> {
+        if self.node == GpuNode::Render
+            && matches!(
+                request,
+                IoctlRequest::GpuSetScanout | IoctlRequest::GpuFlush
+            )
+        {
+            return Err(IoctlError::NotSupported);
+        }
         match request {
             IoctlRequest::GpuGetInfo => {
                 let device = self.device.lock();
@@ -222,21 +243,23 @@ impl DevFile for GpuDevFile {
             }
             IoctlRequest::GpuImport => {
                 let mut import = decode(arg, GpuImport::from_bytes)?;
+                let ctx = self.context()?;
                 let region = lookup
                     .mmap_region(import.fd)
                     .map_err(|_| IoctlError::InvalidArgument)?;
                 import.resource = self
                     .device
                     .lock()
-                    .import(self.ctx, region, import.kind, import.width, import.height)
-                    .map_err(ioctl_error)?;
+                    .import(ctx, region, import.kind, import.width, import.height)
+                    .map_err(ioctl_error)?
+                    .to_abi();
                 encode(arg, import.to_bytes())
             }
             IoctlRequest::GpuTransfer => {
                 let transfer = decode(arg, GpuTransfer::from_bytes)?;
                 self.device
                     .lock()
-                    .transfer(self.ctx, transfer)
+                    .transfer(self.context()?, transfer)
                     .map_err(ioctl_error)?;
                 Ok(0)
             }
@@ -261,7 +284,7 @@ impl DevFile for GpuDevFile {
                 let scanout = decode(arg, GpuSetScanout::from_bytes)?;
                 self.device
                     .lock()
-                    .set_scanout(self.ctx, scanout.resource)
+                    .set_scanout(self.context()?, ResourceId::from_abi(scanout.resource))
                     .map_err(ioctl_error)?;
                 Ok(0)
             }
@@ -269,7 +292,7 @@ impl DevFile for GpuDevFile {
                 let flush = decode(arg, GpuFlush::from_bytes)?;
                 self.device
                     .lock()
-                    .flush(self.ctx, flush)
+                    .flush(self.context()?, flush)
                     .map_err(ioctl_error)?;
                 Ok(0)
             }

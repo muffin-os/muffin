@@ -1,8 +1,12 @@
 //! Messages between the compositor and its clients. Each message is one frame on an
 //! AF_UNIX stream socket: a `u32` little-endian byte length, then a JSON body.
+//!
+//! After `Response::NewWindow`, the compositor sends one descriptor of the window
+//! memory with `SCM_RIGHTS`, attached to the one byte that follows the response.
+//! A client takes it with `recvmsg` on that byte; a plain read of the byte closes
+//! the descriptor.
 
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -12,24 +16,12 @@ pub const SOCKET_PATH: &str = "/var/run/compositor.sock";
 /// Upper bound for one frame body. The reader allocates this many bytes at most.
 pub const MAX_MESSAGE_BYTES: u32 = 64 * 1024;
 
-/// `path` names a shared memory object that holds the window pixels. The
-/// object has `height` rows of `width` pixels with no padding between rows.
-/// Each pixel is one `u32` in `0xAARRGGBB` form, so the object has
-/// [`Self::buffer_len`] bytes.
+/// The window memory has `height` rows of `width` pixels with no padding
+/// between rows. Each pixel is one `u32` in `0xAARRGGBB` form.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewWindowRequest {
-    pub path: PathBuf,
     pub width: u32,
     pub height: u32,
-}
-
-impl NewWindowRequest {
-    /// The byte count of the pixel object, or `None` when it overflows.
-    pub fn buffer_len(&self) -> Option<usize> {
-        (self.width as usize)
-            .checked_mul(self.height as usize)?
-            .checked_mul(size_of::<u32>())
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,7 +116,6 @@ mod tests {
     #[test]
     fn given_new_window_request_when_written_and_read_then_equal() {
         let request = Request::NewWindow(NewWindowRequest {
-            path: PathBuf::from("/dev/shm/window"),
             width: 256,
             height: 128,
         });

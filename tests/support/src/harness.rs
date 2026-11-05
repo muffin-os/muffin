@@ -116,6 +116,25 @@ impl KernelTest {
         self
     }
 
+    /// Adds a headless virgl GPU of `width` by `height` pixels.
+    #[must_use]
+    pub fn virgl_gpu(self, width: u32, height: u32) -> Self {
+        // With the host radeonsi driver (Mesa 26.2), QEMU 11.1 segfaults in its
+        // EGL teardown after the guest powers off, and the nonzero exit counts
+        // as a failed run. No upstream issue is filed.
+        // TODO(tpdenk): drop the override once the GPU tests exit 0 without it
+        // on a radeonsi host.
+        self.qemu_env("MESA_LOADER_DRIVER_OVERRIDE", "llvmpipe")
+            .qemu_args([
+                "-device".to_owned(),
+                format!("virtio-gpu-gl,xres={width},yres={height}"),
+                "-vga".to_owned(),
+                "none".to_owned(),
+                "-display".to_owned(),
+                "egl-headless".to_owned(),
+            ])
+    }
+
     fn disk_image(&self) -> PathBuf {
         self.env.work_dir.join(self.name).join("disk.img")
     }

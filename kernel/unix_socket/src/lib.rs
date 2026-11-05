@@ -4,29 +4,114 @@ extern crate alloc;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
 
 use kernel_abi::{
-    EADDRINUSE, EAGAIN, ECONNREFUSED, EDESTADDRREQ, EINVAL, EISCONN, ENOTCONN, EOPNOTSUPP, EPIPE,
-    Errno, ShutdownHow,
+    EADDRINUSE, EAGAIN, ECONNREFUSED, EDESTADDRREQ, EINVAL, EISCONN, ENOBUFS, ENOTCONN, EOPNOTSUPP,
+    EPIPE, Errno, ShutdownHow,
 };
 use kernel_vfs::path::AbsoluteOwnedPath;
 use spin::Mutex;
 
 pub const SOCKET_BUFFER_BYTES: usize = 64 * 1024;
 
+/// A sender gets `ENOBUFS` above the limit; `EAGAIN` would block it forever
+/// when the receiver never calls `recvmsg`.
+pub const MAX_PENDING_ATTACHED: usize = 256;
+
 /// Wakes every task that waits on the owner. Spurious wakes are allowed.
 pub trait Notify: Default + Send + Sync + 'static {
     fn notify_all(&self);
 }
 
-pub struct Registry<N: Notify> {
-    bound: Mutex<BTreeMap<AbsoluteOwnedPath, Weak<UnixSocket<N>>>>,
+/// What a take does with the items attached to its first byte.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttachedItems {
+    Take,
+    /// A plain read closes what it does not take, as Linux does.
+    Drop,
+}
+
+struct Inbox<P> {
+    bytes: VecDeque<u8>,
+    written_total: u64,
+    read_total: u64,
+    /// Stream offset of the byte that carries the items.
+    attachments: BTreeMap<u64, Vec<P>>,
+}
+
+impl<P> Inbox<P> {
+    const fn new() -> Self {
+        Self {
+            bytes: VecDeque::new(),
+            written_total: 0,
+            read_total: 0,
+            attachments: BTreeMap::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    fn push(&mut self, buf: &[u8], items: Vec<P>) -> Result<usize, Errno> {
+        let free = SOCKET_BUFFER_BYTES - self.bytes.len();
+        if free == 0 {
+            return Err(EAGAIN);
+        }
+        if !items.is_empty() {
+            if buf.is_empty() {
+                return Err(EINVAL);
+            }
+            let pending: usize = self.attachments.values().map(Vec::len).sum();
+            if items.len() + pending > MAX_PENDING_ATTACHED {
+                return Err(ENOBUFS);
+            }
+        }
+        let byte_count = free.min(buf.len());
+        self.bytes.extend(&buf[..byte_count]);
+        if !items.is_empty() {
+            let replaced = self.attachments.insert(self.written_total, items);
+            debug_assert!(replaced.is_none(), "every push with items appends a byte");
+        }
+        self.written_total += byte_count as u64;
+        Ok(byte_count)
+    }
+
+    /// A take never crosses into the byte that carries the next attachment.
+    fn take(&mut self, buf: &mut [u8], policy: AttachedItems) -> (usize, Vec<P>) {
+        let start = self.read_total;
+        let items = self
+            .attachments
+            .remove(&start)
+            .filter(|_| policy == AttachedItems::Take)
+            .unwrap_or_default();
+        let mut byte_count = buf.len().min(self.bytes.len());
+        if let Some(next) = self.attachments.keys().next() {
+            byte_count = byte_count.min(usize::try_from(next - start).unwrap_or(usize::MAX));
+        }
+        for (dst, src) in buf.iter_mut().zip(self.bytes.drain(..byte_count)) {
+            *dst = src;
+        }
+        self.read_total += byte_count as u64;
+        (byte_count, items)
+    }
+
+    fn discard(&mut self) {
+        self.bytes.clear();
+        self.attachments.clear();
+        self.read_total = self.written_total;
+    }
+}
+
+pub struct Registry<N: Notify, P: Send + Sync + 'static> {
+    bound: Mutex<BTreeMap<AbsoluteOwnedPath, Weak<UnixSocket<N, P>>>>,
     /// Wakes when a listen queue gains room or a listener goes away.
     waiters: N,
 }
 
-impl<N: Notify> Registry<N> {
+impl<N: Notify, P: Send + Sync + 'static> Registry<N, P> {
     pub const fn new(waiters: N) -> Self {
         Self {
             bound: Mutex::new(BTreeMap::new()),
@@ -39,23 +124,23 @@ impl<N: Notify> Registry<N> {
     }
 }
 
-pub struct UnixSocket<N: Notify> {
-    registry: &'static Registry<N>,
-    state: Mutex<State<N>>,
+pub struct UnixSocket<N: Notify, P: Send + Sync + 'static> {
+    registry: &'static Registry<N, P>,
+    state: Mutex<State<N, P>>,
     waiters: N,
 }
 
-enum State<N: Notify> {
+enum State<N: Notify, P: Send + Sync + 'static> {
     Unbound,
     Bound(AbsoluteOwnedPath),
     Listening {
         path: AbsoluteOwnedPath,
         backlog: usize,
-        pending: VecDeque<Arc<UnixSocket<N>>>,
+        pending: VecDeque<Arc<UnixSocket<N, P>>>,
     },
     Connected {
-        peer: Weak<UnixSocket<N>>,
-        inbox: VecDeque<u8>,
+        peer: Weak<UnixSocket<N, P>>,
+        inbox: Inbox<P>,
         /// No more bytes arrive. The peer shut its write side, or this side shut its read side.
         inbox_closed: bool,
         /// Writes fail. This side shut its write side, or the peer shut its read side.
@@ -63,11 +148,11 @@ enum State<N: Notify> {
     },
 }
 
-impl<N: Notify> State<N> {
-    fn connected(peer: Weak<UnixSocket<N>>) -> Self {
+impl<N: Notify, P: Send + Sync + 'static> State<N, P> {
+    fn connected(peer: Weak<UnixSocket<N, P>>) -> Self {
         State::Connected {
             peer,
-            inbox: VecDeque::new(),
+            inbox: Inbox::new(),
             inbox_closed: false,
             outbox_closed: false,
         }
@@ -83,8 +168,8 @@ impl<N: Notify> State<N> {
     }
 }
 
-impl<N: Notify> UnixSocket<N> {
-    pub fn new(registry: &'static Registry<N>) -> Arc<Self> {
+impl<N: Notify, P: Send + Sync + 'static> UnixSocket<N, P> {
+    pub fn new(registry: &'static Registry<N, P>) -> Arc<Self> {
         Arc::new(Self {
             registry,
             state: Mutex::new(State::Unbound),
@@ -96,7 +181,7 @@ impl<N: Notify> UnixSocket<N> {
         &self.waiters
     }
 
-    pub fn registry(&self) -> &'static Registry<N> {
+    pub fn registry(&self) -> &'static Registry<N, P> {
         self.registry
     }
 
@@ -187,6 +272,18 @@ impl<N: Notify> UnixSocket<N> {
     }
 
     pub fn try_read(&self, buf: &mut [u8]) -> Result<usize, Errno> {
+        self.drain(buf, AttachedItems::Drop).map(|(n, _)| n)
+    }
+
+    /// Takes the items attached to the first byte read.
+    pub fn try_recvmsg(&self, buf: &mut [u8]) -> Result<(usize, Vec<P>), Errno> {
+        if buf.is_empty() {
+            return Err(EINVAL);
+        }
+        self.drain(buf, AttachedItems::Take)
+    }
+
+    fn drain(&self, buf: &mut [u8], policy: AttachedItems) -> Result<(usize, Vec<P>), Errno> {
         let mut state = self.state.lock();
         let State::Connected {
             peer,
@@ -199,25 +296,27 @@ impl<N: Notify> UnixSocket<N> {
         };
         if inbox.is_empty() {
             return if *inbox_closed || peer.upgrade().is_none() {
-                Ok(0)
+                Ok((0, Vec::new()))
             } else {
                 Err(EAGAIN)
             };
         }
-        let n = buf.len().min(inbox.len());
-        for (dst, src) in buf.iter_mut().zip(inbox.drain(..n)) {
-            *dst = src;
-        }
+        let taken = inbox.take(buf, policy);
         let peer = peer.clone();
         drop(state);
         // The writer may wait for room in the inbox.
         if let Some(peer) = peer.upgrade() {
             peer.waiters.notify_all();
         }
-        Ok(n)
+        Ok(taken)
     }
 
     pub fn try_write(&self, buf: &[u8]) -> Result<usize, Errno> {
+        self.try_sendmsg(buf, Vec::new())
+    }
+
+    /// Appends bytes to the peer inbox and attaches `items` to the first of them.
+    pub fn try_sendmsg(&self, buf: &[u8], items: Vec<P>) -> Result<usize, Errno> {
         let state = self.state.lock();
         let State::Connected {
             peer,
@@ -237,15 +336,10 @@ impl<N: Notify> UnixSocket<N> {
         let State::Connected { inbox, .. } = &mut *peer_state else {
             unreachable!("a peer is always connected");
         };
-        let free = SOCKET_BUFFER_BYTES - inbox.len();
-        if free == 0 {
-            return Err(EAGAIN);
-        }
-        let n = free.min(buf.len());
-        inbox.extend(&buf[..n]);
+        let byte_count = inbox.push(buf, items)?;
         drop(peer_state);
         peer.waiters.notify_all();
-        Ok(n)
+        Ok(byte_count)
     }
 
     pub fn shutdown(&self, how: ShutdownHow) -> Result<(), Errno> {
@@ -265,7 +359,7 @@ impl<N: Notify> UnixSocket<N> {
             *outbox_closed = true;
         }
         if shut_read {
-            inbox.clear();
+            inbox.discard();
             *inbox_closed = true;
         }
         let peer = peer.clone();
@@ -287,7 +381,7 @@ impl<N: Notify> UnixSocket<N> {
     }
 }
 
-impl<N: Notify> Debug for UnixSocket<N> {
+impl<N: Notify, P: Send + Sync + 'static> Debug for UnixSocket<N, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("UnixSocket")
             .field("state", &self.state.lock().name())
@@ -295,7 +389,7 @@ impl<N: Notify> Debug for UnixSocket<N> {
     }
 }
 
-impl<N: Notify> Drop for UnixSocket<N> {
+impl<N: Notify, P: Send + Sync + 'static> Drop for UnixSocket<N, P> {
     fn drop(&mut self) {
         match self.state.get_mut() {
             State::Bound(path) | State::Listening { path, .. } => {
@@ -328,9 +422,9 @@ mod tests {
         fn notify_all(&self) {}
     }
 
-    static REGISTRY: Registry<Silent> = Registry::new(Silent);
+    static REGISTRY: Registry<Silent, u32> = Registry::new(Silent);
 
-    type Socket = UnixSocket<Silent>;
+    type Socket = UnixSocket<Silent, u32>;
 
     fn path(p: &str) -> AbsoluteOwnedPath {
         AbsoluteOwnedPath::try_from(p).unwrap()
@@ -459,5 +553,64 @@ mod tests {
         s2.shutdown(ShutdownHow::Read).unwrap();
         assert_eq!(s2.try_read(&mut buf), Ok(0));
         assert_eq!(c2.try_write(b"x"), Err(EPIPE));
+    }
+
+    #[test]
+    fn sendmsg_attaches_items_to_first_byte() {
+        let (_l, c, s) = pair("/j");
+        let mut buf = [0; 8];
+        assert_eq!(c.try_sendmsg(b"ab", alloc::vec![7]), Ok(2));
+        assert_eq!(s.try_recvmsg(&mut buf), Ok((2, alloc::vec![7])));
+        assert_eq!(&buf[..2], b"ab");
+    }
+
+    #[test]
+    fn recvmsg_stops_before_next_attachment() {
+        let (_l, c, s) = pair("/k");
+        assert_eq!(c.try_write(b"xy"), Ok(2));
+        assert_eq!(c.try_sendmsg(b"z", alloc::vec![1]), Ok(1));
+        let mut buf = [0; 8];
+        assert_eq!(s.try_recvmsg(&mut buf), Ok((2, alloc::vec![])));
+        assert_eq!(&buf[..2], b"xy");
+        assert_eq!(s.try_recvmsg(&mut buf), Ok((1, alloc::vec![1])));
+        assert_eq!(buf[0], b'z');
+    }
+
+    #[test]
+    fn plain_read_drops_items() {
+        let (_l, c, s) = pair("/l");
+        let mut buf = [0; 8];
+        assert_eq!(c.try_sendmsg(b"a", alloc::vec![9]), Ok(1));
+        assert_eq!(s.try_read(&mut buf), Ok(1));
+        assert_eq!(s.try_recvmsg(&mut buf), Err(EAGAIN));
+    }
+
+    #[test]
+    fn sendmsg_without_bytes_is_invalid() {
+        let (_l, c, _s) = pair("/m");
+        assert_eq!(c.try_sendmsg(b"", alloc::vec![1]), Err(EINVAL));
+    }
+
+    #[test]
+    fn recvmsg_with_empty_buffer_is_invalid() {
+        let (_l, _c, s) = pair("/n");
+        assert_eq!(s.try_recvmsg(&mut []), Err(EINVAL));
+    }
+
+    #[test]
+    fn shutdown_read_discards_attachments() {
+        let (_l, c, s) = pair("/o");
+        assert_eq!(c.try_sendmsg(b"a", alloc::vec![3]), Ok(1));
+        s.shutdown(ShutdownHow::Read).unwrap();
+        assert_eq!(s.try_recvmsg(&mut [0; 4]), Ok((0, alloc::vec![])));
+    }
+
+    #[test]
+    fn pending_attachment_limit() {
+        let (_l, c, _s) = pair("/p");
+        for _ in 0..MAX_PENDING_ATTACHED / 16 {
+            assert_eq!(c.try_sendmsg(b"a", alloc::vec![0; 16]), Ok(1));
+        }
+        assert_eq!(c.try_sendmsg(b"a", alloc::vec![0; 16]), Err(ENOBUFS));
     }
 }

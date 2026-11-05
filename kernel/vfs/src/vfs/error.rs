@@ -29,6 +29,8 @@ pub enum OpenError {
     NameTooLong,
     #[error("the file system cannot create files")]
     CreateUnsupported,
+    #[error("permission denied")]
+    PermissionDenied,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
@@ -115,6 +117,8 @@ pub enum IoctlError {
     NotSupported,
     #[error("invalid ioctl argument")]
     InvalidArgument,
+    #[error("device or resource busy")]
+    Busy,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
@@ -161,4 +165,6 @@ pub enum UnlinkError {
     NotFound,
     #[error("the file system cannot remove files")]
     NotSupported,
+    #[error("permission denied")]
+    PermissionDenied,
 }

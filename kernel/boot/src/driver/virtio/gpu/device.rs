@@ -24,8 +24,6 @@ use crate::mem::address_space::AddressSpace;
 const CONTROL_QUEUE: u16 = 0;
 const QUEUE_SIZE: usize = 2;
 const SCANOUT_ID: u32 = 0;
-/// The 2D resource that backs `/dev/fb0`.
-const FRAMEBUFFER_RESOURCE: u32 = 1;
 /// One page for the request header plus the largest single virgl command.
 const SUBMIT_STAGING_PAGES: usize = 1 + VIRGL_CMD0_MAX_DWORDS * 4 / PAGE_SIZE + 1;
 const MAX_CHUNK_BYTES: usize = VIRGL_CMD0_MAX_DWORDS * 4;
@@ -41,6 +39,8 @@ pub enum GpuError {
     Device(u32),
     #[error("{0}")]
     Queue(virtio_drivers::Error),
+    #[error("another context owns the display")]
+    DisplayOwned,
 }
 
 /// Physically contiguous pages that the device reads and writes.
@@ -99,7 +99,7 @@ struct ImportedResource {
     kind: GpuResourceKind,
     width: u32,
     height: u32,
-    importers: BTreeSet<u32>,
+    importers: BTreeSet<ContextId>,
 }
 
 pub struct GpuDevice {
@@ -110,12 +110,15 @@ pub struct GpuDevice {
     request: DmaBuffer,
     response: DmaBuffer,
     framebuffer: Option<DmaBuffer>,
-    next_resource: u32,
-    next_ctx: u32,
+    next_resource: ResourceId,
+    next_ctx: ContextId,
     last_submitted: u64,
     last_completed: u64,
-    resources: BTreeMap<u32, ImportedResource>,
-    by_phys: BTreeMap<u64, u32>,
+    resources: BTreeMap<ResourceId, ImportedResource>,
+    by_phys: BTreeMap<u64, ResourceId>,
+    /// The context that called `set_scanout` first. Only it changes or
+    /// flushes the display, until it drops.
+    display_owner: Option<ContextId>,
 }
 
 impl GpuDevice {
@@ -144,12 +147,13 @@ impl GpuDevice {
             request: DmaBuffer::new(SUBMIT_STAGING_PAGES),
             response: DmaBuffer::new(1),
             framebuffer: None,
-            next_resource: FRAMEBUFFER_RESOURCE + 1,
-            next_ctx: 1,
+            next_resource: ResourceId::FRAMEBUFFER.next(),
+            next_ctx: ContextId::FIRST,
             last_submitted: 0,
             last_completed: 0,
             resources: BTreeMap::new(),
             by_phys: BTreeMap::new(),
+            display_owner: None,
         };
         let info: RespDisplayInfo = device.request(CtrlHeader::new(CMD_GET_DISPLAY_INFO), &[])?;
         check_response(&info.hdr, RESP_OK_DISPLAY_INFO)?;
@@ -197,20 +201,29 @@ impl GpuDevice {
     fn resource_command(
         &mut self,
         type_: u32,
-        ctx_id: u32,
-        resource_id: u32,
+        ctx: Option<ContextId>,
+        resource: ResourceId,
     ) -> Result<(), GpuError> {
+        let hdr = match ctx {
+            Some(ctx) => CtrlHeader::with_ctx(type_, ctx),
+            None => CtrlHeader::new(type_),
+        };
         self.request_nodata(
             CmdResource {
-                hdr: CtrlHeader::with_ctx(type_, ctx_id),
-                resource_id,
+                hdr,
+                resource_id: resource.to_wire(),
                 padding: 0,
             },
             &[],
         )
     }
 
-    fn attach_backing(&mut self, resource_id: u32, addr: u64, length: u32) -> Result<(), GpuError> {
+    fn attach_backing(
+        &mut self,
+        resource: ResourceId,
+        addr: u64,
+        length: u32,
+    ) -> Result<(), GpuError> {
         let entry = MemEntry {
             addr,
             length,
@@ -219,31 +232,31 @@ impl GpuDevice {
         self.request_nodata(
             CmdResourceAttachBacking {
                 hdr: CtrlHeader::new(CMD_RESOURCE_ATTACH_BACKING),
-                resource_id,
+                resource_id: resource.to_wire(),
                 nr_entries: 1,
             },
             entry.as_bytes(),
         )
     }
 
-    fn set_scanout_resource(&mut self, resource_id: u32) -> Result<(), GpuError> {
+    fn set_scanout_resource(&mut self, resource: ResourceId) -> Result<(), GpuError> {
         self.request_nodata(
             CmdSetScanout {
                 hdr: CtrlHeader::new(CMD_SET_SCANOUT),
                 rect: self.scanout,
                 scanout_id: SCANOUT_ID,
-                resource_id,
+                resource_id: resource.to_wire(),
             },
             &[],
         )
     }
 
-    fn resource_flush(&mut self, rect: Rect, resource_id: u32) -> Result<(), GpuError> {
+    fn resource_flush(&mut self, rect: Rect, resource: ResourceId) -> Result<(), GpuError> {
         self.request_nodata(
             CmdResourceFlush {
                 hdr: CtrlHeader::new(CMD_RESOURCE_FLUSH),
                 rect,
-                resource_id,
+                resource_id: resource.to_wire(),
                 padding: 0,
             },
             &[],
@@ -259,15 +272,15 @@ impl GpuDevice {
         self.request_nodata(
             CmdResourceCreate2d {
                 hdr: CtrlHeader::new(CMD_RESOURCE_CREATE_2D),
-                resource_id: FRAMEBUFFER_RESOURCE,
+                resource_id: ResourceId::FRAMEBUFFER.to_wire(),
                 format: FORMAT_B8G8R8A8_UNORM,
                 width,
                 height,
             },
             &[],
         )?;
-        self.attach_backing(FRAMEBUFFER_RESOURCE, buffer.paddr(), len as u32)?;
-        self.set_scanout_resource(FRAMEBUFFER_RESOURCE)?;
+        self.attach_backing(ResourceId::FRAMEBUFFER, buffer.paddr(), len as u32)?;
+        self.set_scanout_resource(ResourceId::FRAMEBUFFER)?;
         Ok(self.framebuffer.insert(buffer))
     }
 
@@ -279,12 +292,12 @@ impl GpuDevice {
                 hdr: CtrlHeader::new(CMD_TRANSFER_TO_HOST_2D),
                 rect,
                 offset: 0,
-                resource_id: FRAMEBUFFER_RESOURCE,
+                resource_id: ResourceId::FRAMEBUFFER.to_wire(),
                 padding: 0,
             },
             &[],
         )?;
-        self.resource_flush(rect, FRAMEBUFFER_RESOURCE)
+        self.resource_flush(rect, ResourceId::FRAMEBUFFER)
     }
 
     fn require_3d(&self) -> Result<(), GpuError> {
@@ -295,7 +308,7 @@ impl GpuDevice {
         }
     }
 
-    pub fn create_context(&mut self) -> Result<u32, GpuError> {
+    pub fn create_context(&mut self) -> Result<ContextId, GpuError> {
         self.require_3d()?;
         let ctx = self.next_ctx;
         let mut debug_name = [0u8; 64];
@@ -309,14 +322,19 @@ impl GpuDevice {
             },
             &[],
         )?;
-        self.next_ctx += 1;
+        self.next_ctx = ctx.next();
         Ok(ctx)
     }
 
     /// Releases every resource of `ctx` and destroys the context.
-    pub fn destroy_context(&mut self, ctx: u32) -> Result<(), GpuError> {
-        self.require_3d()?;
-        let owned: Vec<u32> = self
+    pub fn destroy_context(&mut self, ctx: ContextId) -> Result<(), GpuError> {
+        if self.display_owner == Some(ctx) {
+            self.display_owner = None;
+            // The shown resource must change before `release` unrefs it. The
+            // context goes away in either case, so a device error is ignored.
+            let _ = self.set_scanout_resource(ResourceId::FRAMEBUFFER);
+        }
+        let owned: Vec<ResourceId> = self
             .resources
             .iter()
             .filter(|(_, res)| res.importers.contains(&ctx))
@@ -332,13 +350,12 @@ impl GpuDevice {
     /// The same region imported twice yields the same resource id.
     pub fn import(
         &mut self,
-        ctx: u32,
+        ctx: ContextId,
         region: MmapRegion,
         kind: GpuResourceKind,
         width: u32,
         height: u32,
-    ) -> Result<u32, GpuError> {
-        self.require_3d()?;
+    ) -> Result<ResourceId, GpuError> {
         let phys = AddressSpace::kernel()
             .translate(VirtAddr::from_ptr(region.ptr().as_ptr()))
             .ok_or(GpuError::InvalidArgument)?;
@@ -369,7 +386,7 @@ impl GpuDevice {
                 return Err(GpuError::InvalidArgument);
             }
             if !res.importers.contains(&ctx) {
-                self.resource_command(CMD_CTX_ATTACH_RESOURCE, ctx, id)?;
+                self.resource_command(CMD_CTX_ATTACH_RESOURCE, Some(ctx), id)?;
                 self.resources.get_mut(&id).unwrap().importers.insert(ctx);
             }
             return Ok(id);
@@ -389,7 +406,7 @@ impl GpuDevice {
         self.request_nodata(
             CmdResourceCreate3d {
                 hdr: CtrlHeader::with_ctx(CMD_RESOURCE_CREATE_3D, ctx),
-                resource_id: id,
+                resource_id: id.to_wire(),
                 target,
                 format,
                 bind,
@@ -404,9 +421,9 @@ impl GpuDevice {
             },
             &[],
         )?;
-        self.next_resource += 1;
+        self.next_resource = id.next();
         self.attach_backing(id, key, len)?;
-        self.resource_command(CMD_CTX_ATTACH_RESOURCE, ctx, id)?;
+        self.resource_command(CMD_CTX_ATTACH_RESOURCE, Some(ctx), id)?;
         self.resources.insert(
             id,
             ImportedResource {
@@ -423,8 +440,7 @@ impl GpuDevice {
     }
 
     /// Detaches `resource` from `ctx`; destroys it when no context uses it.
-    pub fn release(&mut self, ctx: u32, resource: u32) -> Result<(), GpuError> {
-        self.require_3d()?;
+    pub fn release(&mut self, ctx: ContextId, resource: ResourceId) -> Result<(), GpuError> {
         let res = self
             .resources
             .get_mut(&resource)
@@ -433,10 +449,10 @@ impl GpuDevice {
             return Err(GpuError::InvalidArgument);
         }
         let last = res.importers.is_empty();
-        self.resource_command(CMD_CTX_DETACH_RESOURCE, ctx, resource)?;
+        self.resource_command(CMD_CTX_DETACH_RESOURCE, Some(ctx), resource)?;
         if last {
-            self.resource_command(CMD_RESOURCE_DETACH_BACKING, 0, resource)?;
-            self.resource_command(CMD_RESOURCE_UNREF, 0, resource)?;
+            self.resource_command(CMD_RESOURCE_DETACH_BACKING, None, resource)?;
+            self.resource_command(CMD_RESOURCE_UNREF, None, resource)?;
             let res = self.resources.remove(&resource).unwrap();
             self.by_phys.remove(&res.phys);
         }
@@ -446,8 +462,8 @@ impl GpuDevice {
     /// Checks that `ctx` imported `resource` and that the rectangle lies inside it.
     fn checked_resource(
         &self,
-        ctx: u32,
-        resource: u32,
+        ctx: ContextId,
+        resource: ResourceId,
         rect: Rect,
     ) -> Result<&ImportedResource, GpuError> {
         let res = self
@@ -471,15 +487,15 @@ impl GpuDevice {
         Ok(res)
     }
 
-    pub fn transfer(&mut self, ctx: u32, args: GpuTransfer) -> Result<(), GpuError> {
-        self.require_3d()?;
+    pub fn transfer(&mut self, ctx: ContextId, args: GpuTransfer) -> Result<(), GpuError> {
         let rect = Rect {
             x: args.x,
             y: args.y,
             width: args.width,
             height: args.height,
         };
-        let res = self.checked_resource(ctx, args.resource, rect)?;
+        let resource = ResourceId::from_abi(args.resource);
+        let res = self.checked_resource(ctx, resource, rect)?;
         let (box_, offset, stride) = match res.kind {
             GpuResourceKind::Texture => (
                 Box3d {
@@ -515,7 +531,7 @@ impl GpuDevice {
                 hdr: CtrlHeader::with_ctx(type_, ctx),
                 box_,
                 offset,
-                resource_id: args.resource,
+                resource_id: resource.to_wire(),
                 level: 0,
                 stride,
                 layer_stride: 0,
@@ -525,8 +541,7 @@ impl GpuDevice {
     }
 
     /// Submits a virgl command stream and returns its fence id.
-    pub fn submit(&mut self, ctx: u32, cmds: &[u8]) -> Result<u64, GpuError> {
-        self.require_3d()?;
+    pub fn submit(&mut self, ctx: ContextId, cmds: &[u8]) -> Result<u64, GpuError> {
         if cmds.is_empty() || !cmds.len().is_multiple_of(4) {
             return Err(GpuError::InvalidArgument);
         }
@@ -567,8 +582,10 @@ impl GpuDevice {
         Ok(())
     }
 
-    pub fn set_scanout(&mut self, ctx: u32, resource: u32) -> Result<(), GpuError> {
-        self.require_3d()?;
+    pub fn set_scanout(&mut self, ctx: ContextId, resource: ResourceId) -> Result<(), GpuError> {
+        if self.display_owner.is_some_and(|owner| owner != ctx) {
+            return Err(GpuError::DisplayOwned);
+        }
         let res = self
             .resources
             .get(&resource)
@@ -580,19 +597,24 @@ impl GpuDevice {
         {
             return Err(GpuError::InvalidArgument);
         }
-        self.set_scanout_resource(resource)
+        self.set_scanout_resource(resource)?;
+        self.display_owner = Some(ctx);
+        Ok(())
     }
 
-    pub fn flush(&mut self, ctx: u32, args: GpuFlush) -> Result<(), GpuError> {
-        self.require_3d()?;
+    pub fn flush(&mut self, ctx: ContextId, args: GpuFlush) -> Result<(), GpuError> {
+        if self.display_owner != Some(ctx) {
+            return Err(GpuError::DisplayOwned);
+        }
         let rect = Rect {
             x: args.x,
             y: args.y,
             width: args.width,
             height: args.height,
         };
-        self.checked_resource(ctx, args.resource, rect)?;
-        self.resource_flush(rect, args.resource)
+        let resource = ResourceId::from_abi(args.resource);
+        self.checked_resource(ctx, resource, rect)?;
+        self.resource_flush(rect, resource)
     }
 }
 

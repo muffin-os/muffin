@@ -1,7 +1,8 @@
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
-use kernel_abi::{EBADF, ENOTSOCK, Errno, FdNum, ShutdownHow};
-use kernel_syscall::access::SocketAccess;
+use kernel_abi::{EBADF, ENOTSOCK, EPIPE, Errno, FdNum, ShutdownHow};
+use kernel_syscall::access::{Received, SocketAccess};
 use kernel_vfs::path::AbsoluteOwnedPath;
 
 use crate::file::OpenFileDescription;
@@ -14,6 +15,14 @@ impl KernelAccess {
         let guard = fds.read();
         let desc = guard.get(&fd).ok_or(EBADF)?;
         desc.file_description().socket().cloned().ok_or(ENOTSOCK)
+    }
+
+    fn descriptions_of(&self, fds: &[FdNum]) -> Result<Vec<Arc<OpenFileDescription>>, Errno> {
+        let table = self.process.file_descriptors();
+        let guard = table.read();
+        fds.iter()
+            .map(|fd| Ok(guard.get(fd).ok_or(EBADF)?.file_description().clone()))
+            .collect()
     }
 }
 
@@ -47,5 +56,36 @@ impl SocketAccess for KernelAccess {
 
     fn shutdown(&self, fd: Self::Fd, how: ShutdownHow) -> Result<(), Errno> {
         self.socket_of(fd)?.shutdown(how)
+    }
+
+    fn sendmsg(&self, fd: Self::Fd, data: &[u8], fds: &[Self::Fd]) -> Result<usize, Errno> {
+        let socket = self.socket_of(fd)?;
+        let items = self.descriptions_of(fds)?;
+        // `block_on` retries after `EAGAIN`, so every try needs its own copy.
+        match self.block_on(socket.waiters(), || socket.try_sendmsg(data, items.clone())) {
+            Err(EPIPE) => Err(self.broken_pipe()),
+            result => result,
+        }
+    }
+
+    fn recvmsg(
+        &self,
+        fd: Self::Fd,
+        buf: &mut [u8],
+        max_fds: usize,
+    ) -> Result<Received<Self::Fd>, Errno> {
+        let socket = self.socket_of(fd)?;
+        let (len, items) = self.block_on(socket.waiters(), || socket.try_recvmsg(buf))?;
+        let truncated = items.len() > max_fds;
+        let fds = items
+            .into_iter()
+            .take(max_fds)
+            .map(|item| self.install(item))
+            .collect();
+        Ok(Received {
+            len,
+            fds,
+            truncated,
+        })
     }
 }

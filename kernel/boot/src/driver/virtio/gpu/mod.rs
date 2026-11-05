@@ -23,7 +23,7 @@ use x86_64::PhysAddr;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
 
-use self::devfile::{FbDevFile, FbMemory, GpuDevFile};
+use self::devfile::{FbDevFile, FbMemory, GpuDevFile, GpuNode};
 use self::device::GpuDevice;
 use crate::UsizeExt;
 use crate::driver::KernelDeviceId;
@@ -83,9 +83,21 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
         devfs()
             .write()
             .register_file(AbsolutePath::try_new("/gpu0").unwrap(), move || {
-                GpuDevFile::open(gpu_arc.clone()).map_err(|_| OpenError::OpenFailed)
+                GpuDevFile::open(gpu_arc.clone(), GpuNode::Display)
+                    .map_err(|_| OpenError::OpenFailed)
             })
             .expect("should be able to register /dev/gpu0");
+    }
+
+    {
+        let gpu_arc = gpu_arc.clone();
+        devfs()
+            .write()
+            .register_file(AbsolutePath::try_new("/render0").unwrap(), move || {
+                GpuDevFile::open(gpu_arc.clone(), GpuNode::Render)
+                    .map_err(|_| OpenError::OpenFailed)
+            })
+            .expect("should be able to register /dev/render0");
     }
 
     let device = VirtIoRawDevice {

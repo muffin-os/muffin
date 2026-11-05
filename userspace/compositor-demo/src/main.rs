@@ -1,6 +1,7 @@
 use std::f32::consts::TAU;
-use std::fs::OpenOptions;
+use std::ffi::c_int;
 use std::io;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::exit;
 use std::rc::Rc;
@@ -26,7 +27,6 @@ const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 128;
 const PIXEL: u32 = 0xFF20_60C0;
-const SHM_PATH: &str = "/dev/shm/compositor-demo";
 
 const TURN: Duration = Duration::from_secs(8);
 const REPORT_PERIOD: Duration = Duration::from_secs(1);
@@ -100,7 +100,7 @@ struct Circle {
 }
 
 impl Circle {
-    fn new(device: Rc<VirtioDevice>) -> io::Result<Self> {
+    fn new(device: Rc<VirtioDevice>, window_fd: c_int) -> io::Result<Self> {
         let mut backend = VirtioBackend::new(device.clone());
         let vert = backend.compile_shader(GOURAUD_VERTEX).map_err(gfx_error)?;
         let frag = backend
@@ -121,7 +121,7 @@ impl Circle {
             })
             .map_err(gfx_error)?;
         let window = backend
-            .import_texture(SHM_PATH, WIDTH, HEIGHT)
+            .import_texture_fd(window_fd, WIDTH, HEIGHT)
             .map_err(gfx_error)?;
         let queue = VirtioQueue::new(device, &window).map_err(gfx_error)?;
         Ok(Self {
@@ -199,34 +199,43 @@ fn unexpected(response: Response) -> io::Error {
     io::Error::other(format!("unexpected response {response:?}"))
 }
 
+fn create_window(stream: &UnixStream, request: NewWindowRequest) -> io::Result<c_int> {
+    match call(stream, &Request::NewWindow(request))? {
+        Response::NewWindow(NewWindowResponse {}) => {}
+        other => return Err(unexpected(other)),
+    }
+    muffin_sys::recv_fd(stream.as_raw_fd()).map_err(|e| io::Error::other(format!("recv_fd {e:?}")))
+}
+
 fn run() -> io::Result<()> {
     let stream = connect()?;
     println!("compositor-demo: connected");
 
-    let request = NewWindowRequest {
-        path: SHM_PATH.into(),
+    let window_fd = create_window(
+        &stream,
+        NewWindowRequest {
+            width: WIDTH,
+            height: HEIGHT,
+        },
+    )?;
+    println!("compositor-demo: window created");
+
+    let device = VirtioDevice::open_render().map_err(gfx_error)?;
+    let mut circle = Circle::new(device, window_fd)?;
+    let start = Instant::now();
+    let fence = circle.clear_and_draw(phase(start.elapsed()))?;
+    let full = DamageRequest {
+        x: 0,
+        y: 0,
         width: WIDTH,
         height: HEIGHT,
     };
-    let len = request
-        .buffer_len()
-        .ok_or_else(|| io::Error::other("size"))?;
-    // `truncate` keeps a rerun working when an earlier run left the object.
-    // The compositor opens the object by this path.
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(SHM_PATH)?;
-    file.set_len(len as u64)?;
-    let device = VirtioDevice::open().map_err(gfx_error)?;
-    let mut circle = Circle::new(device)?;
-    let start = Instant::now();
-    circle.clear_and_draw(phase(start.elapsed()))?;
-
-    match call(&stream, &Request::NewWindow(request))? {
-        Response::NewWindow(NewWindowResponse {}) => println!("compositor-demo: window created"),
+    match call(&stream, &Request::Damage(full))? {
+        Response::Damage(DamageResponse {}) => {}
+        other => return Err(unexpected(other)),
+    }
+    match call(&stream, &Request::Finish(FinishRequest { fence }))? {
+        Response::Finish(FinishResponse {}) => {}
         other => return Err(unexpected(other)),
     }
 
