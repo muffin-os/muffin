@@ -9,7 +9,7 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{env, panic, thread};
+use std::{env, hint, panic, thread};
 
 type Step = fn() -> Result<(), Box<dyn Error>>;
 
@@ -22,6 +22,7 @@ const STEPS: &[(&str, Step)] = &[
     ("metadata", metadata),
     ("time", time),
     ("random", random),
+    ("math", math),
     ("exe", exe),
     ("process", process),
     ("child_env", child_env),
@@ -116,6 +117,35 @@ fn random() -> Result<(), Box<dyn Error>> {
     // RandomState::new runs std's fill_bytes.
     let map: HashMap<u8, u8> = (0..16).map(|k| (k, a[usize::from(k)])).collect();
     check(map.len() == 16, "hashmap lost keys")
+}
+
+/// The float methods below call `sinf`, `exp`, `powf`, `atan2` and `tanhf`,
+/// which `muffinos-rt` exports from the `libm` crate. `black_box`
+/// stops LLVM from folding the calls at compile time.
+fn math() -> Result<(), Box<dyn Error>> {
+    let close = |got: f64, want: f64| (got - want).abs() < 1e-5;
+    let half_pi = hint::black_box(std::f32::consts::FRAC_PI_2);
+    let (sin, cos) = half_pi.sin_cos();
+    check(close(sin.into(), 1.0) && close(cos.into(), 0.0), "sin_cos")?;
+    check(
+        close(hint::black_box(1.0_f64).exp(), std::f64::consts::E),
+        "exp",
+    )?;
+    check(
+        close(hint::black_box(2.0_f32).powf(10.0).into(), 1024.0),
+        "powf",
+    )?;
+    check(
+        close(
+            hint::black_box(1.0_f64).atan2(1.0),
+            std::f64::consts::FRAC_PI_4,
+        ),
+        "atan2",
+    )?;
+    check(
+        close(hint::black_box(0.5_f32).tanh().into(), 0.462_117_2),
+        "tanh",
+    )
 }
 
 fn exe() -> Result<(), Box<dyn Error>> {

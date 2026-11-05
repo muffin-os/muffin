@@ -1,7 +1,8 @@
 //! C runtime that the patched `libc` crate and `std` link against on muffin.
 //!
-//! The crate exports `_start`, `environ`, `__errno_location` and the C library
-//! functions that std calls. Each function that has a kernel syscall forwards
+//! The crate exports `_start`, `environ`, `__errno_location`, the C library
+//! functions that std calls, and the `libm` functions that std's float methods
+//! and LLVM libcalls expect. Each function that has a kernel syscall forwards
 //! to `muffin_sys`. Functions the kernel cannot serve fail with `ENOSYS`. The
 //! process has one thread, so the pthread functions keep their state without
 //! atomics, and each pthread function that needs a second thread returns a
@@ -40,6 +41,8 @@ mod errno;
 mod fs;
 #[cfg(not(test))]
 mod fs_stubs;
+#[cfg(not(test))]
+mod math;
 mod mem;
 #[cfg(not(test))]
 mod net;

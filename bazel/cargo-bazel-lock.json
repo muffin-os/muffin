@@ -1,5 +1,5 @@
 {
-  "checksum": "6e98627fa4a9825a0f29f85324592c082f52343042c9953d3b75bb39fd7a36df",
+  "checksum": "643c6b3c09817f435158720d130fabdf71fc1a838d89c5d84b93515656903b57",
   "crates": {
     "acpi 5.2.0": {
       "name": "acpi",
@@ -1893,6 +1893,10 @@
               "target": "jiff"
             },
             {
+              "id": "libm 0.2.16",
+              "target": "libm"
+            },
+            {
               "id": "limine 0.5.0",
               "target": "limine"
             },
@@ -3170,6 +3174,80 @@
         "MIT"
       ],
       "license_file": "LICENSE-APACHE"
+    },
+    "libm 0.2.16": {
+      "name": "libm",
+      "version": "0.2.16",
+      "package_url": "https://github.com/rust-lang/compiler-builtins",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/libm/0.2.16/download",
+          "sha256": "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "libm",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "libm",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "arch",
+            "default"
+          ],
+          "selects": {}
+        },
+        "extra_deps": {
+          "common": [
+            ":build_script_build"
+          ],
+          "selects": {}
+        },
+        "edition": "2021",
+        "version": "0.2.16"
+      },
+      "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
+        "data_glob": [
+          "**"
+        ]
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE.txt"
     },
     "limine 0.5.0": {
       "name": "limine",
@@ -7494,6 +7572,7 @@
     "elf 0.7.4",
     "itertools 0.14.0",
     "jiff 0.2.35",
+    "libm 0.2.16",
     "limine 0.5.0",
     "linked_list_allocator 0.10.6",
     "linkme 0.3.37",

@@ -16,6 +16,7 @@ rust_library(
     deps = [
         "//kernel/abi",
         "//userspace/libs/sys",
+        "@crates//libm",
         "@rust_libc//:libc",
     ],
 )

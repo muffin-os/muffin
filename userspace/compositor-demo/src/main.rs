@@ -1,4 +1,4 @@
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::TAU;
 use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
@@ -13,8 +13,8 @@ use compositor_protocol::{
 };
 use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
 use gfx::backend::software::{
-    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftBuffer, SoftCompiler, SoftPipeline,
-    SoftQueue, SoftShaderDef,
+    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftBuffer, SoftCompiler, SoftPipeline, SoftQueue,
+    SoftShaderDef,
 };
 use gfx::error::GfxError;
 use kernel_abi::gfx::BufferDesc;
@@ -68,31 +68,6 @@ fn gfx_error(e: GfxError) -> io::Error {
     io::Error::other(format!("gfx {e:?}"))
 }
 
-// The muffin target has no `libm`, so `f32::sin_cos` does not link. Sixteen
-// Taylor terms over one quadrant exceed `f32` precision.
-fn sin_cos(angle: f32) -> (f32, f32) {
-    let quadrant = (angle / FRAC_PI_2) as u32;
-    let reduced = f64::from(angle - quadrant as f32 * FRAC_PI_2);
-    let (mut sin, mut cos) = (0.0f64, 0.0f64);
-    let mut term = 1.0f64;
-    for n in 1..=16u32 {
-        match (n - 1) % 4 {
-            0 => cos += term,
-            1 => sin += term,
-            2 => cos -= term,
-            _ => sin -= term,
-        }
-        term *= reduced / f64::from(n);
-    }
-    let (sin, cos) = (sin as f32, cos as f32);
-    match quadrant % 4 {
-        0 => (sin, cos),
-        1 => (cos, -sin),
-        2 => (-sin, -cos),
-        _ => (-cos, sin),
-    }
-}
-
 // The barycentric weights double as the RGB channels; the fragment shader
 // saturates weights outside the triangle.
 fn triangle_color(x: f32, y: f32) -> [f32; 3] {
@@ -105,8 +80,8 @@ fn triangle_color(x: f32, y: f32) -> [f32; 3] {
 
 fn rim_vertex(segment: u32, phase: f32) -> [f32; 5] {
     let angle = segment as f32 * TAU / CIRCLE_SEGMENTS as f32;
-    let (sin, cos) = sin_cos(angle);
-    let (color_sin, color_cos) = sin_cos(angle + phase);
+    let (sin, cos) = angle.sin_cos();
+    let (color_sin, color_cos) = (angle + phase).sin_cos();
     let [r, g, b] = triangle_color(
         CIRCUMRADIUS * color_cos,
         CIRCUMCENTER_Y + CIRCUMRADIUS * color_sin,
@@ -187,9 +162,7 @@ impl<'fb> Circle<'fb> {
     }
 
     fn draw(&mut self, phase: f32) -> io::Result<()> {
-        self.vertices
-            .data
-            .copy_from_slice(&circle_vertices(phase));
+        self.vertices.data.copy_from_slice(&circle_vertices(phase));
         self.queue
             .submit(|rec| {
                 rec.bind_pipeline(&self.pipeline);
