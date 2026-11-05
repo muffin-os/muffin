@@ -2,7 +2,6 @@ use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 
 use kernel_abi::ProcessId;
-use spin::Mutex;
 use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
 use x86_64::registers::model_specific::KernelGsBase;
@@ -15,6 +14,7 @@ use crate::mcore::lapic::Lapic;
 use crate::mcore::mtask::scheduler::Scheduler;
 use crate::mcore::mtask::task::Task;
 use crate::mem::address_space::shootdown::CpuSlot;
+use crate::sync::IrqMutex;
 
 #[derive(Debug)]
 pub struct ExecutionContext {
@@ -22,7 +22,7 @@ pub struct ExecutionContext {
     lapic_id: usize,
     shootdown_slot: Arc<CpuSlot>,
 
-    lapic: Mutex<Lapic>,
+    lapic: IrqMutex<Lapic>,
 
     _gdt: &'static GlobalDescriptorTable,
     sel: Selectors,
@@ -45,7 +45,7 @@ impl ExecutionContext {
             cpu_id: cpu.id as usize,
             lapic_id: cpu.lapic_id as usize,
             shootdown_slot: CpuSlot::register(cpu.id as usize, cpu.lapic_id),
-            lapic: Mutex::new(lapic),
+            lapic: IrqMutex::new(lapic),
             _gdt: gdt,
             sel,
             _idt: idt,
@@ -110,7 +110,7 @@ impl ExecutionContext {
     }
 
     #[must_use]
-    pub fn lapic(&self) -> &Mutex<Lapic> {
+    pub fn lapic(&self) -> &IrqMutex<Lapic> {
         &self.lapic
     }
 

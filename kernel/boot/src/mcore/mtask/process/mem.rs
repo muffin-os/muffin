@@ -12,7 +12,6 @@ use spin::mutex::Mutex;
 use thiserror::Error;
 use tracing::trace;
 use x86_64::VirtAddr;
-use x86_64::instructions::interrupts;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::mapper::FlagUpdateError;
 use x86_64::structures::paging::{Page, PageSize, PageTableFlags, PhysFrame, Size4KiB};
@@ -21,12 +20,13 @@ use super::SoleLiveTask;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
 use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
+use crate::sync::IrqMutex;
 use crate::{U64Ext, UsizeExt};
 
 /// Tracks a process's virtual memory regions, including the lazily mapped ones
 /// the page fault handler resolves.
 pub struct MemoryRegions {
-    regions: Mutex<Vec<Arc<MemoryRegion>>>,
+    regions: IrqMutex<Vec<Arc<MemoryRegion>>>,
 }
 
 impl Default for MemoryRegions {
@@ -38,13 +38,13 @@ impl Default for MemoryRegions {
 impl MemoryRegions {
     pub fn new() -> Self {
         Self {
-            regions: Mutex::new(vec![]),
+            regions: IrqMutex::new(vec![]),
         }
     }
 
     pub fn add_region(&self, region: MemoryRegion) -> Arc<MemoryRegion> {
         let region = Arc::new(region);
-        interrupts::without_interrupts(|| self.regions.lock().push(region.clone()));
+        self.regions.lock_without_interrupts().push(region.clone());
         region
     }
 
@@ -54,24 +54,25 @@ impl MemoryRegions {
     /// In debug builds, panics if `address_space` is not active on this CPU.
     pub fn remove_region(&self, address_space: &AddressSpace, region: &Arc<MemoryRegion>) {
         debug_assert!(address_space.is_active());
-        interrupts::without_interrupts(|| {
-            self.regions.lock().retain(|r| !Arc::ptr_eq(r, region));
-        });
+        self.regions
+            .lock_without_interrupts()
+            .retain(|r| !Arc::ptr_eq(r, region));
         region.unmap_from(address_space);
     }
 
     pub fn region_for(&self, addr: VirtAddr) -> Option<Arc<MemoryRegion>> {
-        interrupts::without_interrupts(|| {
-            self.regions
-                .lock()
-                .iter()
-                .find(|r| r.contains(addr))
-                .cloned()
-        })
+        self.regions
+            .lock_without_interrupts()
+            .iter()
+            .find(|r| r.contains(addr))
+            .cloned()
     }
 
     pub fn is_memory_region_at_address(&self, addr: VirtAddr) -> bool {
-        interrupts::without_interrupts(|| self.regions.lock().iter().any(|r| r.contains(addr)))
+        self.regions
+            .lock_without_interrupts()
+            .iter()
+            .any(|r| r.contains(addr))
     }
 
     pub fn populate(
@@ -129,7 +130,7 @@ impl MemoryRegions {
         debug_assert!(address_space.is_active());
         // A CPU that waits for the regions lock has interrupts off. The
         // snapshot keeps the shootdown outside the lock.
-        let regions = interrupts::without_interrupts(|| self.regions.lock().clone());
+        let regions = self.regions.lock_without_interrupts().clone();
         for region in regions {
             target.add_region(region.clone_into(address_space, target_vmm)?);
         }
@@ -144,7 +145,7 @@ impl MemoryRegions {
     /// # Errors
     /// Returns the first error of [`MemoryRegion::handle_fault`].
     pub fn populate_eager_copies(&self, address_space: &AddressSpace) -> Result<(), PageInError> {
-        let regions = interrupts::without_interrupts(|| self.regions.lock().clone());
+        let regions = self.regions.lock_without_interrupts().clone();
         for region in regions {
             if let MemoryRegion::Private(r) = &*region
                 && r.fork == ForkPolicy::CopyEager
@@ -158,7 +159,7 @@ impl MemoryRegions {
     /// `_proof` guarantees no other task of the process is live, so no
     /// region can fault concurrently while it is torn down.
     pub fn clear(&self, address_space: &AddressSpace, _proof: &SoleLiveTask<'_>) {
-        let regions = interrupts::without_interrupts(|| mem::take(&mut *self.regions.lock()));
+        let regions = mem::take(&mut *self.regions.lock_without_interrupts());
         for region in regions {
             region.unmap_from(address_space);
         }

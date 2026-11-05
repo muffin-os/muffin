@@ -8,13 +8,13 @@ use conquer_once::spin::OnceCell;
 use kernel_virtual_memory::Segment;
 use tracing::info;
 use x86_64::VirtAddr;
-use x86_64::instructions::interrupts;
 use x86_64::structures::paging::page::PageRangeInclusive;
 use x86_64::structures::paging::{Page, PageTableFlags, Size2MiB, Size4KiB};
 
 use crate::mem::address_space::{AddressSpace, virt_addr_from_page_table_indices};
 use crate::mem::phys::PhysicalMemory;
 use crate::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
+use crate::sync::IrqMutex;
 
 static HEAP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static HEAP_START: VirtAddr = virt_addr_from_page_table_indices([257, 0, 0, 0], 0);
@@ -60,12 +60,11 @@ impl HeapSizes {
     }
 }
 
-static MAIN_HEAP: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
+static MAIN_HEAP: IrqMutex<linked_list_allocator::Heap> =
+    IrqMutex::new(linked_list_allocator::Heap::empty());
 
-// Callers with interrupts off also take this lock, so a holder must not be
-// switched out.
 fn with_main_heap<R>(f: impl FnOnce(&mut linked_list_allocator::Heap) -> R) -> R {
-    interrupts::without_interrupts(|| f(&mut MAIN_HEAP.lock()))
+    f(&mut MAIN_HEAP.lock_without_interrupts())
 }
 
 /// Size of the bootstrap heap used before the main heap is mapped.

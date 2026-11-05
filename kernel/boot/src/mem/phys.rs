@@ -6,24 +6,21 @@ use core::ops::Deref;
 use conquer_once::spin::OnceCell;
 use kernel_physical_memory::{PhysicalFrameAllocator, PhysicalMemoryManager};
 use limine::memory_map::{Entry, EntryType};
-use spin::Mutex;
 use tracing::{info, warn};
 use x86_64::PhysAddr;
-use x86_64::instructions::interrupts;
 use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::{PageSize, PhysFrame, Size4KiB};
 
 use crate::mem::heap::Heap;
+use crate::sync::IrqMutex;
 
-static PHYS_ALLOC: OnceCell<Mutex<MultiStageAllocator>> = OnceCell::uninit();
+static PHYS_ALLOC: OnceCell<IrqMutex<MultiStageAllocator>> = OnceCell::uninit();
 
-// Callers with interrupts off also take this lock, so a holder must not be
-// switched out.
 fn with_allocator<R>(f: impl FnOnce(&mut MultiStageAllocator) -> R) -> R {
     let allocator = PHYS_ALLOC
         .get()
         .expect("physical allocator not initialized");
-    interrupts::without_interrupts(|| f(&mut allocator.lock()))
+    f(&mut allocator.lock_without_interrupts())
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -194,7 +191,7 @@ pub(in crate::mem) fn init_stage1(entries: &'static [&'static Entry]) -> usize {
     info!("usable RAM: ~{} MiB", usable_physical_memory / 1024 / 1024);
 
     let stage1 = MultiStageAllocator::Stage1(PhysicalBumpAllocator::new(entries));
-    PHYS_ALLOC.init_once(|| Mutex::new(stage1));
+    PHYS_ALLOC.init_once(|| IrqMutex::new(stage1));
 
     usable_physical_memory as usize
 }

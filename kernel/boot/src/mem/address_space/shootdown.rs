@@ -121,7 +121,7 @@ fn shoot_down(target: u64) {
         let online = ONLINE.lock();
         let targets = online.iter().filter(|slot| slot.cpu_id != own);
         PENDING_ACKS.store(targets.clone().count(), Release);
-        let mut lapic = context.lapic().lock();
+        let mut lapic = context.lapic().lock_without_interrupts();
         let mut count = 0;
         for slot in targets {
             slot.flush_pending.store(true, Release);

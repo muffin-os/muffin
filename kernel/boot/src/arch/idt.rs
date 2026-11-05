@@ -617,7 +617,12 @@ extern "x86-interrupt" fn device_not_available_handler(_stack_frame: InterruptSt
 pub unsafe fn end_of_interrupt() {
     // Safety: the caller guarantees stable CPU residency, so the loaded
     // context is this CPU's and the EOI reaches the local APIC.
-    unsafe { ExecutionContext::load().lapic().lock().end_of_interrupt() };
+    unsafe {
+        ExecutionContext::load()
+            .lapic()
+            .lock_without_interrupts()
+            .end_of_interrupt();
+    };
 }
 
 #[repr(transparent)]

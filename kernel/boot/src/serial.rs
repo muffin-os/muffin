@@ -1,11 +1,12 @@
 use conquer_once::spin::Lazy;
-use spin::Mutex;
 use uart_16550::SerialPort;
 
-static SERIAL1: Lazy<Mutex<SerialPort>> = Lazy::new(|| {
+use crate::sync::IrqMutex;
+
+static SERIAL1: Lazy<IrqMutex<SerialPort>> = Lazy::new(|| {
     let mut serial_port = unsafe { SerialPort::new(0x3F8) };
     serial_port.init();
-    Mutex::new(serial_port)
+    IrqMutex::new(serial_port)
 });
 
 /// Runs `f` while holding the serial lock with interrupts disabled.
@@ -13,9 +14,7 @@ static SERIAL1: Lazy<Mutex<SerialPort>> = Lazy::new(|| {
 /// One lock acquisition covers a whole log record so that no deadlock can occur
 /// when we want to print something in an interrupt handler.
 pub(crate) fn with_serial<R>(f: impl FnOnce(&mut SerialPort) -> R) -> R {
-    use x86_64::instructions::interrupts;
-
-    interrupts::without_interrupts(|| f(&mut SERIAL1.lock()))
+    f(&mut SERIAL1.lock_without_interrupts())
 }
 
 #[doc(hidden)]

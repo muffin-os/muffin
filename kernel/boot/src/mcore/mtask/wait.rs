@@ -10,6 +10,7 @@ use crate::hpet::{Instant, hpet_maybe};
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::Task;
+use crate::sync::IrqMutex;
 
 static WAITING: ParkingLot<Pin<Box<Task>>> = ParkingLot::new();
 
@@ -95,18 +96,19 @@ struct Sleeper {
     waker: TaskWaker,
 }
 
-static SLEEPERS: Mutex<Vec<Sleeper>> = Mutex::new(Vec::new());
+static SLEEPERS: IrqMutex<Vec<Sleeper>> = IrqMutex::new(Vec::new());
 
 /// Task context, interrupts may be enabled.
 pub fn sleep_until(deadline: Instant, waker: TaskWaker) {
-    SLEEPERS.lock().push(Sleeper { deadline, waker });
+    SLEEPERS
+        .lock_without_interrupts()
+        .push(Sleeper { deadline, waker });
 }
 
-/// Wakes every sleeper whose deadline has passed.
+/// Wakes every sleeper whose deadline has passed. The timer interrupt calls
+/// this function.
 pub fn wake_expired_sleepers() {
-    let Some(mut sleepers) = SLEEPERS.try_lock() else {
-        return;
-    };
+    let mut sleepers = SLEEPERS.lock_without_interrupts();
     let Some(hpet) = hpet_maybe() else {
         return;
     };

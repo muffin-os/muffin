@@ -25,6 +25,7 @@ pub mod mem;
 pub mod power;
 pub mod serial;
 pub mod sse;
+pub mod sync;
 pub mod syscall;
 pub mod time;
 

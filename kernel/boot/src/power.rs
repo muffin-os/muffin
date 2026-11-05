@@ -138,10 +138,10 @@ pub fn poweroff() -> ! {
     unsafe {
         // Safety: interrupts were disabled above, so the context is this
         // CPU's and the IPI goes out through the local APIC.
-        ExecutionContext::load().lapic().lock().send_ipi_all(
-            InterruptIndex::Halt.as_u8(),
-            IpiAllShorthand::AllExcludingSelf,
-        );
+        ExecutionContext::load()
+            .lapic()
+            .lock_without_interrupts()
+            .send_ipi_all(InterruptIndex::Halt.as_u8(), IpiAllShorthand::AllExcludingSelf);
     }
 
     let ack_deadline = hpet().read().now().saturating_add(HALT_ACK_GRACE);
