@@ -8,8 +8,8 @@ use kernel_abi::IoctlRequest;
 use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CloseError, CreateMode, FsError, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion,
-    OpenError, ReadError, Stat, StatError, TruncateError, WriteError,
+    CloseError, CreateMode, FdLookup, FsError, FsyncError, IoctlError, MkdirError, MmapError,
+    MmapRegion, OpenError, ReadError, Stat, StatError, TruncateError, WriteError,
 };
 use thiserror::Error;
 
@@ -212,10 +212,11 @@ impl FileSystem for DevFs {
         handle: FsHandle,
         request: IoctlRequest,
         arg: &mut [u8],
+        lookup: &dyn FdLookup,
     ) -> Result<usize, IoctlError> {
         self.resolve_handle(handle)
             .map_err(IoctlError::FsError)?
-            .ioctl(request, arg)
+            .ioctl(request, arg, lookup)
     }
 
     fn fsync(&mut self, handle: FsHandle) -> Result<(), FsyncError> {

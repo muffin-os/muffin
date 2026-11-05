@@ -1,3 +1,4 @@
+use core::ffi::c_int;
 use core::fmt::{Display, Formatter};
 use core::marker::PhantomData;
 
@@ -34,6 +35,31 @@ impl ProcessId {
         self.0
     }
 }
+
+/// A file descriptor number of one process.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct FdNum(c_int);
+
+impl FdNum {
+    pub const STDIN: Self = Self(0);
+    pub const STDOUT: Self = Self(1);
+    pub const STDERR: Self = Self(2);
+}
+
+impl From<c_int> for FdNum {
+    fn from(value: c_int) -> Self {
+        Self(value)
+    }
+}
+
+impl From<FdNum> for c_int {
+    fn from(value: FdNum) -> Self {
+        value.0
+    }
+}
+
+impl !Default for FdNum {}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

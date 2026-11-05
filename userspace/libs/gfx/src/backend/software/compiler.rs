@@ -61,6 +61,12 @@ impl GfxCompiler for SoftCompiler {
         if desc.vertex_stride == 0 || !desc.vertex_stride.is_multiple_of(ATTRIBUTE_BYTES) {
             return Err(GfxError::InvalidVertexStride);
         }
+        for attribute in desc.vertex_attributes {
+            let end = attribute.offset.checked_add(attribute.format.byte_len());
+            if end.is_none_or(|end| end > desc.vertex_stride) {
+                return Err(GfxError::InvalidVertexAttribute);
+            }
+        }
         if output_count < 2 {
             return Err(GfxError::InvalidOutputCount);
         }

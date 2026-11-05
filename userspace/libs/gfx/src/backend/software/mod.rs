@@ -13,8 +13,8 @@ pub use allocator::{SoftAllocator, SoftBuffer, SoftTexture};
 pub use compiler::{SoftCompiler, SoftPipeline, SoftShaderDef};
 pub use fence::SoftFence;
 use kernel_abi::gfx::{BufferDesc, TextureDesc};
-pub use queue::{Rect, SoftQueue};
-pub use recorder::{DrawCmd, SoftRecorder};
+pub use queue::SoftQueue;
+pub use recorder::{DrawCmd, SoftCmd, SoftRecorder};
 
 use crate::api::{GfxAllocator, GfxBackend, GfxCompiler, PipelineDesc};
 use crate::error::Result;

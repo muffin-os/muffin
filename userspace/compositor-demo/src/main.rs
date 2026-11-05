@@ -1,9 +1,9 @@
 use std::f32::consts::TAU;
 use std::fs::OpenOptions;
 use std::io;
-use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::exit;
+use std::rc::Rc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -11,14 +11,15 @@ use compositor_protocol::{
     DamageRequest, DamageResponse, FinishRequest, FinishResponse, NewWindowRequest,
     NewWindowResponse, Request, Response, SOCKET_PATH, read_message, write_message,
 };
-use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
-use gfx::backend::software::{
-    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftBuffer, SoftCompiler, SoftPipeline, SoftQueue,
-    SoftShaderDef,
+use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxFence, GfxQueue, PipelineDesc};
+use gfx::backend::virtio::tgsi::{
+    GOURAUD_ATTRIBUTES, GOURAUD_FRAGMENT, GOURAUD_STRIDE, GOURAUD_VERTEX,
+};
+use gfx::backend::virtio::{
+    VirtioBackend, VirtioBuffer, VirtioDevice, VirtioPipeline, VirtioQueue, VirtioTexture,
 };
 use gfx::error::GfxError;
 use kernel_abi::gfx::BufferDesc;
-use muffin_sys::{MapFlags, ProtFlags, mmap};
 
 const CONNECT_ATTEMPTS: u32 = 50;
 const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -27,9 +28,8 @@ const HEIGHT: u32 = 128;
 const PIXEL: u32 = 0xFF20_60C0;
 const SHM_PATH: &str = "/dev/shm/compositor-demo";
 
-const FRAME_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / 30);
 const TURN: Duration = Duration::from_secs(8);
-const REPORT_FRAME: u32 = 30;
+const REPORT_PERIOD: Duration = Duration::from_secs(1);
 
 /// Leaves a margin so the window background stays visible around the circle.
 const CIRCLE_RADIUS_PX: u32 = 56;
@@ -40,29 +40,6 @@ const TRIANGLE: [[f32; 2]; 3] = [[0.0, 0.75], [-0.75, -0.75], [0.75, -0.75]];
 /// Circumcircle of `TRIANGLE`, so each corner keeps its pure colour on the rim.
 const CIRCUMCENTER_Y: f32 = -0.1875;
 const CIRCUMRADIUS: f32 = 0.9375;
-
-// Vertex layout (x, y, r, g, b).
-fn color_vert(input: &[f32], output: &mut [f32]) {
-    output[..5].copy_from_slice(&input[..5]);
-}
-
-#[inline(always)]
-fn channel_to_u8(value: f32) -> u32 {
-    if value <= 0.0 {
-        0
-    } else if value >= 1.0 {
-        255
-    } else {
-        (value * 255.0) as u32
-    }
-}
-
-fn color_frag(interp: &[f32]) -> u32 {
-    let r = channel_to_u8(interp[0]);
-    let g = channel_to_u8(interp[1]);
-    let b = channel_to_u8(interp[2]);
-    0xFF00_0000 | (r << 16) | (g << 8) | b
-}
 
 fn gfx_error(e: GfxError) -> io::Error {
     io::Error::other(format!("gfx {e:?}"))
@@ -114,41 +91,44 @@ fn circle_vertices(phase: f32) -> Vec<u8> {
         .collect()
 }
 
-struct Circle<'fb> {
-    pipeline: SoftPipeline,
-    vertices: SoftBuffer,
-    queue: SoftQueue<'fb>,
+struct Circle {
+    pipeline: VirtioPipeline,
+    vertices: VirtioBuffer,
+    queue: VirtioQueue,
+    // Keeps the window resource alive while the queue renders into it.
+    _window: VirtioTexture,
 }
 
-impl<'fb> Circle<'fb> {
-    fn new(pixels: &'fb mut [u32]) -> io::Result<Self> {
-        let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
-        let vert = backend
-            .compile_shader(&SoftShaderDef::Vertex {
-                func: color_vert,
-                output_count: 5,
-            })
-            .map_err(gfx_error)?;
+impl Circle {
+    fn new(device: Rc<VirtioDevice>) -> io::Result<Self> {
+        let mut backend = VirtioBackend::new(device.clone());
+        let vert = backend.compile_shader(GOURAUD_VERTEX).map_err(gfx_error)?;
         let frag = backend
-            .compile_shader(&SoftShaderDef::Fragment(color_frag))
+            .compile_shader(GOURAUD_FRAGMENT)
             .map_err(gfx_error)?;
         let pipeline = backend
             .compile_pipeline(&PipelineDesc {
                 vertex_shader: &vert,
                 pixel_shader: &frag,
-                vertex_stride: 5 * ATTRIBUTE_BYTES,
+                vertex_stride: GOURAUD_STRIDE,
+                vertex_attributes: &GOURAUD_ATTRIBUTES,
             })
             .map_err(gfx_error)?;
         let vertices = backend
             .alloc_buffer(&BufferDesc {
-                size: CIRCLE_SEGMENTS as usize * 3 * 5 * ATTRIBUTE_BYTES,
+                size: CIRCLE_SEGMENTS as usize * 3 * GOURAUD_STRIDE,
                 is_dynamic: true,
             })
             .map_err(gfx_error)?;
+        let window = backend
+            .import_texture(SHM_PATH, WIDTH, HEIGHT)
+            .map_err(gfx_error)?;
+        let queue = VirtioQueue::new(device, &window).map_err(gfx_error)?;
         Ok(Self {
             pipeline,
             vertices,
-            queue: SoftQueue::new(pixels, WIDTH, HEIGHT, WIDTH as usize),
+            queue,
+            _window: window,
         })
     }
 
@@ -161,15 +141,32 @@ impl<'fb> Circle<'fb> {
         }
     }
 
-    fn draw(&mut self, phase: f32) -> io::Result<()> {
-        self.vertices.data.copy_from_slice(&circle_vertices(phase));
-        self.queue
+    /// Draws the circle and returns the fence id of the submit.
+    fn draw(&mut self, phase: f32) -> io::Result<u64> {
+        self.submit(phase, false)
+    }
+
+    /// Fills the window with `PIXEL` before the first circle.
+    fn clear_and_draw(&mut self, phase: f32) -> io::Result<u64> {
+        self.submit(phase, true)
+    }
+
+    fn submit(&mut self, phase: f32, clear: bool) -> io::Result<u64> {
+        self.vertices
+            .data_mut()
+            .copy_from_slice(&circle_vertices(phase));
+        let fence = self
+            .queue
             .submit(|rec| {
+                if clear {
+                    rec.clear(PIXEL);
+                }
                 rec.bind_pipeline(&self.pipeline);
                 rec.bind_vertex_buffer(&self.vertices);
                 rec.draw(CIRCLE_SEGMENTS * 3)
             })
-            .map_err(gfx_error)
+            .map_err(gfx_error)?;
+        Ok(fence.id())
     }
 }
 
@@ -215,6 +212,7 @@ fn run() -> io::Result<()> {
         .buffer_len()
         .ok_or_else(|| io::Error::other("size"))?;
     // `truncate` keeps a rerun working when an earlier run left the object.
+    // The compositor opens the object by this path.
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -222,50 +220,36 @@ fn run() -> io::Result<()> {
         .truncate(true)
         .open(SHM_PATH)?;
     file.set_len(len as u64)?;
-    let addr = mmap(
-        0,
-        len,
-        ProtFlags::READ | ProtFlags::WRITE,
-        MapFlags::SHARED,
-        file.as_raw_fd(),
-        0,
-    )
-    .map_err(|_| io::Error::other("mmap"))?;
-    // SAFETY: the mapping is writable, covers `len` bytes and is page-aligned,
-    // thus u32-aligned. The demo never unmaps it, because the demo runs until
-    // it is killed.
-    let pixels =
-        unsafe { std::slice::from_raw_parts_mut(addr.cast::<u32>(), len / size_of::<u32>()) };
-    pixels.fill(PIXEL);
-    let mut circle = Circle::new(pixels)?;
+    let device = VirtioDevice::open().map_err(gfx_error)?;
+    let mut circle = Circle::new(device)?;
     let start = Instant::now();
-    circle.draw(phase(start.elapsed()))?;
+    circle.clear_and_draw(phase(start.elapsed()))?;
 
     match call(&stream, &Request::NewWindow(request))? {
         Response::NewWindow(NewWindowResponse {}) => println!("compositor-demo: window created"),
         other => return Err(unexpected(other)),
     }
 
-    let mut frame = 0u32;
+    let mut report_start = Instant::now();
+    let mut report_frames = 0u32;
     loop {
-        frame += 1;
-        if let Some(wait) = (start + FRAME_PERIOD * frame).checked_duration_since(Instant::now()) {
-            sleep(wait);
-        }
-        circle.draw(phase(start.elapsed()))?;
+        let fence = circle.draw(phase(start.elapsed()))?;
         match call(&stream, &Request::Damage(Circle::damage()))? {
             Response::Damage(DamageResponse {}) => {}
             other => return Err(unexpected(other)),
         }
-        match call(&stream, &Request::Finish(FinishRequest {}))? {
+        match call(&stream, &Request::Finish(FinishRequest { fence }))? {
             Response::Finish(FinishResponse {}) => {}
             other => return Err(unexpected(other)),
         }
-        if frame == REPORT_FRAME {
+        report_frames += 1;
+        if report_start.elapsed() >= REPORT_PERIOD {
             println!(
-                "compositor-demo: {REPORT_FRAME} frames finished in {}ms",
-                start.elapsed().as_millis()
+                "compositor-demo: {report_frames} frames in the last {}ms",
+                report_start.elapsed().as_millis()
             );
+            report_start = Instant::now();
+            report_frames = 0;
         }
     }
 }

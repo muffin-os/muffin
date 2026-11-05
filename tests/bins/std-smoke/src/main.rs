@@ -209,7 +209,10 @@ fn try_wait() -> Result<(), Box<dyn Error>> {
     let mut child = Command::new(env::current_exe()?)
         .env("STD_SMOKE_CHILD", "sleep")
         .spawn()?;
-    check(child.try_wait()?.is_none(), "child reaped on the first poll")?;
+    check(
+        child.try_wait()?.is_none(),
+        "child reaped on the first poll",
+    )?;
     let deadline = Instant::now() + TRY_WAIT_DEADLINE;
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -218,7 +221,10 @@ fn try_wait() -> Result<(), Box<dyn Error>> {
         check(Instant::now() < deadline, "child never exited")?;
         thread::sleep(Duration::from_millis(20));
     };
-    check(status.code() == Some(0), &format!("child status {status:?}"))
+    check(
+        status.code() == Some(0),
+        &format!("child status {status:?}"),
+    )
 }
 
 fn catch_panic() -> Result<(), Box<dyn Error>> {

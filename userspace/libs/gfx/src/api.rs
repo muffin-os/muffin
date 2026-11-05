@@ -2,6 +2,60 @@ use kernel_abi::gfx::{BufferDesc, TextureDesc};
 
 use crate::error::Result;
 
+/// A rectangle in pixels, with the origin at the top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Rect {
+    /// Bounding box of both rectangles; edges saturate at `u32::MAX`.
+    pub fn union(self, other: Rect) -> Rect {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let right = (self.x.saturating_add(self.width)).max(other.x.saturating_add(other.width));
+        let bottom = (self.y.saturating_add(self.height)).max(other.y.saturating_add(other.height));
+        Rect {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
+    }
+}
+
+/// The data type of one vertex attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeFormat {
+    F32,
+    F32x2,
+    F32x3,
+    F32x4,
+}
+
+impl AttributeFormat {
+    /// Returns the size of the attribute in bytes.
+    #[must_use]
+    pub const fn byte_len(self) -> usize {
+        match self {
+            Self::F32 => 4,
+            Self::F32x2 => 8,
+            Self::F32x3 => 12,
+            Self::F32x4 => 16,
+        }
+    }
+}
+
+/// One attribute in a vertex, `offset` bytes from the start of the vertex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VertexAttribute {
+    pub offset: usize,
+    pub format: AttributeFormat,
+}
+
 /// Queries hardware capabilities and limits.
 pub trait Adapter {
     /// Returns the maximum allowed dimension (width or height) for a
@@ -34,6 +88,8 @@ pub struct PipelineDesc<'a, S> {
     pub pixel_shader: &'a S,
     /// Bytes between the start of consecutive vertices in the vertex buffer.
     pub vertex_stride: usize,
+    /// The layout of one vertex. Attribute `i` feeds shader input `i`.
+    pub vertex_attributes: &'a [VertexAttribute],
 }
 
 /// Compiles shader programs and render state descriptions into
@@ -75,6 +131,10 @@ pub trait CommandRecorder<B: GfxBackend> {
     /// from the currently bound vertex buffer. Fails when no pipeline or
     /// no vertex buffer is bound.
     fn draw(&mut self, vertices: u32) -> Result<()>;
+    /// Fills the whole target with `argb` (`0xAARRGGBB`).
+    fn clear(&mut self, argb: u32);
+    /// Copies `src_rect` of `src` to the target at (`dst_x`, `dst_y`). The copy clips to both images.
+    fn blit(&mut self, src: &B::Texture, src_rect: Rect, dst_x: u32, dst_y: u32) -> Result<()>;
 }
 
 /// Submits recorded command buffers to the GPU and manages frame
@@ -82,11 +142,13 @@ pub trait CommandRecorder<B: GfxBackend> {
 pub trait GfxQueue<B: GfxBackend> {
     /// The recorder type used to encode commands before submission.
     type Recorder: CommandRecorder<B>;
+    /// The fence type that [`GfxQueue::submit`] returns.
+    type Fence: GfxFence;
 
     /// Records a batch of commands via `recorder_cmds` and submits
     /// them to the GPU for execution. Nothing is executed when
     /// `recorder_cmds` fails.
-    fn submit<F>(&mut self, recorder_cmds: F) -> Result<()>
+    fn submit<F>(&mut self, recorder_cmds: F) -> Result<Self::Fence>
     where
         F: FnOnce(&mut Self::Recorder) -> Result<()>;
 
@@ -103,4 +165,6 @@ pub trait GfxFence {
     /// Blocks the calling thread until all GPU work associated with
     /// this fence has finished.
     fn wait(&self);
+    /// Returns the device-wide monotonic id of the fence. `0` means that no GPU work is pending.
+    fn id(&self) -> u64;
 }

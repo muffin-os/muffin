@@ -3,10 +3,13 @@ use alloc::vec::Vec;
 
 use kernel_abi::gfx::BufferDesc;
 
-use crate::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc};
+use crate::api::{
+    AttributeFormat, CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc, Rect,
+    VertexAttribute,
+};
 use crate::backend::software::{
-    ATTRIBUTE_BYTES, Rect, SoftAllocator, SoftBackend, SoftCompiler, SoftQueue, SoftRecorder,
-    SoftShaderDef,
+    ATTRIBUTE_BYTES, SoftAllocator, SoftBackend, SoftCmd, SoftCompiler, SoftQueue, SoftRecorder,
+    SoftShaderDef, SoftTexture,
 };
 use crate::error::GfxError;
 
@@ -36,6 +39,33 @@ fn color_frag(interp: &[f32]) -> u32 {
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
+const POSITION: [VertexAttribute; 1] = [VertexAttribute {
+    offset: 0,
+    format: AttributeFormat::F32x2,
+}];
+
+const POSITION_INTENSITY: [VertexAttribute; 2] = [
+    VertexAttribute {
+        offset: 0,
+        format: AttributeFormat::F32x2,
+    },
+    VertexAttribute {
+        offset: 8,
+        format: AttributeFormat::F32,
+    },
+];
+
+const POSITION_COLOR: [VertexAttribute; 2] = [
+    VertexAttribute {
+        offset: 0,
+        format: AttributeFormat::F32x2,
+    },
+    VertexAttribute {
+        offset: 8,
+        format: AttributeFormat::F32x3,
+    },
+];
+
 fn encode_verts(floats: &[f32]) -> Vec<u8> {
     floats.iter().flat_map(|f| f.to_ne_bytes()).collect()
 }
@@ -59,6 +89,7 @@ fn simple_pipeline(
             vertex_shader: &vert,
             pixel_shader: &frag,
             vertex_stride,
+            vertex_attributes: &POSITION,
         })
         .unwrap()
 }
@@ -165,6 +196,7 @@ fn wrong_shader_kind_is_rejected() {
         vertex_shader: &vert,
         pixel_shader: &vert,
         vertex_stride: 2 * ATTRIBUTE_BYTES,
+        vertex_attributes: &POSITION,
     });
     assert!(result.is_err());
 }
@@ -220,6 +252,7 @@ fn invalid_pipeline_parameters_are_rejected() {
             vertex_shader: &vert,
             pixel_shader: &frag,
             vertex_stride: stride,
+            vertex_attributes: &POSITION,
         });
         assert_eq!(
             result.err(),
@@ -236,6 +269,7 @@ fn invalid_pipeline_parameters_are_rejected() {
         vertex_shader: &position_only,
         pixel_shader: &frag,
         vertex_stride: 2 * ATTRIBUTE_BYTES,
+        vertex_attributes: &POSITION,
     });
     assert_eq!(result.err(), Some(GfxError::InvalidOutputCount));
 }
@@ -257,8 +291,11 @@ fn draws_share_the_bound_vertex_bytes() {
     rec.draw(3).unwrap();
     rec.draw(3).unwrap();
 
+    let [SoftCmd::Draw(first), SoftCmd::Draw(second)] = rec.cmds.as_slice() else {
+        panic!("two draws should record two draw commands");
+    };
     assert!(
-        Rc::ptr_eq(&rec.cmds[0].raw_data, &rec.cmds[1].raw_data),
+        Rc::ptr_eq(&first.raw_data, &second.raw_data),
         "a second draw against the same binding must not copy the vertex bytes"
     );
 }
@@ -310,6 +347,7 @@ fn interpolants_vary_across_triangle() {
             vertex_shader: &vert,
             pixel_shader: &frag,
             vertex_stride: 3 * ATTRIBUTE_BYTES,
+            vertex_attributes: &POSITION_INTENSITY,
         })
         .unwrap();
 
@@ -380,6 +418,7 @@ fn gouraud_triangle_blends_per_vertex_colors() {
             vertex_shader: &vert,
             pixel_shader: &frag,
             vertex_stride: 5 * ATTRIBUTE_BYTES,
+            vertex_attributes: &POSITION_COLOR,
         })
         .unwrap();
 
@@ -457,14 +496,36 @@ fn draw_respects_stride_padding() {
     }
 }
 
+fn texture(pixels: &[u32], width: u32) -> SoftTexture {
+    SoftTexture {
+        data: pixels.iter().flat_map(|p| p.to_ne_bytes()).collect(),
+        width,
+        height: pixels.len() as u32 / width,
+    }
+}
+
 #[test]
 fn blit_clips_to_the_target_and_skips_padding() {
     // A 3x2 target at stride 4; the 4x3 image overhangs one column and one row.
     let image: Vec<u32> = (1..=12).collect();
+    let src = texture(&image, 4);
     let mut target = [0xDEAD_BEEFu32; 8];
     let mut q = SoftQueue::new(&mut target, 3, 2, 4);
 
-    q.blit(&image, 4, 3);
+    q.submit(|rec| {
+        rec.blit(
+            &src,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 3,
+            },
+            0,
+            0,
+        )
+    })
+    .unwrap();
 
     assert_eq!(target, [1, 2, 3, 0xDEAD_BEEF, 5, 6, 7, 0xDEAD_BEEF]);
 }
@@ -472,21 +533,56 @@ fn blit_clips_to_the_target_and_skips_padding() {
 #[test]
 fn blit_region_copies_only_the_rect_and_clips_to_the_target() {
     let image: Vec<u32> = (1..=16).collect();
+    let src = texture(&image, 4);
     let mut target = [0u32; 9];
     let mut q = SoftQueue::new(&mut target, 3, 3, 3);
 
-    q.blit_region(
-        &image,
-        4,
-        Rect {
-            x: 1,
-            y: 2,
-            width: 2,
-            height: 2,
-        },
-    );
+    let rect = Rect {
+        x: 1,
+        y: 2,
+        width: 2,
+        height: 2,
+    };
+    q.submit(|rec| rec.blit(&src, rect, rect.x, rect.y))
+        .unwrap();
 
     assert_eq!(target, [0, 0, 0, 0, 0, 0, 0, 10, 11]);
+}
+
+#[test]
+fn clear_fills_visible_pixels_and_keeps_padding() {
+    let mut target = [0xDEAD_BEEFu32; 8];
+    let mut q = SoftQueue::new(&mut target, 3, 2, 4);
+
+    q.submit(|rec| {
+        rec.clear(0xFF20_60C0);
+        Ok(())
+    })
+    .unwrap();
+
+    const C: u32 = 0xFF20_60C0;
+    const P: u32 = 0xDEAD_BEEF;
+    assert_eq!(target, [C, C, C, P, C, C, C, P]);
+}
+
+#[test]
+fn attribute_past_the_stride_is_rejected() {
+    let mut backend = SoftBackend(SoftAllocator, SoftCompiler);
+    let vert = SoftShaderDef::Vertex {
+        func: passthrough_vert,
+        output_count: 2,
+    };
+    let frag = SoftShaderDef::Fragment(white_frag);
+    let result = backend.compile_pipeline(&PipelineDesc {
+        vertex_shader: &vert,
+        pixel_shader: &frag,
+        vertex_stride: 2 * ATTRIBUTE_BYTES,
+        vertex_attributes: &[VertexAttribute {
+            offset: 4,
+            format: AttributeFormat::F32x2,
+        }],
+    });
+    assert_eq!(result.err(), Some(GfxError::InvalidVertexAttribute));
 }
 
 #[test]
@@ -542,6 +638,7 @@ fn each_draw_uses_the_pipeline_bound_at_draw_time() {
             vertex_shader: &vert,
             pixel_shader: &frag,
             vertex_stride: 2 * ATTRIBUTE_BYTES,
+            vertex_attributes: &POSITION,
         })
         .unwrap();
     let mut top_buf = backend

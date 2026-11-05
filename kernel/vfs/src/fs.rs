@@ -5,8 +5,8 @@ use kernel_abi::IoctlRequest;
 
 use crate::path::AbsolutePath;
 use crate::{
-    CloseError, CreateMode, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion, OpenError,
-    ReadDirError, ReadError, Stat, StatError, TruncateError, UnlinkError, WriteError,
+    CloseError, CreateMode, FdLookup, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion,
+    OpenError, ReadDirError, ReadError, Stat, StatError, TruncateError, UnlinkError, WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -154,6 +154,7 @@ pub trait FileSystem: Send + Sync {
         _handle: FsHandle,
         _request: IoctlRequest,
         _arg: &mut [u8],
+        _lookup: &dyn FdLookup,
     ) -> Result<usize, IoctlError> {
         Err(IoctlError::NotSupported)
     }

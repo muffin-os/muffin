@@ -2,6 +2,7 @@ use alloc::sync::Arc;
 use core::fmt::Debug;
 use core::ptr::NonNull;
 
+use kernel_abi::{Errno, FdNum};
 use thiserror::Error;
 
 use crate::FsError;
@@ -18,6 +19,15 @@ pub trait MappedMemory: Debug + Send + Sync {
 /// A share of a file's backing memory, produced by
 /// [`crate::node::VfsNode::mmap`].
 pub type MmapRegion = Arc<dyn MappedMemory>;
+
+/// Resolves descriptors of the calling process during an ioctl.
+pub trait FdLookup {
+    /// Returns the shared memory of the file behind `fd`, as `mmap` would map it.
+    ///
+    /// # Errors
+    /// Returns an errno when `fd` is not open or its file does not support `mmap`.
+    fn mmap_region(&self, fd: FdNum) -> Result<MmapRegion, Errno>;
+}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
 pub enum MmapError {

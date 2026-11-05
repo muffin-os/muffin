@@ -3,7 +3,7 @@ use std::process::{Command, exit};
 use std::thread::sleep;
 use std::time::Duration;
 
-/// Long enough for the demo to print its frame report.
+/// Long enough for the demo to print at least one frame-rate report.
 const DEMO_RUN_TIME: Duration = Duration::from_secs(3);
 
 fn main() {

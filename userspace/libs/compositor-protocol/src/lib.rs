@@ -51,7 +51,11 @@ pub struct DamageResponse {}
 /// Ends a frame: every rectangle marked by `Damage` since the last `Finish`
 /// reaches the screen before the response.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FinishRequest {}
+pub struct FinishRequest {
+    /// `fence` is the GPU fence id of the last submit that wrote the window.
+    /// `0` means that no GPU work is pending.
+    pub fence: u64,
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FinishResponse {}
@@ -141,6 +145,17 @@ mod tests {
         let read = read_message::<Response>(&mut Cursor::new(bytes)).unwrap();
 
         assert_eq!(read, Some(response));
+    }
+
+    #[test]
+    fn given_finish_request_when_written_and_read_then_equal() {
+        let request = Request::Finish(FinishRequest { fence: 7 });
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &request).unwrap();
+
+        let read = read_message::<Request>(&mut Cursor::new(bytes)).unwrap();
+
+        assert_eq!(read, Some(request));
     }
 
     #[test]

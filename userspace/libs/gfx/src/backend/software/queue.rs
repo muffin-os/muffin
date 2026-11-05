@@ -1,33 +1,10 @@
 use alloc::vec::Vec;
 
-use super::{ATTRIBUTE_BYTES, DrawCmd, SoftBackend, SoftPipeline, SoftRecorder};
-use crate::api::GfxQueue;
+use super::{
+    ATTRIBUTE_BYTES, DrawCmd, SoftBackend, SoftCmd, SoftFence, SoftPipeline, SoftRecorder,
+};
+use crate::api::{GfxQueue, Rect};
 use crate::error::Result;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rect {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl Rect {
-    /// Bounding box of both rectangles; edges saturate at `u32::MAX`.
-    pub fn union(self, other: Rect) -> Rect {
-        let x = self.x.min(other.x);
-        let y = self.y.min(other.y);
-        let right = (self.x.saturating_add(self.width)).max(other.x.saturating_add(other.width));
-        let bottom =
-            (self.y.saturating_add(self.height)).max(other.y.saturating_add(other.height));
-        Rect {
-            x,
-            y,
-            width: right - x,
-            height: bottom - y,
-        }
-    }
-}
 
 /// Rasterizes into a caller-owned framebuffer slice borrowed for `'fb`. The
 /// queue never owns or allocates the backing pixels.
@@ -104,36 +81,35 @@ impl<'fb> SoftQueue<'fb> {
         &*self.target
     }
 
-    /// Copies `pixels`, a `width` by `height` image with no row padding, to
-    /// the top-left corner of the target. Columns and rows past the target's
-    /// edges are clipped.
-    pub fn blit(&mut self, pixels: &[u32], width: u32, height: u32) {
-        let rect = Rect {
-            x: 0,
-            y: 0,
-            width,
-            height,
-        };
-        self.blit_region(pixels, width as usize, rect);
+    /// Fills every visible pixel with `argb`. Row padding keeps its value.
+    fn clear(&mut self, argb: u32) {
+        let width = self.width as usize;
+        for row in 0..self.height as usize {
+            self.target[row * self.stride_px..][..width].fill(argb);
+        }
     }
 
-    /// Copies `rect` of `pixels` to the same position on the target, clipped
-    /// to the target. `src_stride` is the row length of `pixels`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the clipped `rect` extends past the end of `pixels`.
-    pub fn blit_region(&mut self, pixels: &[u32], src_stride: usize, rect: Rect) {
-        let x = rect.x as usize;
-        let y = rect.y as usize;
-        let columns = (rect.width as usize).min((self.width as usize).saturating_sub(x));
-        let rows = (rect.height as usize).min((self.height as usize).saturating_sub(y));
+    /// Copies `src_rect` of `pixels` to the target at (`dst_x`, `dst_y`).
+    /// `src_width` is the row length of `pixels`. The copy clips to both images.
+    fn blit(&mut self, pixels: &[u32], src_width: u32, src_rect: Rect, dst_x: u32, dst_y: u32) {
+        let src_width = src_width as usize;
+        let src_height = pixels.len().checked_div(src_width).unwrap_or(0);
+        let sx = src_rect.x as usize;
+        let sy = src_rect.y as usize;
+        let dx = dst_x as usize;
+        let dy = dst_y as usize;
+        let columns = (src_rect.width as usize)
+            .min(src_width.saturating_sub(sx))
+            .min((self.width as usize).saturating_sub(dx));
+        let rows = (src_rect.height as usize)
+            .min(src_height.saturating_sub(sy))
+            .min((self.height as usize).saturating_sub(dy));
         if columns == 0 {
             return;
         }
-        for row in y..y + rows {
-            let src = &pixels[row * src_stride + x..][..columns];
-            self.target[row * self.stride_px + x..][..columns].copy_from_slice(src);
+        for row in 0..rows {
+            let src = &pixels[(sy + row) * src_width + sx..][..columns];
+            self.target[(dy + row) * self.stride_px + dx..][..columns].copy_from_slice(src);
         }
     }
 
@@ -300,17 +276,28 @@ impl<'fb> SoftQueue<'fb> {
 
 impl<'fb> GfxQueue<SoftBackend> for SoftQueue<'fb> {
     type Recorder = SoftRecorder;
+    type Fence = SoftFence;
 
-    fn submit<F>(&mut self, recorder_cmds: F) -> Result<()>
+    fn submit<F>(&mut self, recorder_cmds: F) -> Result<SoftFence>
     where
         F: FnOnce(&mut Self::Recorder) -> Result<()>,
     {
         let mut rec = SoftRecorder::new();
         recorder_cmds(&mut rec)?;
         for cmd in &rec.cmds {
-            self.rasterize(cmd);
+            match cmd {
+                SoftCmd::Draw(draw) => self.rasterize(draw),
+                SoftCmd::Clear(argb) => self.clear(*argb),
+                SoftCmd::Blit {
+                    pixels,
+                    src_width,
+                    src_rect,
+                    dst_x,
+                    dst_y,
+                } => self.blit(pixels, *src_width, *src_rect, *dst_x, *dst_y),
+            }
         }
-        Ok(())
+        Ok(SoftFence)
     }
 
     fn present(&mut self) -> Result<()> {

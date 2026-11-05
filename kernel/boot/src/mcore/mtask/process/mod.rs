@@ -13,7 +13,7 @@ use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use conquer_once::spin::OnceCell;
-use kernel_abi::ProcessId;
+use kernel_abi::{FdNum, ProcessId};
 use kernel_memapi::{Guarded, Location, MemoryApi};
 use kernel_syscall::access::AccessMode;
 use kernel_syscall::exec::build_initial_stack;
@@ -35,7 +35,7 @@ use x86_64::structures::paging::{PageSize, Size4KiB};
 use crate::arch::gdt::Selectors;
 use crate::file::{OpenFile, OpenFileDescription, vfs};
 use crate::hpet::Instant;
-use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
+use crate::mcore::mtask::process::fd::{FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::MemoryRegions;
 use crate::mcore::mtask::process::telemetry::Telemetry;
 use crate::mcore::mtask::process::tree::process_tree;

@@ -15,9 +15,9 @@ struct Args {
         help = "Start QEMU with a GDB server listening on localhost:1234"
     )]
     debug: bool,
-    #[arg(long, help = "Run QEMU without a display")]
+    #[arg(long, help = "Run QEMU without a window")]
     headless: bool,
-    #[arg(long, help = "QEMU -display spec, e.g. gtk, sdl, none")]
+    #[arg(long, help = "QEMU -display spec; needs gl=on, e.g. sdl,gl=on")]
     display: Option<String>,
     #[arg(long, help = "Number of CPU cores to emulate", default_value_t = 4)]
     smp: u8,
@@ -99,13 +99,15 @@ continue"
         cmd.arg("-S");
     }
 
+    cmd.arg("-display");
     if args.headless {
-        // run without a window, but with graphics devices attached
-        cmd.arg("-display");
-        cmd.arg("none");
+        cmd.arg("egl-headless");
     } else if let Some(display) = &args.display {
-        cmd.arg("-display");
         cmd.arg(display);
+    } else {
+        // The GTK backend logs `eglMakeCurrent failed` on every frame under
+        // Wayland; SDL does not.
+        cmd.arg("sdl,gl=on");
     }
 
     cmd.arg("-m");
@@ -153,7 +155,7 @@ continue"
     }
 
     cmd.arg("-device");
-    cmd.arg("virtio-gpu,id=virtio-gpu0");
+    cmd.arg("virtio-gpu-gl,id=virtio-gpu0");
     cmd.arg("-vga");
     cmd.arg("none");
 

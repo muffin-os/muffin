@@ -2,6 +2,7 @@ use crate::api::GfxFence;
 
 /// Software fence; immediately signals completion because all execution
 /// is synchronous.
+#[derive(Debug, PartialEq, Eq)]
 pub struct SoftFence;
 
 impl GfxFence for SoftFence {
@@ -10,4 +11,8 @@ impl GfxFence for SoftFence {
     }
 
     fn wait(&self) {}
+
+    fn id(&self) -> u64 {
+        0
+    }
 }

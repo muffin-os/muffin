@@ -1,12 +1,11 @@
 use alloc::sync::Arc;
 
-use kernel_abi::{EBADF, ENOTSOCK, Errno, ShutdownHow};
+use kernel_abi::{EBADF, ENOTSOCK, Errno, FdNum, ShutdownHow};
 use kernel_syscall::access::SocketAccess;
 use kernel_vfs::path::AbsoluteOwnedPath;
 
 use crate::file::OpenFileDescription;
 use crate::file::socket::{Socket, UNIX_SOCKETS};
-use crate::mcore::mtask::process::fd::FdNum;
 use crate::syscall::access::KernelAccess;
 
 impl KernelAccess {

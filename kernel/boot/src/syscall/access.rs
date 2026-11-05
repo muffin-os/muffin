@@ -5,8 +5,8 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
     EACCES, EAGAIN, EBADF, EBUSY, EEXIST, EFBIG, EINTR, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV,
-    ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTTY, EPERM, EPIPE, ESPIPE, Errno, IoctlRequest,
-    ProtFlags, S_IFSOCK, SigInfo, SigInfoField, Signal, Stat,
+    ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTTY, EPERM, EPIPE, ESPIPE, Errno, FdNum,
+    IoctlRequest, ProtFlags, S_IFSOCK, SigInfo, SigInfoField, Signal, Stat,
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
@@ -15,8 +15,8 @@ use kernel_syscall::access::{
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
-    CreateMode, FsError, FsyncError, IoctlError, MmapError, OpenError, ReadDirError, ReadError,
-    Stat as VfsStat, TruncateError, UnlinkError, WriteError,
+    CreateMode, FdLookup, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError,
+    ReadDirError, ReadError, Stat as VfsStat, TruncateError, UnlinkError, WriteError,
 };
 use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
@@ -25,7 +25,7 @@ use x86_64::structures::paging::frame::PhysFrameRangeInclusive;
 use x86_64::structures::paging::{PageSize, PageTableFlags, PhysFrame, Size4KiB};
 
 use crate::file::{OpenFile, OpenFileDescription, vfs};
-use crate::mcore::mtask::process::fd::{FdNum, FileDescriptor, FileDescriptorFlags};
+use crate::mcore::mtask::process::fd::{FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::{
     FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion, SharedMemoryRegion,
 };
@@ -260,14 +260,15 @@ impl FileAccess for KernelAccess {
     }
 
     fn ioctl(&self, fd: Self::Fd, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, Errno> {
-        let fds = self.process.file_descriptors();
-        let guard = fds.read();
-
-        let desc = guard.get(&fd).ok_or(EBADF)?;
-        desc.file_description()
-            .file()
+        // Release the fd table lock before the call, so that the lookup can take it again.
+        let file = {
+            let fds = self.process.file_descriptors();
+            let guard = fds.read();
+            guard.get(&fd).ok_or(EBADF)?.file_description().clone()
+        };
+        file.file()
             .ok_or(ENOTTY)?
-            .ioctl(request, arg)
+            .ioctl(request, arg, self)
             .map_err(|e| match e {
                 IoctlError::NotSupported => ENOTTY,
                 IoctlError::InvalidArgument | IoctlError::FsError(_) => EINVAL,
@@ -378,19 +379,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
         len: usize,
         prot: ProtFlags,
     ) -> Result<kernel_syscall::UserspacePtr<u8>, Errno> {
-        let memory = {
-            let fds = self.process.file_descriptors();
-            let guard = fds.read();
-            let desc = guard.get(&fd).ok_or(EBADF)?;
-            desc.file_description()
-                .file()
-                .ok_or(ENODEV)?
-                .mmap()
-                .map_err(|e| match e {
-                    MmapError::NotSupported => ENODEV,
-                    MmapError::FsError(_) => EINVAL,
-                })?
-        };
+        let memory = self.mmap_region(fd)?;
 
         let page_size = Size4KiB::SIZE as usize;
         let page_aligned = len.next_multiple_of(page_size);
@@ -532,5 +521,21 @@ impl kernel_syscall::access::MemoryRegion for KernelMemoryRegionHandle {
 
     fn size(&self) -> usize {
         self.inner.size()
+    }
+}
+
+impl FdLookup for KernelAccess {
+    fn mmap_region(&self, fd: FdNum) -> Result<MmapRegion, Errno> {
+        let fds = self.process.file_descriptors();
+        let guard = fds.read();
+        let desc = guard.get(&fd).ok_or(EBADF)?;
+        desc.file_description()
+            .file()
+            .ok_or(ENODEV)?
+            .mmap()
+            .map_err(|e| match e {
+                MmapError::NotSupported => ENODEV,
+                MmapError::FsError(_) => EINVAL,
+            })
     }
 }

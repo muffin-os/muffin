@@ -1,3 +1,5 @@
+use kernel_abi::Errno;
+
 /// Convenience alias for a [`core::result::Result`] with [`GfxError`].
 pub type Result<T> = core::result::Result<T, GfxError>;
 
@@ -16,4 +18,12 @@ pub enum GfxError {
     PipelineNotBound,
     /// `draw` was recorded before `bind_vertex_buffer`.
     VertexBufferNotBound,
+    /// A vertex attribute range exceeds `vertex_stride`.
+    InvalidVertexAttribute,
+    /// A shader text does not start with `VERT` or `FRAG`.
+    InvalidShaderSource,
+    /// `/dev/gpu0` is missing or has no 3D support.
+    DeviceUnavailable,
+    /// A syscall on `/dev/gpu0` failed.
+    Device(Errno),
 }

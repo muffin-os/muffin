@@ -11,8 +11,8 @@ use crate::fs::{FileSystem, FsHandle};
 use crate::path::AbsoluteOwnedPath;
 use crate::vfs::stat::Stat;
 use crate::{
-    FsError, FsyncError, IoctlError, MmapError, MmapRegion, ReadDirError, ReadError, StatError,
-    TruncateError, WriteError,
+    FdLookup, FsError, FsyncError, IoctlError, MmapError, MmapRegion, ReadDirError, ReadError,
+    StatError, TruncateError, WriteError,
 };
 
 #[derive(Clone)]
@@ -146,11 +146,16 @@ impl VfsNode {
     /// # Errors
     /// Returns [`IoctlError::NotSupported`] if the underlying filesystem or
     /// device file does not support the request.
-    pub fn ioctl(&self, request: IoctlRequest, arg: &mut [u8]) -> Result<usize, IoctlError> {
+    pub fn ioctl(
+        &self,
+        request: IoctlRequest,
+        arg: &mut [u8],
+        lookup: &dyn FdLookup,
+    ) -> Result<usize, IoctlError> {
         let fs = self.fs.upgrade().ok_or(FsError::FileSystemNotOpen)?;
 
         let mut guard = fs.write();
-        guard.ioctl(self.fs_handle, request, arg)
+        guard.ioctl(self.fs_handle, request, arg, lookup)
     }
 
     /// Commits any pending writes for this file to the underlying device.

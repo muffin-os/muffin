@@ -8,7 +8,12 @@ rust_library(
     edition = "2024",
     deps = [
         "//kernel/abi",
-    ],
+    ] + select({
+        # `muffin_sys` builds only for the muffin platform; the host test
+        # compiles the backend without its syscall types.
+        "@platforms//os:none": ["//userspace/libs/sys"],
+        "//conditions:default": [],
+    }),
 )
 
 rust_test(

@@ -141,7 +141,10 @@ pub fn poweroff() -> ! {
         ExecutionContext::load()
             .lapic()
             .lock_without_interrupts()
-            .send_ipi_all(InterruptIndex::Halt.as_u8(), IpiAllShorthand::AllExcludingSelf);
+            .send_ipi_all(
+                InterruptIndex::Halt.as_u8(),
+                IpiAllShorthand::AllExcludingSelf,
+            );
     }
 
     let ack_deadline = hpet().read().now().saturating_add(HALT_ACK_GRACE);

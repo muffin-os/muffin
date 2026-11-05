@@ -4,6 +4,7 @@
 mod dirent;
 mod errno;
 mod fcntl;
+mod gpu;
 mod ioctl;
 mod limits;
 mod mman;
@@ -20,6 +21,7 @@ pub mod gfx;
 pub use dirent::*;
 pub use errno::*;
 pub use fcntl::*;
+pub use gpu::*;
 pub use ioctl::*;
 pub use limits::*;
 pub use mman::*;

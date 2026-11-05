@@ -1,4 +1,7 @@
-use crate::{ENOTTY, Errno};
+use crate::{
+    ENOTTY, Errno, GpuFenceInfo, GpuFlush, GpuImport, GpuInfo, GpuSetScanout, GpuTransfer,
+    GpuWaitFence,
+};
 
 /// A device control request, the typed form of the raw request number
 /// passed to the ioctl syscall.
@@ -7,6 +10,34 @@ use crate::{ENOTTY, Errno};
 pub enum IoctlRequest {
     /// Fills an [`FbScreenInfo`] with the framebuffer geometry.
     FbGetScreenInfo = 1,
+    /// Fills a [`GpuInfo`].
+    GpuGetInfo = 2,
+    /// Imports a file as a GPU resource, see [`GpuImport`].
+    GpuImport = 3,
+    /// Copies between guest memory and a resource, see [`GpuTransfer`].
+    GpuTransfer = 4,
+    /// Fills a [`GpuFenceInfo`].
+    GpuFenceInfo = 5,
+    /// Waits for a fence, see [`GpuWaitFence`].
+    GpuWaitFence = 6,
+    /// Shows a resource on the scanout, see [`GpuSetScanout`].
+    GpuSetScanout = 7,
+    /// Updates a rectangle of the scanout, see [`GpuFlush`].
+    GpuFlush = 8,
+}
+
+impl IoctlRequest {
+    /// All requests, in the order of their numbers.
+    pub const ALL: [Self; 8] = [
+        Self::FbGetScreenInfo,
+        Self::GpuGetInfo,
+        Self::GpuImport,
+        Self::GpuTransfer,
+        Self::GpuFenceInfo,
+        Self::GpuWaitFence,
+        Self::GpuSetScanout,
+        Self::GpuFlush,
+    ];
 }
 
 impl IoctlRequest {
@@ -16,6 +47,13 @@ impl IoctlRequest {
     pub const fn arg_size(self) -> usize {
         match self {
             Self::FbGetScreenInfo => FbScreenInfo::SIZE,
+            Self::GpuGetInfo => GpuInfo::SIZE,
+            Self::GpuImport => GpuImport::SIZE,
+            Self::GpuTransfer => GpuTransfer::SIZE,
+            Self::GpuFenceInfo => GpuFenceInfo::SIZE,
+            Self::GpuWaitFence => GpuWaitFence::SIZE,
+            Self::GpuSetScanout => GpuSetScanout::SIZE,
+            Self::GpuFlush => GpuFlush::SIZE,
         }
     }
 
@@ -32,6 +70,13 @@ impl TryFrom<usize> for IoctlRequest {
     fn try_from(value: usize) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::FbGetScreenInfo),
+            2 => Ok(Self::GpuGetInfo),
+            3 => Ok(Self::GpuImport),
+            4 => Ok(Self::GpuTransfer),
+            5 => Ok(Self::GpuFenceInfo),
+            6 => Ok(Self::GpuWaitFence),
+            7 => Ok(Self::GpuSetScanout),
+            8 => Ok(Self::GpuFlush),
             _ => Err(ENOTTY),
         }
     }
@@ -85,11 +130,31 @@ mod tests {
 
     #[test]
     fn ioctl_request_number_round_trips() {
-        let request = IoctlRequest::FbGetScreenInfo;
+        for request in IoctlRequest::ALL {
+            assert_eq!(
+                IoctlRequest::try_from(request.number()),
+                Ok(request),
+                "request number should round-trip through TryFrom"
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_import_invalid_kind_is_none() {
+        let import = GpuImport {
+            fd: crate::FdNum::from(3),
+            kind: crate::GpuResourceKind::Texture,
+            width: 4,
+            height: 4,
+            resource: 0,
+        };
+        assert_eq!(GpuImport::from_bytes(import.to_bytes()), Some(import));
+        let mut bytes = import.to_bytes();
+        bytes[4..8].copy_from_slice(&7u32.to_ne_bytes());
         assert_eq!(
-            IoctlRequest::try_from(request.number()),
-            Ok(request),
-            "request number should round-trip through TryFrom"
+            GpuImport::from_bytes(bytes),
+            None,
+            "an invalid kind discriminant should not decode"
         );
     }
 

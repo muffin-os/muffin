@@ -1,6 +1,6 @@
 use kernel_abi::IoctlRequest;
 use kernel_vfs::{
-    FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError,
+    FdLookup, FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError,
 };
 
 mod block;
@@ -42,7 +42,12 @@ pub trait DevFile: Send + Sync {
     /// # Errors
     /// Returns [`IoctlError::NotSupported`] when the device does not
     /// implement the request.
-    fn ioctl(&mut self, _request: IoctlRequest, _arg: &mut [u8]) -> Result<usize, IoctlError> {
+    fn ioctl(
+        &mut self,
+        _request: IoctlRequest,
+        _arg: &mut [u8],
+        _lookup: &dyn FdLookup,
+    ) -> Result<usize, IoctlError> {
         Err(IoctlError::NotSupported)
     }
 }

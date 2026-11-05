@@ -75,6 +75,7 @@ pub struct KernelTest {
     env: HostEnv,
     deadline: Duration,
     qemu_args: Vec<String>,
+    qemu_env: Vec<(String, String)>,
 }
 
 impl KernelTest {
@@ -85,6 +86,7 @@ impl KernelTest {
             env,
             deadline: DEFAULT_DEADLINE,
             qemu_args: vec![],
+            qemu_env: vec![],
         }
     }
 
@@ -103,6 +105,14 @@ impl KernelTest {
         S: Into<String>,
     {
         self.qemu_args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    /// Sets an environment variable of the QEMU process, for example a Mesa
+    /// driver override.
+    #[must_use]
+    pub fn qemu_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.qemu_env.push((key.into(), value.into()));
         self
     }
 
@@ -163,6 +173,7 @@ impl KernelTest {
             .arg("-device")
             .arg("virtio-blk-pci,drive=virtio-disk0")
             .args(&self.qemu_args)
+            .envs(self.qemu_env.iter().map(|(key, value)| (key, value)))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

@@ -189,7 +189,12 @@ mod tests {
         let mut status = 0i32;
         let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty(), Some(ptr)),
+            sys_waitpid(
+                &cx,
+                WaitTarget::Child(pid(2)),
+                WaitOptions::empty(),
+                Some(ptr)
+            ),
             Ok(2)
         );
         assert_eq!(status, 128 + Signal::Kill.number());
@@ -203,7 +208,12 @@ mod tests {
         let mut status = 0i32;
         let ptr = UserspaceMutPtr::try_from_usize(&raw mut status as usize).unwrap();
         assert_eq!(
-            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty(), Some(ptr)),
+            sys_waitpid(
+                &cx,
+                WaitTarget::Child(pid(2)),
+                WaitOptions::empty(),
+                Some(ptr)
+            ),
             Ok(2)
         );
         assert_eq!(status, 7);
@@ -308,7 +318,10 @@ mod tests {
             Ok(0)
         );
         assert_eq!(status, -1, "no status is written without a reap");
-        assert!(cx.has(pid(2)), "the running child stays in the process table");
+        assert!(
+            cx.has(pid(2)),
+            "the running child stays in the process table"
+        );
         // The test sleep ends every child, so a second 0 proves no sleep ran.
         assert_eq!(
             sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::NOHANG, None),
