@@ -11,8 +11,8 @@ use kernel_abi::{
     EADDRINUSE, EAGAIN, ECONNREFUSED, EDESTADDRREQ, EINVAL, EISCONN, ENOBUFS, ENOTCONN, EOPNOTSUPP,
     EPIPE, Errno, ShutdownHow,
 };
-use kernel_vfs::Readiness;
 use kernel_vfs::path::AbsoluteOwnedPath;
+use kernel_vfs::{Readiness, WaitKey, WaitSource};
 use spin::Mutex;
 
 pub const SOCKET_BUFFER_BYTES: usize = 64 * 1024;
@@ -216,7 +216,13 @@ impl<N: Notify, P: Send + Sync + 'static> UnixSocket<N, P> {
                 Ok(())
             }
             State::Listening { backlog: b, .. } => {
+                let has_more_room = backlog > *b;
                 *b = backlog;
+                drop(state);
+                if has_more_room {
+                    // A connector may wait for room in the queue.
+                    self.registry.waiters.notify_all();
+                }
                 Ok(())
             }
         }
@@ -269,6 +275,8 @@ impl<N: Notify, P: Send + Sync + 'static> UnixSocket<N, P> {
         drop(listener_state);
         drop(state);
         listener.waiters.notify_all();
+        // The connecting socket becomes writable.
+        self.waiters.notify_all();
         Ok(())
     }
 
@@ -426,6 +434,16 @@ impl<N: Notify, P: Send + Sync + 'static> UnixSocket<N, P> {
             writable,
             hung_up: false,
         }
+    }
+}
+
+impl<N: Notify + WaitSource, P: Send + Sync + 'static> WaitSource for UnixSocket<N, P> {
+    fn register(&self, waker: core::task::Waker) -> WaitKey {
+        self.waiters.register(waker)
+    }
+
+    fn unregister(&self, key: WaitKey) {
+        self.waiters.unregister(key);
     }
 }
 
@@ -739,5 +757,117 @@ mod tests {
         c.shutdown(ShutdownHow::Write).unwrap();
         assert!(!c.readiness().writable);
         assert!(s.readiness().readable);
+    }
+
+    /// Holds real wakers, so a test observes the wake of a blocked consumer.
+    struct Waiters {
+        last_key: Mutex<u64>,
+        wakers: Mutex<Vec<(WaitKey, core::task::Waker)>>,
+    }
+
+    impl Waiters {
+        const fn new() -> Self {
+            Self {
+                last_key: Mutex::new(0),
+                wakers: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Default for Waiters {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Notify for Waiters {
+        fn notify_all(&self) {
+            for (_, waker) in core::mem::take(&mut *self.wakers.lock()) {
+                waker.wake();
+            }
+        }
+    }
+
+    impl WaitSource for Waiters {
+        fn register(&self, waker: core::task::Waker) -> WaitKey {
+            let mut last_key = self.last_key.lock();
+            *last_key += 1;
+            let key = WaitKey::new(core::num::NonZeroU64::new(*last_key).unwrap());
+            self.wakers.lock().push((key, waker));
+            key
+        }
+
+        fn unregister(&self, key: WaitKey) {
+            self.wakers.lock().retain(|(k, _)| *k != key);
+        }
+    }
+
+    #[derive(Default)]
+    struct Consumer(core::sync::atomic::AtomicBool);
+
+    impl alloc::task::Wake for Consumer {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, core::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl Consumer {
+        fn is_woken(&self) -> bool {
+            self.0.load(core::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    type WakingSocket = UnixSocket<Waiters, u32>;
+
+    fn waking_listener(
+        registry: &'static Registry<Waiters, u32>,
+        backlog: usize,
+    ) -> Arc<WakingSocket> {
+        let l = WakingSocket::new(registry);
+        l.bind(path("/waking")).unwrap();
+        l.listen(backlog).unwrap();
+        l
+    }
+
+    #[test]
+    fn connect_wakes_a_readiness_waiter_on_the_connecting_socket() {
+        static REGISTRY: Registry<Waiters, u32> = Registry::new(Waiters::new());
+        let _l = waking_listener(&REGISTRY, 1);
+        let c = WakingSocket::new(&REGISTRY);
+        assert!(!c.readiness().writable);
+        let consumer = Arc::new(Consumer::default());
+        let _registration =
+            kernel_vfs::WaitRegistration::new(&*c, core::task::Waker::from(consumer.clone()));
+
+        c.try_connect(&path("/waking")).unwrap();
+
+        assert!(
+            consumer.is_woken(),
+            "the connection left the waiter blocked"
+        );
+        assert!(c.readiness().writable);
+    }
+
+    #[test]
+    fn backlog_increase_wakes_a_connector_that_waits_for_room() {
+        static REGISTRY: Registry<Waiters, u32> = Registry::new(Waiters::new());
+        let l = waking_listener(&REGISTRY, 1);
+        let a = WakingSocket::new(&REGISTRY);
+        a.try_connect(&path("/waking")).unwrap();
+        let b = WakingSocket::new(&REGISTRY);
+        assert_eq!(b.try_connect(&path("/waking")), Err(EAGAIN));
+        let consumer = Arc::new(Consumer::default());
+        let _registration = kernel_vfs::WaitRegistration::new(
+            REGISTRY.waiters(),
+            core::task::Waker::from(consumer.clone()),
+        );
+
+        l.listen(2).unwrap();
+
+        assert!(
+            consumer.is_woken(),
+            "the larger backlog left the connector blocked"
+        );
+        assert_eq!(b.try_connect(&path("/waking")), Ok(()));
     }
 }

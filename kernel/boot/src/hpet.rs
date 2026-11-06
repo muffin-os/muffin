@@ -101,6 +101,11 @@ impl Hpet<'_> {
 pub struct Instant(Duration);
 
 impl Instant {
+    #[must_use]
+    pub const fn from_since_boot(since_boot: Duration) -> Self {
+        Self(since_boot)
+    }
+
     /// Returns the time between boot and this instant.
     #[must_use]
     pub fn since_boot(self) -> Duration {

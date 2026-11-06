@@ -30,6 +30,8 @@ pub enum InterruptIndex {
     Halt = 0x30,
     LapicErr = 0x31,
     TlbShootdown = 0x32,
+    SchedulerWake = 0x33,
+    VirtioInput = 0x34,
     Syscall = 0x80,
     Spurious = 0xff,
 }
@@ -97,6 +99,8 @@ pub fn create_idt() -> InterruptDescriptorTable {
     idt[InterruptIndex::LapicErr.as_u8()].set_handler_fn(lapic_err_interrupt_handler);
     idt[InterruptIndex::Halt.as_u8()].set_handler_fn(halt_ipi_handler);
     idt[InterruptIndex::TlbShootdown.as_u8()].set_handler_fn(tlb_shootdown_handler);
+    idt[InterruptIndex::SchedulerWake.as_u8()].set_handler_fn(scheduler_wake_handler);
+    idt[InterruptIndex::VirtioInput.as_u8()].set_handler_fn(virtio_input_handler);
     idt[InterruptIndex::Spurious.as_u8()].set_handler_fn(spurious_interrupt_handler);
 
     unsafe {
@@ -313,6 +317,23 @@ extern "x86-interrupt" fn tlb_shootdown_handler(_: InterruptStackFrame) {
     unsafe { ExecutionContext::load() }
         .shootdown_slot()
         .acknowledge();
+}
+
+/// The idle loop does the task switch after this handler returns.
+extern "x86-interrupt" fn scheduler_wake_handler(_: InterruptStackFrame) {
+    unsafe {
+        end_of_interrupt();
+    }
+}
+
+/// The vector does not identify a GSI, so the driver checks every hub. The
+/// EOI comes after all device acknowledgements, because a level-triggered
+/// line that is still asserted fires again after the EOI.
+extern "x86-interrupt" fn virtio_input_handler(_: InterruptStackFrame) {
+    crate::driver::virtio::handle_input_interrupt();
+    unsafe {
+        end_of_interrupt();
+    }
 }
 
 extern "x86-interrupt" fn spurious_interrupt_handler(stack_frame: InterruptStackFrame) {

@@ -1,3 +1,6 @@
+use core::num::NonZeroU64;
+use core::task::Waker;
+
 use kernel_abi::PollEvents;
 
 /// This type tells what a read or a write on an open file does now. It does
@@ -37,6 +40,53 @@ impl Readiness {
             revents |= PollEvents::HUP;
         }
         revents
+    }
+}
+
+/// Identifies one registration within one [`WaitSource`]. A source never
+/// reuses a key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WaitKey(NonZeroU64);
+
+impl WaitKey {
+    #[must_use]
+    pub const fn new(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// A resource that wakes registered wakers when its readiness can change.
+/// Registration does not inspect readiness, so the waiter must check its
+/// condition after it registers.
+pub trait WaitSource: Send + Sync {
+    fn register(&self, waker: Waker) -> WaitKey;
+
+    /// A notification can remove the registration first. Then this call
+    /// does nothing.
+    fn unregister(&self, key: WaitKey);
+}
+
+/// Unregisters its key from its source on drop.
+pub struct WaitRegistration<'a> {
+    source: &'a dyn WaitSource,
+    key: WaitKey,
+}
+
+impl<'a> WaitRegistration<'a> {
+    pub fn new(source: &'a dyn WaitSource, waker: Waker) -> Self {
+        let key = source.register(waker);
+        Self { source, key }
+    }
+}
+
+impl Drop for WaitRegistration<'_> {
+    fn drop(&mut self) {
+        self.source.unregister(self.key);
     }
 }
 

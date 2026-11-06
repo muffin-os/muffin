@@ -56,6 +56,18 @@ package(default_visibility = ["//visibility:public"])
 ]
 
 rust_binary(
+    name = "event_waits",
+    srcs = ["event-waits/src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = [
+        "//kernel/abi",
+        "//userspace/libs/sys",
+        "@rust_libc//:libc",
+    ],
+)
+
+rust_binary(
     name = "gpu_nodes",
     srcs = ["gpu-nodes/src/main.rs"],
     edition = "2024",

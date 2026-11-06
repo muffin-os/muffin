@@ -1,8 +1,6 @@
-use alloc::boxed::Box;
 use core::ptr::NonNull;
 
 use kernel_pci::PciAddress;
-use kernel_pci::config::ConfigurationAccess;
 use kernel_virtual_memory::Segment;
 use virtio_drivers::transport::pci::PciTransport;
 use virtio_drivers::transport::pci::bus::{DeviceFunction, PciRoot};
@@ -17,8 +15,8 @@ use crate::mem::phys::{OwnedPhysicalMemory, PhysicalMemory};
 use crate::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 use crate::{U64Ext, UsizeExt};
 
-pub fn transport(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> PciTransport {
-    let mut root = PciRoot::new(VirtIoCam::new(cam));
+pub fn transport(addr: PciAddress, cam: &VirtIoCam) -> PciTransport {
+    let mut root = PciRoot::new(cam.clone());
     PciTransport::new::<HalImpl, _>(
         &mut root,
         DeviceFunction {

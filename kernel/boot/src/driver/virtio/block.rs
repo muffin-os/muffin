@@ -19,7 +19,7 @@ use x86_64::structures::paging::{PageSize, Size4KiB};
 use crate::U64Ext;
 use crate::driver::KernelDeviceId;
 use crate::driver::block::BlockDevices;
-use crate::driver::pci::{PCI_DRIVERS, PciDriverDescriptor, PciDriverType};
+use crate::driver::pci::{PCI_DRIVERS, PciDriverDescriptor, PciDriverType, VirtIoCam};
 use crate::driver::virtio::hal::{HalImpl, transport};
 use crate::mem::memapi::{FrameContiguity, HigherHalfAllocation, HigherHalfMemoryApi, Writable};
 
@@ -44,7 +44,11 @@ fn virtio_probe(addr: PciAddress, cam: &dyn ConfigurationAccess) -> bool {
 }
 
 fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<(), Box<dyn Error>> {
-    let transport = transport(addr, cam);
+    let cam = VirtIoCam::new(cam);
+    // The driver polls its used ring. An enabled INTx could hold a shared
+    // input line active.
+    cam.set_intx_enabled(addr, false);
+    let transport = transport(addr, &cam);
 
     let blk = VirtIOBlk::<HalImpl, _>::new(transport)?;
     let layout = Layout::from_size_align(BOUNCE_LEN, PAGE_SIZE)?;

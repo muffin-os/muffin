@@ -4,16 +4,15 @@ use core::ptr;
 use core::sync::atomic::Ordering::{Acquire, Release};
 
 use tracing::{Level, instrument, trace};
+use x86_64::instructions::interrupts;
 use x86_64::instructions::segmentation::{CS, DS, SS};
 use x86_64::instructions::tables::load_tss;
-use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::registers::model_specific::KernelGsBase;
 use x86_64::registers::segmentation::Segment;
 use x86_64::structures::paging::PhysFrame;
 use x86_64::{PhysAddr, VirtAddr};
 
-use crate::apic::io_apic;
 use crate::arch::gdt::create_gdt_and_tss;
 use crate::arch::idt::create_idt;
 use crate::limine::MP_REQUEST;
@@ -21,6 +20,7 @@ use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::scheduler::cleanup::TaskCleanup;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
+use crate::mcore::mtask::scheduler::idle;
 use crate::mcore::mtask::task::Task;
 use crate::sse;
 
@@ -95,8 +95,6 @@ unsafe extern "C" fn cpu_init_and_return(cpu: &limine::mp::Cpu) {
     }
 
     sse::init();
-
-    init_interrupts();
 }
 
 unsafe extern "C" fn cpu_init(cpu: &limine::mp::Cpu) -> ! {
@@ -114,30 +112,34 @@ fn install_idle_task() {
     );
     let idle_task = Task::create_new(Process::root(), idle, ptr::null_mut())
         .expect("should be able to create the idle task");
-    unsafe {
-        // Safety: interrupts are disabled, so the context is this CPU's
-        // while the idle task is installed.
-        ExecutionContext::load()
-            .scheduler_mut()
-            .set_idle_task(Box::pin(idle_task));
-    }
+    // Safety: interrupts are disabled, so the context is this CPU's
+    // while the idle task is installed.
+    let context = unsafe { ExecutionContext::load() };
+    unsafe { context.scheduler_mut() }.set_idle_task(Box::pin(idle_task));
+    let lapic_id = u32::try_from(context.lapic_id()).expect("LAPIC ID should fit in u32");
+    idle::register(context.cpu_id(), lapic_id);
 }
 
 extern "C" fn idle(_: *mut c_void) {
     loop {
-        hlt();
+        interrupts::disable();
+        // Safety: interrupts are off, so the context is this CPU's.
+        let context = unsafe { ExecutionContext::load() };
+        let cpu_id = context.cpu_id();
+        idle::mark_idle(cpu_id);
+        // A switch can resume this task much later than its queue check, so
+        // the loop checks the queue again before any halt.
+        // Safety: interrupts are off, so the scheduler is this CPU's.
+        if unsafe { context.scheduler_mut().reschedule() } {
+            continue;
+        }
+        // An IPI after `mark_idle` stays pending until `sti` takes effect.
+        interrupts::enable_and_hlt();
+        interrupts::disable();
+        idle::mark_active(cpu_id);
     }
 }
 
 pub fn exit_bootstrap() -> ! {
     Task::exit_current()
-}
-
-fn init_interrupts() {
-    let mut io_apic = io_apic().lock();
-    unsafe {
-        const OFFSET: u8 = 32;
-        io_apic.init(OFFSET);
-        // TODO(tpdenk): program IO APIC redirection entries once a driver needs a device IRQ.
-    }
 }

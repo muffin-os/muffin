@@ -3,7 +3,7 @@ use core::time::Duration;
 use kernel_abi::{EBADF, Errno, PollEvents, PollFd};
 use tracing::{Level, instrument};
 
-use crate::access::{PollAccess, SleepAccess};
+use crate::access::PollAccess;
 
 /// Runs POSIX poll. Writes the `revents` of each entry and returns the number
 /// of entries with nonzero `revents`. With a `timeout` of `None`, it waits
@@ -17,7 +17,7 @@ use crate::access::{PollAccess, SleepAccess};
 /// Returns `EINTR` when a signal interrupts the wait. Returns each error of
 /// [`PollAccess::readiness`] other than `EBADF`.
 #[instrument(level = Level::TRACE, skip(cx, fds), fields(nfds = fds.len()))]
-pub fn sys_poll<Cx: PollAccess + SleepAccess>(
+pub fn sys_poll<Cx: PollAccess>(
     cx: &Cx,
     fds: &mut [PollFd],
     timeout: Option<Duration>,
@@ -25,7 +25,6 @@ pub fn sys_poll<Cx: PollAccess + SleepAccess>(
     // A deadline after the end of the clock never comes. Thus poll waits as
     // for `None`.
     let deadline = timeout.and_then(|t| cx.monotonic_now().checked_add(t));
-    // shortcut: busy poll on `sleep_one_poll` instead of a parked waiter
     loop {
         let ready = fill_revents(cx, fds)?;
         if ready > 0 {
@@ -34,7 +33,7 @@ pub fn sys_poll<Cx: PollAccess + SleepAccess>(
         if deadline.is_some_and(|d| cx.monotonic_now() >= d) {
             return Ok(0);
         }
-        cx.sleep_one_poll()?;
+        cx.wait_for_readiness(fds, deadline)?;
     }
 }
 
@@ -60,7 +59,8 @@ fn fill_revents<Cx: PollAccess>(cx: &Cx, fds: &mut [PollFd]) -> Result<usize, Er
 
 #[cfg(test)]
 mod tests {
-    use alloc::collections::BTreeMap;
+    use alloc::collections::{BTreeMap, VecDeque};
+    use alloc::vec::Vec;
     use core::cell::{Cell, RefCell};
     use core::ffi::c_int;
 
@@ -79,14 +79,24 @@ mod tests {
         ..IDLE
     };
 
+    /// One event that ends one wait.
+    #[derive(Clone, Copy)]
+    enum Wake {
+        /// `fd` gets the readiness.
+        Ready(c_int, Readiness),
+        /// A notification that makes no requested event ready, after the delay.
+        Unrequested(Duration),
+        /// A signal interrupts the wait.
+        Signal,
+    }
+
     #[derive(Default)]
     struct TestContext {
         readiness: RefCell<BTreeMap<c_int, Readiness>>,
         now: Cell<Duration>,
-        sleeps: Cell<u32>,
-        should_interrupt_sleep: bool,
-        /// After this many sleeps, `fd` gets the readiness.
-        becomes_ready: Option<(u32, c_int, Readiness)>,
+        wakes: RefCell<VecDeque<Wake>>,
+        /// The deadline of each wait, in order.
+        waits: RefCell<Vec<Option<Duration>>>,
     }
 
     impl TestContext {
@@ -94,6 +104,15 @@ mod tests {
             let cx = Self::default();
             cx.readiness.borrow_mut().extend(fds.iter().copied());
             cx
+        }
+
+        fn then(self, wakes: &[Wake]) -> Self {
+            self.wakes.borrow_mut().extend(wakes.iter().copied());
+            self
+        }
+
+        fn waits(&self) -> Vec<Option<Duration>> {
+            self.waits.borrow().clone()
         }
     }
 
@@ -107,19 +126,24 @@ mod tests {
         fn monotonic_now(&self) -> Duration {
             self.now.get()
         }
-    }
 
-    impl SleepAccess for TestContext {
-        fn sleep_one_poll(&self) -> Result<(), Errno> {
-            if self.should_interrupt_sleep {
-                return Err(EINTR);
-            }
-            self.now.set(self.now.get() + Duration::from_millis(1));
-            self.sleeps.set(self.sleeps.get() + 1);
-            if let Some((after, fd, readiness)) = self.becomes_ready
-                && self.sleeps.get() == after
-            {
-                self.readiness.borrow_mut().insert(fd, readiness);
+        fn wait_for_readiness(
+            &self,
+            _fds: &[PollFd],
+            deadline: Option<Duration>,
+        ) -> Result<(), Errno> {
+            self.waits.borrow_mut().push(deadline);
+            match self.wakes.borrow_mut().pop_front() {
+                Some(Wake::Ready(fd, readiness)) => {
+                    self.readiness.borrow_mut().insert(fd, readiness);
+                }
+                Some(Wake::Unrequested(after)) => self.now.set(self.now.get() + after),
+                Some(Wake::Signal) => return Err(EINTR),
+                None => {
+                    let deadline =
+                        deadline.expect("a wait with no event and no deadline never ends");
+                    self.now.set(deadline);
+                }
             }
             Ok(())
         }
@@ -141,11 +165,20 @@ mod tests {
         assert_eq!(fds[0].revents, PollEvents::IN);
         assert_eq!(fds[1].revents, PollEvents::empty());
         assert_eq!(fds[2].revents, PollEvents::OUT);
-        assert_eq!(cx.sleeps.get(), 0);
+        assert!(cx.waits().is_empty());
     }
 
     #[test]
-    fn zero_timeout_with_nothing_ready_returns_zero_without_sleeping() {
+    fn duplicate_entries_count_separately() {
+        let cx = TestContext::with(&[(3, READABLE)]);
+        let mut fds = [entry(3, PollEvents::IN), entry(3, PollEvents::IN)];
+        assert_eq!(sys_poll(&cx, &mut fds, None), Ok(2));
+        assert_eq!(fds[0].revents, PollEvents::IN);
+        assert_eq!(fds[1].revents, PollEvents::IN);
+    }
+
+    #[test]
+    fn zero_timeout_with_nothing_ready_returns_zero_without_waiting() {
         let cx = TestContext::with(&[(3, IDLE)]);
         let mut fds = [entry(3, PollEvents::IN)];
         fds[0].revents = PollEvents::IN;
@@ -155,30 +188,62 @@ mod tests {
             PollEvents::empty(),
             "stale revents are cleared"
         );
-        assert_eq!(cx.sleeps.get(), 0);
+        assert!(cx.waits().is_empty());
     }
 
     #[test]
-    fn deadline_is_honoured() {
+    fn one_wait_ends_at_the_deadline() {
         let cx = TestContext::with(&[(3, IDLE)]);
+        cx.now.set(Duration::from_millis(10));
         let mut fds = [entry(3, PollEvents::IN)];
         assert_eq!(
             sys_poll(&cx, &mut fds, Some(Duration::from_millis(5))),
             Ok(0)
         );
-        assert_eq!(cx.sleeps.get(), 5);
+        assert_eq!(cx.waits(), [Some(Duration::from_millis(15))]);
     }
 
     #[test]
-    fn waits_until_an_entry_becomes_ready() {
-        let cx = TestContext {
-            becomes_ready: Some((3, 4, READABLE)),
-            ..TestContext::with(&[(4, IDLE)])
-        };
+    fn an_event_ends_the_wait() {
+        let cx = TestContext::with(&[(4, IDLE)]).then(&[Wake::Ready(4, READABLE)]);
         let mut fds = [entry(4, PollEvents::IN)];
         assert_eq!(sys_poll(&cx, &mut fds, None), Ok(1));
         assert_eq!(fds[0].revents, PollEvents::IN);
-        assert_eq!(cx.sleeps.get(), 3);
+        assert_eq!(
+            cx.waits(),
+            [None],
+            "an infinite poll waits with no deadline"
+        );
+    }
+
+    #[test]
+    fn unrequested_notifications_keep_the_absolute_deadline() {
+        let step = Duration::from_millis(2);
+        let cx = TestContext::with(&[(3, READABLE)]).then(&[
+            Wake::Unrequested(step),
+            Wake::Unrequested(step),
+            Wake::Unrequested(step),
+        ]);
+        let mut fds = [entry(3, PollEvents::empty())];
+        assert_eq!(
+            sys_poll(&cx, &mut fds, Some(Duration::from_millis(5))),
+            Ok(0)
+        );
+        assert_eq!(
+            cx.waits(),
+            [Some(Duration::from_millis(5)); 3],
+            "each wait keeps the deadline of the call"
+        );
+        assert_eq!(cx.now.get(), Duration::from_millis(6));
+    }
+
+    #[test]
+    fn overflowing_timeout_waits_like_an_infinite_one() {
+        let cx = TestContext::with(&[(3, IDLE)]).then(&[Wake::Ready(3, READABLE)]);
+        cx.now.set(Duration::from_secs(1));
+        let mut fds = [entry(3, PollEvents::IN)];
+        assert_eq!(sys_poll(&cx, &mut fds, Some(Duration::MAX)), Ok(1));
+        assert_eq!(cx.waits(), [None]);
     }
 
     #[test]
@@ -207,11 +272,8 @@ mod tests {
     }
 
     #[test]
-    fn eintr_propagates_from_the_sleep() {
-        let cx = TestContext {
-            should_interrupt_sleep: true,
-            ..TestContext::with(&[(3, IDLE)])
-        };
+    fn eintr_propagates_from_the_wait() {
+        let cx = TestContext::with(&[(3, IDLE)]).then(&[Wake::Signal]);
         let mut fds = [entry(3, PollEvents::IN)];
         assert_eq!(sys_poll(&cx, &mut fds, None), Err(EINTR));
     }
@@ -223,19 +285,19 @@ mod tests {
             writable: false,
             hung_up: true,
         };
-        let cx = TestContext::with(&[(3, hung_up)]);
+        let cx = TestContext::with(&[(3, IDLE)]).then(&[Wake::Ready(3, hung_up)]);
         let mut fds = [entry(3, PollEvents::OUT)];
         assert_eq!(sys_poll(&cx, &mut fds, None), Ok(1));
         assert_eq!(fds[0].revents, PollEvents::HUP);
     }
 
     #[test]
-    fn no_entries_sleep_until_the_deadline() {
+    fn no_entries_wait_once_until_the_deadline() {
         let cx = TestContext::default();
         assert_eq!(
             sys_poll(&cx, &mut [], Some(Duration::from_millis(3))),
             Ok(0)
         );
-        assert_eq!(cx.sleeps.get(), 3);
+        assert_eq!(cx.waits(), [Some(Duration::from_millis(3))]);
     }
 }

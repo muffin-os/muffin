@@ -1,14 +1,20 @@
 //! Prints `input-nodes: ok`; the first failure prints
 //! `input-nodes: FAIL <step> <detail>` and exits 1.
 //!
-//! The host test `tests/input_nodes.rs` injects mouse motion on the X axis
-//! and presses the `a` key through QMP until the guest powers off. The guest
-//! finds the mouse and the keyboard by their supported codes, waits for one
-//! event of each, and prints the value of each event. The host checks the
-//! printed values against what it injected.
+//! The guest finds the mouse and the keyboard by their supported codes. For
+//! each phase, it discards old events, prints an `input-nodes: await <phase>`
+//! marker, and waits. The host test `tests/input_nodes.rs` injects the events
+//! of a phase through QMP only after it reads that marker:
+//!
+//! - `mouse`: one motion on the X axis with value 5.
+//! - `keyboard`: one press of the `a` key.
+//! - `batch`: ten motions on the X axis with value 5.
+//!
+//! The first two phases block in one `poll` without a timeout over both
+//! descriptors. Only the descriptor of the injected device must be readable.
 //!
 //! A second open file of the mouse must get each event that the first file
-//! reads. Thus the guest reads a batch through the first file. Then it checks
+//! reads. Thus the guest reads the batch through the first file. Then it checks
 //! that the second file holds the same batch, without a wait.
 
 use std::ffi::c_int;
@@ -22,6 +28,8 @@ const KEY_A: u16 = 30;
 /// This is the number of motion events that the first reader collects
 /// before the test checks the second reader.
 const BATCH_MOTIONS: usize = 10;
+/// The host injects each X motion with this value.
+const MOTION_X: i32 = 5;
 
 fn fail(step: &str, detail: impl std::fmt::Debug) -> ! {
     println!("input-nodes: FAIL {step} {detail:?}");
@@ -72,6 +80,19 @@ fn drain(fd: c_int) -> Vec<InputEvent> {
         .collect()
 }
 
+/// Blocks in one `poll` without a timeout over both descriptors. Then
+/// requires that only `ready` is readable.
+fn await_only(ready: c_int, idle: c_int) {
+    let mut fds = [
+        PollFd::new(ready, PollEvents::IN),
+        PollFd::new(idle, PollEvents::IN),
+    ];
+    let count = unwrap_or_fail("poll", muffin_sys::poll(&mut fds, None));
+    if count != 1 || fds[0].revents != PollEvents::IN || !fds[1].revents.is_empty() {
+        fail("poll-revents", (count, fds));
+    }
+}
+
 fn count_motions(events: &[InputEvent]) -> usize {
     events
         .iter()
@@ -109,24 +130,41 @@ fn main() {
     let (mouse_path, mouse) = mouse.unwrap_or_else(|| fail("mouse", "no device with motion on x"));
     let keyboard = keyboard.unwrap_or_else(|| fail("keyboard", "no device with KEY_A"));
 
-    let motion = wait_for(mouse, InputEventKind::Motion, MotionAxis::X);
-    println!("input-nodes: motion x value={}", motion.value);
-    let press = wait_for(keyboard, InputEventKind::Key, KEY_A);
-    println!("input-nodes: key a value={}", press.value);
+    drain(mouse);
+    drain(keyboard);
 
-    // From now on, each event that the first reader gets must also go to the
-    // second reader. The second file does not get the events that the first
-    // file queued before the second open. Thus the test discards them first.
+    println!("input-nodes: await mouse");
+    await_only(mouse, keyboard);
+    let motion = wait_for(mouse, InputEventKind::Motion, MotionAxis::X);
+    if motion.value != MOTION_X {
+        fail("motion-value", motion);
+    }
+    println!("input-nodes: motion x value={}", motion.value);
+    drain(mouse);
+
+    println!("input-nodes: await keyboard");
+    await_only(keyboard, mouse);
+    let press = wait_for(keyboard, InputEventKind::Key, KEY_A);
+    if press.value != 1 {
+        fail("key-value", press);
+    }
+    println!("input-nodes: key a value={}", press.value);
+    drain(keyboard);
+
+    // The second file does not get the events that the first file queued
+    // before the second open. Thus the test discards them first.
     let second = unwrap_or_fail("second-open", muffin_sys::open(mouse_path, O_RDONLY));
     drain(mouse);
-    let mut first_motions = 0;
-    while first_motions < BATCH_MOTIONS {
-        wait_for(mouse, InputEventKind::Motion, MotionAxis::X);
-        first_motions += 1;
+    println!("input-nodes: await batch");
+    for _ in 0..BATCH_MOTIONS {
+        let motion = wait_for(mouse, InputEventKind::Motion, MotionAxis::X);
+        if motion.value != MOTION_X {
+            fail("batch-value", motion);
+        }
     }
     let second_motions = count_motions(&drain(second));
     println!("input-nodes: second reader motions={second_motions}");
-    if second_motions < BATCH_MOTIONS {
+    if second_motions != BATCH_MOTIONS {
         fail("second-reader", second_motions);
     }
 

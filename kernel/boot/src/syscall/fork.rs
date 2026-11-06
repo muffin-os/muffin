@@ -122,7 +122,18 @@ fn clone_regions(
 /// Removes a child that never ran from the process tree. Its level 4 page
 /// table frame leaks, like the one of every exited process.
 fn discard(pid: ProcessId, errno: Errno) -> Errno {
-    process_tree().write().processes.remove(&pid);
+    let (removed, parent) = {
+        let mut tree = process_tree().write();
+        let removed = tree.processes.remove(&pid);
+        let parent = removed
+            .as_ref()
+            .and_then(|child| tree.processes.get(&child.ppid()).cloned());
+        (removed, parent)
+    };
+    if let Some(parent) = parent {
+        parent.child_changes().wake_all();
+    }
+    drop(removed);
     errno
 }
 

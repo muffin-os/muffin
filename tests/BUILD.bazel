@@ -392,6 +392,17 @@ ext2_image(
     },
 )
 
+# The `/adoption-probe` marker makes the test kernel prove that pid 1 wakes
+# for an adopted zombie before `test-init` starts.
+ext2_image(
+    name = "event_waits_disk",
+    contents = {"adoption-probe": "1\n"},
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/event-waits": "//tests/bins:event_waits",
+    },
+)
+
 ext2_image(
     name = "compositor_disk",
     files = {
@@ -466,6 +477,7 @@ ext2_image(
         "backtrace",
         "compositor",
         "cow_clone",
+        "event_waits",
         "exec_identity",
         "exit_codes",
         "execve",

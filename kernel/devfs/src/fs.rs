@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -9,7 +10,8 @@ use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CloseError, CreateMode, FdLookup, FsError, FsyncError, IoctlError, MkdirError, MmapError,
-    MmapRegion, OpenError, ReadError, Readiness, Stat, StatError, TruncateError, WriteError,
+    MmapRegion, OpenError, ReadError, Readiness, Stat, StatError, TruncateError, WaitSource,
+    WriteError,
 };
 use thiserror::Error;
 
@@ -238,6 +240,10 @@ impl FileSystem for DevFs {
 
     fn readiness(&mut self, handle: FsHandle) -> Result<Readiness, FsError> {
         Ok(self.resolve_handle(handle)?.readiness())
+    }
+
+    fn wait_source(&mut self, handle: FsHandle) -> Result<Option<Arc<dyn WaitSource>>, FsError> {
+        Ok(self.resolve_handle(handle)?.wait_source())
     }
 }
 

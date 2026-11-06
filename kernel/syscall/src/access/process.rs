@@ -1,4 +1,6 @@
-use kernel_abi::{ProcessId, Signal};
+use kernel_abi::{Errno, ProcessId, Signal};
+
+use crate::wait::{Reaped, WaitTarget};
 
 pub trait ProcessesAccess {
     type Process: ProcessAccess;
@@ -42,20 +44,27 @@ impl ExitOutcome {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Child {
-    pub pid: ProcessId,
-    pub process_group_id: ProcessId,
-    pub exit_outcome: Option<ExitOutcome>,
-}
-
-/// Process table lookups for `getppid` and `waitpid`.
+/// Process table access for `getppid` and `waitpid`.
 pub trait WaitAccess {
     /// `None` when no process has `pid`.
     fn parent_id(&self, pid: ProcessId) -> Option<ProcessId>;
-    /// Returns each child of `parent`, zombies included, in ascending pid order.
-    fn children(&self, parent: ProcessId) -> impl Iterator<Item = Child>;
-    /// Removes `pid` from the process table after a parent collected its
-    /// status. This is not the task reap of exec.
-    fn remove_process(&self, pid: ProcessId);
+
+    /// Selects the child of `parent` with the lowest pid that matches `target` and has an exit
+    /// outcome, and removes it from the process table in the same step.
+    ///
+    /// # Errors
+    /// This function returns `ECHILD` when no child matches `target`.
+    fn try_reap_child(
+        &self,
+        parent: ProcessId,
+        caller_group: ProcessId,
+        target: WaitTarget,
+    ) -> Result<Option<Reaped>, Errno>;
+
+    /// Parks the caller until a child change or a signal occurs. `should_wake` runs before the
+    /// signal check.
+    ///
+    /// # Errors
+    /// This function returns `EINTR` when a signal interrupts the wait and `should_wake` stays false.
+    fn wait_for_child_change(&self, should_wake: impl FnMut() -> bool) -> Result<(), Errno>;
 }

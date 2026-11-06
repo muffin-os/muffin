@@ -1,7 +1,7 @@
-use kernel_abi::{ECHILD, ESRCH, Errno, ProcessId, WaitOptions};
+use kernel_abi::{ESRCH, Errno, ProcessId, WaitOptions};
 use tracing::{Level, instrument};
 
-use crate::access::{Child, ExitOutcome, Identity, PermissionAccess, SleepAccess, WaitAccess};
+use crate::access::{ExitOutcome, Identity, PermissionAccess, WaitAccess};
 
 #[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_getppid<Cx: WaitAccess + PermissionAccess>(cx: &Cx) -> Result<usize, Errno> {
@@ -33,7 +33,7 @@ pub struct Reaped {
 /// This function returns `ECHILD` when no child matches `target`. It returns
 /// `EINTR` when a signal interrupts the wait.
 #[instrument(level = Level::TRACE, skip(cx))]
-pub fn sys_waitpid<Cx: WaitAccess + SleepAccess + PermissionAccess>(
+pub fn sys_waitpid<Cx: WaitAccess + PermissionAccess>(
     cx: &Cx,
     target: WaitTarget,
     options: WaitOptions,
@@ -43,50 +43,58 @@ pub fn sys_waitpid<Cx: WaitAccess + SleepAccess + PermissionAccess>(
         process_group_id: caller_group,
         ..
     } = cx.current_identity();
-    let accepts = |child: &Child| match target {
-        WaitTarget::AnyChild => true,
-        WaitTarget::Child(pid) => child.pid == pid,
-        WaitTarget::CallerGroup => child.process_group_id == caller_group,
-        WaitTarget::ProcessGroup(pgid) => child.process_group_id == pgid,
-    };
 
-    // shortcut: busy poll every 1 ms, upgrade to a parked waiter when wait gets hot
-    let reaped = loop {
-        let mut matching = cx.children(caller).filter(accepts).peekable();
-        if matching.peek().is_none() {
-            return Err(ECHILD);
+    let mut result = cx.try_reap_child(caller, caller_group, target);
+    loop {
+        if !matches!(&result, Ok(None)) || options.contains(WaitOptions::NOHANG) {
+            return result;
         }
-        if let Some(reaped) = matching.find_map(|child| {
-            child.exit_outcome.map(|outcome| Reaped {
-                pid: child.pid,
-                outcome,
-            })
-        }) {
-            break reaped;
+        let waited = cx.wait_for_child_change(|| {
+            result = cx.try_reap_child(caller, caller_group, target);
+            !matches!(&result, Ok(None))
+        });
+        // A reap in the predicate consumes the exit record, so it wins over an interruption.
+        if !matches!(&result, Ok(None)) {
+            return result;
         }
-        if options.contains(WaitOptions::NOHANG) {
-            return Ok(None);
-        }
-        cx.sleep_one_poll()?;
-    };
-    cx.remove_process(reaped.pid);
-    Ok(Some(reaped))
+        waited?;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use core::cell::RefCell;
+    use core::cell::{Cell, RefCell};
 
     use kernel_abi::{ECHILD, EINTR, Signal};
 
     use super::*;
     use crate::access::{Capability, Identity};
 
+    #[derive(Clone, Copy)]
+    struct Entry {
+        pid: ProcessId,
+        ppid: ProcessId,
+        pgid: ProcessId,
+        outcome: Option<ExitOutcome>,
+    }
+
+    /// One event that a wait observes.
+    #[derive(Clone, Copy)]
+    enum Event {
+        /// A child of the caller exits.
+        Exit(ProcessId, ExitOutcome),
+        /// A signal interrupts the wait.
+        Signal,
+        /// A child exits and a signal arrives before the waiter runs.
+        ExitAndSignal(ProcessId, ExitOutcome),
+    }
+
     struct TestContext {
         current: ProcessId,
-        processes: RefCell<Vec<(ProcessId, ProcessId, Option<ExitOutcome>)>>,
-        should_interrupt_sleep: bool,
+        processes: RefCell<Vec<Entry>>,
+        events: RefCell<Vec<Event>>,
+        waits: Cell<usize>,
     }
 
     impl TestContext {
@@ -94,16 +102,44 @@ mod tests {
             Self {
                 current,
                 processes: RefCell::new(Vec::new()),
-                should_interrupt_sleep: false,
+                events: RefCell::new(Vec::new()),
+                waits: Cell::new(0),
             }
         }
 
         fn add(&self, pid: ProcessId, ppid: ProcessId, outcome: Option<ExitOutcome>) {
-            self.processes.borrow_mut().push((pid, ppid, outcome));
+            self.add_in_group(pid, ppid, pid, outcome);
+        }
+
+        fn add_in_group(
+            &self,
+            pid: ProcessId,
+            ppid: ProcessId,
+            pgid: ProcessId,
+            outcome: Option<ExitOutcome>,
+        ) {
+            self.processes.borrow_mut().push(Entry {
+                pid,
+                ppid,
+                pgid,
+                outcome,
+            });
+        }
+
+        fn on_wait(&self, event: Event) {
+            self.events.borrow_mut().push(event);
         }
 
         fn has(&self, pid: ProcessId) -> bool {
-            self.processes.borrow().iter().any(|(p, _, _)| *p == pid)
+            self.processes.borrow().iter().any(|e| e.pid == pid)
+        }
+
+        fn exit(&self, pid: ProcessId, outcome: ExitOutcome) {
+            for entry in self.processes.borrow_mut().iter_mut() {
+                if entry.pid == pid {
+                    entry.outcome = Some(outcome);
+                }
+            }
         }
     }
 
@@ -126,40 +162,69 @@ mod tests {
             self.processes
                 .borrow()
                 .iter()
-                .find(|(p, _, _)| *p == pid)
-                .map(|(_, ppid, _)| *ppid)
+                .find(|e| e.pid == pid)
+                .map(|e| e.ppid)
         }
 
-        fn children(&self, parent: ProcessId) -> impl Iterator<Item = Child> {
-            let children: Vec<Child> = self
-                .processes
-                .borrow()
+        fn try_reap_child(
+            &self,
+            parent: ProcessId,
+            caller_group: ProcessId,
+            target: WaitTarget,
+        ) -> Result<Option<Reaped>, Errno> {
+            let mut processes = self.processes.borrow_mut();
+            let mut matching: Vec<Entry> = processes
                 .iter()
-                .filter(|(_, ppid, _)| *ppid == parent)
-                .map(|(pid, _, exit_outcome)| Child {
-                    pid: *pid,
-                    process_group_id: *pid,
-                    exit_outcome: *exit_outcome,
+                .filter(|e| e.ppid == parent)
+                .filter(|e| match target {
+                    WaitTarget::AnyChild => true,
+                    WaitTarget::Child(pid) => e.pid == pid,
+                    WaitTarget::CallerGroup => e.pgid == caller_group,
+                    WaitTarget::ProcessGroup(pgid) => e.pgid == pgid,
                 })
+                .copied()
                 .collect();
-            children.into_iter()
+            if matching.is_empty() {
+                return Err(ECHILD);
+            }
+            matching.sort_by_key(|e| e.pid);
+            let Some(reaped) = matching.iter().find_map(|e| {
+                e.outcome.map(|outcome| Reaped {
+                    pid: e.pid,
+                    outcome,
+                })
+            }) else {
+                return Ok(None);
+            };
+            processes.retain(|e| e.pid != reaped.pid);
+            Ok(Some(reaped))
         }
 
-        fn remove_process(&self, pid: ProcessId) {
-            self.processes.borrow_mut().retain(|(p, _, _)| *p != pid);
-        }
-    }
-
-    impl SleepAccess for TestContext {
-        fn sleep_one_poll(&self) -> Result<(), Errno> {
-            if self.should_interrupt_sleep {
-                return Err(EINTR);
+        fn wait_for_child_change(
+            &self,
+            mut should_wake: impl FnMut() -> bool,
+        ) -> Result<(), Errno> {
+            self.waits.set(self.waits.get() + 1);
+            if should_wake() {
+                return Ok(());
             }
-            // The child exits during the sleep.
-            for entry in self.processes.borrow_mut().iter_mut() {
-                entry.2 = Some(ExitOutcome::Exited(7));
+            let event = self.events.borrow_mut().remove(0);
+            let is_interrupted = match event {
+                Event::Exit(pid, outcome) => {
+                    self.exit(pid, outcome);
+                    false
+                }
+                Event::Signal => true,
+                Event::ExitAndSignal(pid, outcome) => {
+                    self.exit(pid, outcome);
+                    true
+                }
+            };
+            // The child predicate runs before the signal check.
+            if should_wake() {
+                return Ok(());
             }
-            Ok(())
+            if is_interrupted { Err(EINTR) } else { Ok(()) }
         }
     }
 
@@ -193,10 +258,11 @@ mod tests {
             sys_waitpid(&cx, WaitTarget::Child(pid(3)), WaitOptions::empty()),
             Err(ECHILD)
         );
+        assert_eq!(cx.waits.get(), 0);
     }
 
     #[test]
-    fn waitpid_returns_the_outcome_and_reaps() {
+    fn waitpid_returns_the_outcome_and_reaps_without_a_wait() {
         let cx = TestContext::new(pid(1));
         let outcome = ExitOutcome::Signaled(Signal::Kill);
         cx.add(pid(2), pid(1), Some(outcome));
@@ -205,23 +271,42 @@ mod tests {
             reaped(2, outcome)
         );
         assert!(!cx.has(pid(2)), "the child leaves the process table");
+        assert_eq!(cx.waits.get(), 0);
     }
 
     #[test]
-    fn waitpid_polls_until_the_child_exits() {
+    fn waitpid_waits_for_the_child_change() {
         let cx = TestContext::new(pid(1));
         cx.add(pid(2), pid(1), None);
+        cx.on_wait(Event::Exit(pid(2), ExitOutcome::Exited(7)));
         assert_eq!(
             sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty()),
             reaped(2, ExitOutcome::Exited(7))
         );
+        assert!(!cx.has(pid(2)));
+        assert_eq!(cx.waits.get(), 1);
     }
 
     #[test]
-    fn waitpid_returns_eintr_from_the_sleep() {
-        let mut cx = TestContext::new(pid(1));
-        cx.should_interrupt_sleep = true;
+    fn waitpid_ignores_unrelated_child_changes() {
+        let cx = TestContext::new(pid(1));
         cx.add(pid(2), pid(1), None);
+        cx.add(pid(3), pid(1), None);
+        cx.on_wait(Event::Exit(pid(3), ExitOutcome::Exited(3)));
+        cx.on_wait(Event::Exit(pid(2), ExitOutcome::Exited(2)));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty()),
+            reaped(2, ExitOutcome::Exited(2))
+        );
+        assert!(cx.has(pid(3)), "the other exit record stays");
+        assert_eq!(cx.waits.get(), 2);
+    }
+
+    #[test]
+    fn waitpid_returns_eintr_from_the_wait() {
+        let cx = TestContext::new(pid(1));
+        cx.add(pid(2), pid(1), None);
+        cx.on_wait(Event::Signal);
         assert_eq!(
             sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty()),
             Err(EINTR)
@@ -230,8 +315,21 @@ mod tests {
     }
 
     #[test]
-    fn waitpid_any_reaps_an_exited_child_and_keeps_the_rest() {
+    fn waitpid_completed_reap_wins_over_interruption() {
         let cx = TestContext::new(pid(1));
+        cx.add(pid(2), pid(1), None);
+        cx.on_wait(Event::ExitAndSignal(pid(2), ExitOutcome::Exited(4)));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::empty()),
+            reaped(2, ExitOutcome::Exited(4))
+        );
+        assert!(!cx.has(pid(2)));
+    }
+
+    #[test]
+    fn waitpid_any_reaps_the_lowest_exited_child_and_keeps_the_rest() {
+        let cx = TestContext::new(pid(1));
+        cx.add(pid(4), pid(1), Some(ExitOutcome::Exited(4)));
         cx.add(pid(2), pid(1), None);
         cx.add(pid(3), pid(1), Some(ExitOutcome::Exited(3)));
         assert_eq!(
@@ -240,17 +338,7 @@ mod tests {
         );
         assert!(cx.has(pid(2)));
         assert!(!cx.has(pid(3)));
-    }
-
-    #[test]
-    fn waitpid_any_polls_until_a_child_exits() {
-        let cx = TestContext::new(pid(1));
-        cx.add(pid(2), pid(1), None);
-        cx.add(pid(3), pid(1), None);
-        assert_eq!(
-            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::empty()),
-            reaped(2, ExitOutcome::Exited(7))
-        );
+        assert!(cx.has(pid(4)));
     }
 
     #[test]
@@ -264,19 +352,35 @@ mod tests {
     }
 
     #[test]
+    fn waitpid_reports_echild_after_a_competing_reap() {
+        let cx = TestContext::new(pid(1));
+        cx.add(pid(2), pid(1), Some(ExitOutcome::Exited(0)));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty()),
+            reaped(2, ExitOutcome::Exited(0))
+        );
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty()),
+            Err(ECHILD)
+        );
+    }
+
+    #[test]
     fn waitpid_group_forms_match_the_child_group() {
         let cx = TestContext::new(pid(1));
-        cx.add(pid(2), pid(1), Some(ExitOutcome::Exited(1)));
-        assert_eq!(
-            sys_waitpid(&cx, WaitTarget::ProcessGroup(pid(2)), WaitOptions::empty()),
-            reaped(2, ExitOutcome::Exited(1))
-        );
-
-        let cx = TestContext::new(pid(1));
-        cx.add(pid(2), pid(1), Some(ExitOutcome::Exited(1)));
+        cx.add_in_group(pid(2), pid(1), pid(5), Some(ExitOutcome::Exited(1)));
+        cx.add_in_group(pid(3), pid(1), pid(1), Some(ExitOutcome::Exited(2)));
         assert_eq!(
             sys_waitpid(&cx, WaitTarget::ProcessGroup(pid(9)), WaitOptions::empty()),
             Err(ECHILD)
+        );
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::ProcessGroup(pid(5)), WaitOptions::empty()),
+            reaped(2, ExitOutcome::Exited(1))
+        );
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::CallerGroup, WaitOptions::empty()),
+            reaped(3, ExitOutcome::Exited(2))
         );
         assert_eq!(
             sys_waitpid(&cx, WaitTarget::CallerGroup, WaitOptions::empty()),
@@ -285,9 +389,35 @@ mod tests {
     }
 
     #[test]
-    fn waitpid_nohang_returns_none_while_the_child_runs() {
+    fn waitpid_group_form_waits_for_a_group_member() {
+        let cx = TestContext::new(pid(1));
+        cx.add_in_group(pid(2), pid(1), pid(5), None);
+        cx.on_wait(Event::Exit(pid(2), ExitOutcome::Exited(6)));
+        assert_eq!(
+            sys_waitpid(&cx, WaitTarget::ProcessGroup(pid(5)), WaitOptions::empty()),
+            reaped(2, ExitOutcome::Exited(6))
+        );
+    }
+
+    #[test]
+    fn waitpid_nohang_returns_none_without_a_wait() {
         let cx = TestContext::new(pid(1));
         cx.add(pid(2), pid(1), None);
+        for target in [
+            WaitTarget::AnyChild,
+            WaitTarget::Child(pid(2)),
+            WaitTarget::CallerGroup,
+            WaitTarget::ProcessGroup(pid(2)),
+        ] {
+            let cx = TestContext::new(pid(1));
+            cx.add_in_group(pid(2), pid(1), pid(1), None);
+            let target = match target {
+                WaitTarget::ProcessGroup(_) => WaitTarget::ProcessGroup(pid(1)),
+                other => other,
+            };
+            assert_eq!(sys_waitpid(&cx, target, WaitOptions::NOHANG), Ok(None));
+            assert_eq!(cx.waits.get(), 0);
+        }
         assert_eq!(
             sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::NOHANG),
             Ok(None)
@@ -296,11 +426,7 @@ mod tests {
             cx.has(pid(2)),
             "the running child stays in the process table"
         );
-        // The test sleep ends every child. A second `None` confirms that the call does not sleep.
-        assert_eq!(
-            sys_waitpid(&cx, WaitTarget::AnyChild, WaitOptions::NOHANG),
-            Ok(None)
-        );
+        assert_eq!(cx.waits.get(), 0);
     }
 
     #[test]

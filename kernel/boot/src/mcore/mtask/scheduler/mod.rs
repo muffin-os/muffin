@@ -20,6 +20,7 @@ use crate::mcore::mtask::wait::TaskParkTicket;
 
 pub mod cleanup;
 pub mod global;
+pub(in crate::mcore) mod idle;
 mod switch;
 
 /// Where an outgoing task goes once it is off the CPU.
@@ -80,6 +81,9 @@ impl Scheduler {
     /// Switches to the next runnable task, or returns at once when there is
     /// none and the current task can keep running.
     ///
+    /// Returns `false` when no switch occurs. Returns `true` when the caller
+    /// resumes after a switch.
+    ///
     /// # Safety
     /// Interrupts must be disabled, `self` must be the scheduler of the CPU
     /// this code runs on, and [`Scheduler::set_idle_task`] must have been
@@ -87,7 +91,7 @@ impl Scheduler {
     ///
     /// # Panics
     /// Panics if interrupts are enabled.
-    pub unsafe fn reschedule(&mut self) {
+    pub unsafe fn reschedule(&mut self) -> bool {
         assert!(!interrupts::are_enabled());
 
         debug_assert!(
@@ -103,8 +107,12 @@ impl Scheduler {
 
         let Some(next_task) = self.next_task(must_switch) else {
             assert!(!must_switch, "parking task found no switch target");
-            return;
+            return false;
         };
+        if self.idle_tid == Some(self.current_task.id()) {
+            // Safety: interrupts are off, so the context is this CPU's.
+            idle::mark_active(unsafe { ExecutionContext::load() }.cpu_id());
+        }
         let level4_frame = next_task.process().address_space().level4_frame();
 
         let mut old_task = self.swap_current_task(next_task);
@@ -171,6 +179,7 @@ impl Scheduler {
                 finish.as_mut_ptr(),
             );
         }
+        true
     }
 
     fn route(&mut self, task: Pin<Box<Task>>, disposal: Disposal) {

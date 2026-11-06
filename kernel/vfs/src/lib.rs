@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-pub use readiness::Readiness;
+pub use readiness::{Readiness, WaitKey, WaitRegistration, WaitSource};
 pub use vfs::*;
 
 pub mod fs;

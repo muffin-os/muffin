@@ -5,7 +5,7 @@ use core::sync::atomic::AtomicU64;
 use kernel_syscall::access::AccessMode;
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
-use kernel_vfs::{FsError, Readiness, Vfs};
+use kernel_vfs::{FsError, Readiness, Vfs, WaitSource};
 use spin::RwLock;
 use tracing::{Level, instrument};
 
@@ -78,6 +78,19 @@ impl OpenFileDescription {
         match self {
             Self::File(file) => file.readiness(),
             Self::Socket(socket) => Ok(socket.readiness()),
+        }
+    }
+
+    /// Returns the source that notifies a readiness change of the file or the
+    /// socket. `None` means that the file has no asynchronous readiness source.
+    ///
+    /// # Errors
+    /// Returns the error of [`VfsNode::wait_source`] when the description is
+    /// a file.
+    pub fn wait_source(&self) -> Result<Option<Arc<dyn WaitSource>>, FsError> {
+        match self {
+            Self::File(file) => file.wait_source(),
+            Self::Socket(socket) => Ok(Some(socket.clone())),
         }
     }
 }

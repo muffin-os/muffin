@@ -12,6 +12,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::task::Wake;
 use core::cell::UnsafeCell;
 use core::fmt::{Debug, Formatter};
 use core::mem::MaybeUninit;
@@ -331,61 +332,52 @@ impl<T> Debug for UnparkTicket<'_, T> {
     }
 }
 
-impl<T: Send> UnparkTicket<'static, T> {
-    /// Wraps the ticket in a cloneable one-shot [`Waker`].
+impl<T: Send + 'static> UnparkTicket<'static, T> {
+    /// Wraps the ticket in a cloneable one-shot [`core::task::Waker`].
+    /// Exactly one clone gets to unpark the slot, so several wake sources
+    /// can share one ticket without coordination. That clone passes the
+    /// parked value to `on_unpark`. A wake before the park, or a wake after
+    /// another clone, does not call `on_unpark`. In the former case the
+    /// parker's `park` fails with [`ParkError::Unparked`] and it keeps
+    /// ownership of the value.
     ///
     /// Allocates, so this is task-context only.
     #[must_use]
-    pub fn into_waker(self) -> Waker<T> {
+    pub fn into_waker(self, on_unpark: fn(T)) -> core::task::Waker {
         // The `'static` lifetime is what makes storing the raw slot pointer
         // sound. The slot lives as long as the lot, and the lot outlives every
         // waker clone.
-        Waker {
-            slot: Arc::new(AtomicPtr::new(from_ref(self.slot).cast_mut())),
-        }
+        core::task::Waker::from(Arc::new(WakeState {
+            slot: AtomicPtr::new(from_ref(self.slot).cast_mut()),
+            on_unpark,
+        }))
     }
 }
 
-/// A cloneable one-shot handle to an [`UnparkTicket`]. Exactly one clone
-/// gets to unpark the slot, so several wake sources can share one ticket
-/// without coordination.
-pub struct Waker<T: 'static> {
-    slot: Arc<AtomicPtr<Slot<T>>>,
+struct WakeState<T: 'static> {
+    slot: AtomicPtr<Slot<T>>,
+    on_unpark: fn(T),
 }
 
-impl<T: Send> Waker<T> {
-    /// Retrieves the parked value if this is the first clone to fire and the
-    /// parker already parked it.
-    ///
-    /// `None` covers both "another clone already fired" and "the parker has
-    /// not parked yet". In the latter case the parker's `park` fails
-    /// with [`ParkError::Unparked`] and it keeps ownership of the value.
-    pub fn wake(&self) -> Option<T> {
+impl<T: Send + 'static> Wake for WakeState<T> {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
         let ptr = self.slot.swap(null_mut(), AcqRel);
         if ptr.is_null() {
-            return None;
+            return;
         }
         // Safety: the pointer came from a `UnparkTicket<'static, T>` and segments
         // are never freed while the lot lives, so the slot is still valid. The
         // swap made this clone the sole owner of the unpark right.
-        UnparkTicket {
+        let ticket = UnparkTicket {
             slot: unsafe { &*ptr },
+        };
+        if let Some(value) = ticket.unpark() {
+            (self.on_unpark)(value);
         }
-        .unpark()
-    }
-}
-
-impl<T> Clone for Waker<T> {
-    fn clone(&self) -> Self {
-        Self {
-            slot: Arc::clone(&self.slot),
-        }
-    }
-}
-
-impl<T> Debug for Waker<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Waker").finish_non_exhaustive()
     }
 }
 
@@ -561,7 +553,7 @@ mod tests {
     use core::cell::Cell;
     use core::sync::atomic::AtomicUsize;
     use std::alloc::{GlobalAlloc, Layout, System};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, Mutex};
     use std::thread::{self, LocalKey};
     use std::thread_local;
     use std::vec::Vec;
@@ -971,75 +963,131 @@ mod tests {
         );
     }
 
-    #[test]
-    fn waker_fires_once() {
-        static LOT: ParkingLot<u32> = ParkingLot::new();
-        let (park_ticket, unpark_ticket) = LOT.reserve().split();
-        assert!(park_ticket.park(11).is_ok(), "parking failed");
+    /// A parked value that records its own delivery, so a test observes the
+    /// `on_unpark` callback without shared global state.
+    struct Delivery {
+        value: usize,
+        sink: Arc<Mutex<Vec<usize>>>,
+    }
 
-        let waker = unpark_ticket.into_waker();
-        let clone = waker.clone();
-        assert_eq!(waker.wake(), Some(11), "first wake lost the value");
-        assert_eq!(clone.wake(), None, "second clone fired again");
-        assert_eq!(waker.wake(), None, "the original fired again");
+    fn deliver(delivery: Delivery) {
+        delivery
+            .sink
+            .lock()
+            .expect("delivery sink poisoned")
+            .push(delivery.value);
+    }
+
+    fn delivered(sink: &Mutex<Vec<usize>>) -> Vec<usize> {
+        sink.lock().expect("delivery sink poisoned").clone()
     }
 
     #[test]
-    fn wake_before_park() {
-        static LOT: ParkingLot<u32> = ParkingLot::new();
+    fn waker_fires_once_through_wake_by_ref() {
+        static LOT: ParkingLot<Delivery> = ParkingLot::new();
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let (park_ticket, unpark_ticket) = LOT.reserve().split();
+        let parked = Delivery {
+            value: 11,
+            sink: Arc::clone(&sink),
+        };
+        assert!(park_ticket.park(parked).is_ok(), "parking failed");
+
+        let waker = unpark_ticket.into_waker(deliver);
+        let clone = waker.clone();
+        waker.wake_by_ref();
+        assert_eq!(delivered(&sink), [11], "first wake lost the value");
+        clone.wake_by_ref();
+        waker.wake_by_ref();
+        assert_eq!(delivered(&sink), [11], "a later clone fired again");
+    }
+
+    #[test]
+    fn waker_fires_once_through_wake() {
+        static LOT: ParkingLot<Delivery> = ParkingLot::new();
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let (park_ticket, unpark_ticket) = LOT.reserve().split();
+        let parked = Delivery {
+            value: 13,
+            sink: Arc::clone(&sink),
+        };
+        assert!(park_ticket.park(parked).is_ok(), "parking failed");
+
+        let waker = unpark_ticket.into_waker(deliver);
+        let clone = waker.clone();
+        waker.wake();
+        assert_eq!(delivered(&sink), [13], "first wake lost the value");
+        clone.wake();
+        assert_eq!(delivered(&sink), [13], "a later clone fired again");
+    }
+
+    #[test]
+    fn wake_before_park_skips_the_callback() {
+        static LOT: ParkingLot<Delivery> = ParkingLot::new();
+        let sink = Arc::new(Mutex::new(Vec::new()));
         let (park_ticket, unpark_ticket) = LOT.reserve().split();
 
-        let waker = unpark_ticket.into_waker();
-        assert_eq!(waker.wake(), None, "wake saw a value that was never parked");
+        let waker = unpark_ticket.into_waker(deliver);
+        waker.wake_by_ref();
+        assert!(
+            delivered(&sink).is_empty(),
+            "the callback ran for a value that was never parked"
+        );
 
+        let parked = Delivery {
+            value: 23,
+            sink: Arc::clone(&sink),
+        };
         let error = park_ticket
-            .park(23)
+            .park(parked)
             .expect_err("parking succeeded after the waker fired");
         assert_eq!(
-            error.into_inner(),
+            error.into_inner().value,
             23,
             "the error did not carry the original value back"
+        );
+        waker.wake_by_ref();
+        assert!(
+            delivered(&sink).is_empty(),
+            "the spent waker fired after the failed park"
         );
     }
 
     #[test]
-    fn racing_waker_clones_produce_one_value() {
-        static LOT: ParkingLot<usize> = ParkingLot::new();
+    fn racing_waker_clones_produce_one_callback() {
+        static LOT: ParkingLot<Delivery> = ParkingLot::new();
         for round in 0..64 {
+            let sink = Arc::new(Mutex::new(Vec::new()));
             let (park_ticket, unpark_ticket) = LOT.reserve().split();
+            let parked = Delivery {
+                value: round,
+                sink: Arc::clone(&sink),
+            };
             assert!(
-                park_ticket.park(round).is_ok(),
+                park_ticket.park(parked).is_ok(),
                 "round {round} parking failed"
             );
 
-            let waker = unpark_ticket.into_waker();
+            let waker = unpark_ticket.into_waker(deliver);
             let barrier = Barrier::new(2);
-            let (first, second) = thread::scope(|scope| {
+            thread::scope(|scope| {
                 let barrier = &barrier;
-                let first = {
-                    let waker = waker.clone();
-                    scope.spawn(move || {
-                        barrier.wait();
-                        waker.wake()
-                    })
-                };
-                let second = scope.spawn(move || {
+                let clone = waker.clone();
+                scope.spawn(move || {
                     barrier.wait();
-                    waker.wake()
+                    clone.wake();
                 });
-                (
-                    first.join().expect("first waker thread panicked"),
-                    second.join().expect("second waker thread panicked"),
-                )
+                scope.spawn(|| {
+                    barrier.wait();
+                    waker.wake_by_ref();
+                });
             });
 
-            match (first, second) {
-                (Some(got), None) | (None, Some(got)) => {
-                    assert_eq!(got, round, "round {round} woke the wrong value");
-                }
-                (Some(_), Some(_)) => panic!("round {round} duplicated the value"),
-                (None, None) => panic!("round {round} lost the value"),
-            }
+            assert_eq!(
+                delivered(&sink),
+                [round],
+                "round {round} did not produce exactly one callback"
+            );
         }
     }
 

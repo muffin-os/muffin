@@ -11,6 +11,7 @@ use core::fmt::{Debug, Formatter};
 use core::ops::{Deref, DerefMut};
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::task::Waker;
 
 use conquer_once::spin::OnceCell;
 use kernel_abi::{FdNum, ProcessId, Signal};
@@ -21,7 +22,7 @@ use kernel_syscall::signal::{SignalMask, SignalState, thread_to_wake};
 use kernel_syscall::thread::{AddrWaitQueues, ThreadTable};
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
-use kernel_vfs::{CreateMode, OpenError};
+use kernel_vfs::{CreateMode, OpenError, WaitRegistration, WaitSource};
 use kernel_virtual_memory::VirtualMemoryManager;
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
@@ -44,8 +45,7 @@ use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::{FxArea, HigherHalfStack, StackAllocationError, Task, TaskId};
 use crate::mcore::mtask::wait::{
-    TaskUnparkTicket, TaskWaker, WaitQueue, block_current, reserve, sleep_until,
-    unpark_and_enqueue, wake,
+    TaskUnparkTicket, WaitQueue, block_current, reserve, sleep_until, unpark_and_enqueue,
 };
 use crate::mem::address_space::AddressSpace;
 use crate::mem::memapi::{
@@ -61,7 +61,7 @@ pub mod mem;
 pub mod telemetry;
 pub mod tls;
 
-pub(crate) mod tree;
+pub mod tree;
 
 static ROOT_PROCESS: OnceCell<Arc<Process>> = OnceCell::uninit();
 
@@ -135,7 +135,7 @@ struct TaskAccounting {
 
 struct ReapState {
     keeper: TaskId,
-    waiter: Option<TaskWaker>,
+    waiter: Option<Waker>,
 }
 
 /// This type describes a task in an interruptible wait. A task changes its
@@ -143,7 +143,7 @@ struct ReapState {
 struct InterruptibleWaiter {
     tid: TaskId,
     mask: SignalMask,
-    waker: TaskWaker,
+    waker: Waker,
 }
 
 /// Proof that the calling task is the process's only live task. Constructed
@@ -193,10 +193,16 @@ pub struct Process {
     terminating: AtomicBool,
 
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
+    /// Wakes after each install or close of a descriptor.
+    fd_changes: WaitQueue,
+    /// Counts installs and closes. It changes only under the descriptor
+    /// table write guard.
+    fd_generation: AtomicU64,
 
     tls_template: RwLock<Option<TlsTemplate>>,
     threads: Mutex<ThreadTable>,
     thread_exits: WaitQueue,
+    child_changes: WaitQueue,
     addr_waiters: Mutex<AddrWaitQueues<WaitQueue>>,
 
     exit_outcome: OnceCell<ExitOutcome>,
@@ -238,9 +244,12 @@ impl Process {
                 reap_active: AtomicBool::new(false),
                 terminating: AtomicBool::new(false),
                 file_descriptors: RwLock::new(BTreeMap::new()),
+                fd_changes: WaitQueue::new(),
+                fd_generation: AtomicU64::new(0),
                 tls_template: RwLock::new(None),
                 threads: Mutex::new(ThreadTable::default()),
                 thread_exits: WaitQueue::new(),
+                child_changes: WaitQueue::new(),
                 addr_waiters: Mutex::new(AddrWaitQueues::new()),
                 exit_outcome: OnceCell::uninit(),
                 user_memory: RwLock::new(()),
@@ -285,9 +294,12 @@ impl Process {
             reap_active: AtomicBool::new(false),
             terminating: AtomicBool::new(false),
             file_descriptors: RwLock::new(BTreeMap::new()),
+            fd_changes: WaitQueue::new(),
+            fd_generation: AtomicU64::new(0),
             tls_template: RwLock::new(None),
             threads: Mutex::new(ThreadTable::default()),
             thread_exits: WaitQueue::new(),
+            child_changes: WaitQueue::new(),
             addr_waiters: Mutex::new(AddrWaitQueues::new()),
             exit_outcome: OnceCell::uninit(),
             user_memory: RwLock::new(()),
@@ -357,6 +369,25 @@ impl Process {
         &self.file_descriptors
     }
 
+    pub fn fd_changes(&self) -> &WaitQueue {
+        &self.fd_changes
+    }
+
+    pub fn fd_generation(&self) -> u64 {
+        self.fd_generation.load(Ordering::Acquire)
+    }
+
+    /// Records one install or close. The `table` borrow proves that the
+    /// caller holds the descriptor table write guard.
+    pub fn advance_fd_generation(&self, _table: &mut BTreeMap<FdNum, FileDescriptor>) {
+        let next = self
+            .fd_generation
+            .load(Ordering::Relaxed)
+            .checked_add(1)
+            .expect("descriptor generations exhausted");
+        self.fd_generation.store(next, Ordering::Release);
+    }
+
     pub fn address_space(&self) -> &AddressSpace {
         self.address_space
             .as_ref()
@@ -408,6 +439,11 @@ impl Process {
         &self.thread_exits
     }
 
+    /// This function returns the queue that each change of a child wakes. The waiters then check again.
+    pub fn child_changes(&self) -> &WaitQueue {
+        &self.child_changes
+    }
+
     pub fn addr_waiters(&self) -> &Mutex<AddrWaitQueues<WaitQueue>> {
         &self.addr_waiters
     }
@@ -428,7 +464,7 @@ impl Process {
         self.signals.try_write()
     }
 
-    fn register_interruptible_waker(&self, tid: TaskId, mask: SignalMask, waker: TaskWaker) {
+    fn register_interruptible_waker(&self, tid: TaskId, mask: SignalMask, waker: Waker) {
         self.interruptible_wakers
             .lock()
             .push(InterruptibleWaiter { tid, mask, waker });
@@ -441,7 +477,7 @@ impl Process {
     pub fn wake_interruptible(&self) {
         let waiters = core::mem::take(&mut *self.interruptible_wakers.lock());
         for waiter in waiters {
-            wake(&waiter.waker);
+            waiter.waker.wake();
         }
     }
 
@@ -460,18 +496,18 @@ impl Process {
             .map(|i| waiters.swap_remove(i))
         };
         if let Some(waiter) = waiter {
-            wake(&waiter.waker);
+            waiter.waker.wake();
         }
     }
 
     /// This function parks the current task until `should_wake` returns true,
     /// or until process termination or a reap targets the task.
     /// The predicate follows the contract of [`kernel_syscall::access::ThreadAccess::park`].
-    /// A `deadline` or a `queue` only arms a wakeup. `should_wake` decides.
+    /// A `deadline` or a source in `sources` only arms a wakeup. `should_wake` decides.
     pub fn park_current_task(
         &self,
         deadline: Option<Instant>,
-        queue: Option<&WaitQueue>,
+        sources: &[&dyn WaitSource],
         mut should_wake: impl FnMut() -> bool,
     ) -> ParkOutcome {
         let task = Task::current();
@@ -487,6 +523,7 @@ impl Process {
         );
         let tid = task.id();
         let mask = task.signal_mask();
+        let mut many_registrations: Vec<WaitRegistration<'_>> = Vec::new();
         loop {
             if self.reap_requested_for(tid) {
                 return ParkOutcome::Interrupted;
@@ -495,23 +532,32 @@ impl Process {
                 return ParkOutcome::Ready;
             }
             let (park_ticket, unpark_ticket) = reserve().split();
-            let waker = unpark_ticket.into_waker();
-            if let Some(deadline) = deadline {
-                sleep_until(deadline, waker.clone());
-            }
+            let waker = unpark_ticket.into_waker(GlobalTaskQueue::enqueue);
+            let single_registration = match sources {
+                [source] => Some(WaitRegistration::new(*source, waker.clone())),
+                _ => {
+                    many_registrations.extend(
+                        sources
+                            .iter()
+                            .map(|source| WaitRegistration::new(*source, waker.clone())),
+                    );
+                    None
+                }
+            };
             self.register_interruptible_waker(tid, mask, waker.clone());
-            if let Some(queue) = queue {
-                queue.register(waker.clone());
-            }
+            let sleep = deadline.map(|deadline| sleep_until(deadline, waker.clone()));
             // The condition can become true before the wakers are armed. The
             // block on the woken ticket consumes the ticket, so the
             // registrations above stay balanced.
             let ready = should_wake();
             if ready || self.reap_requested_for(tid) {
-                wake(&waker);
+                waker.wake_by_ref();
             }
             block_current(park_ticket);
+            drop(single_registration);
+            many_registrations.clear();
             self.clear_interruptible_waker(tid);
+            drop(sleep);
             if ready {
                 return ParkOutcome::Ready;
             }
@@ -530,7 +576,7 @@ impl Process {
                 && let Some(reap) = &mut acc.reap
                 && let Some(waker) = reap.waiter.take()
             {
-                wake(&waker);
+                waker.wake_by_ref();
             }
             acc.live
         };
@@ -603,11 +649,11 @@ impl Process {
                 return SoleLiveTask { process: self };
             }
             let (park_ticket, unpark_ticket) = reserve().split();
-            let waker = unpark_ticket.into_waker();
+            let waker = unpark_ticket.into_waker(GlobalTaskQueue::enqueue);
             {
                 let mut acc = self.task_accounting.lock();
                 if acc.live == 1 {
-                    wake(&waker);
+                    waker.wake_by_ref();
                 } else if let Some(reap) = &mut acc.reap {
                     reap.waiter = Some(waker.clone());
                 }
@@ -633,10 +679,28 @@ impl Process {
         if self.pid == ProcessId::REAPER && !crate::power::is_shutdown_in_progress() {
             panic!("init (pid {}) exited: {outcome:?}", self.pid);
         }
-        for child in process_tree().read().all().filter(|p| p.ppid() == self.pid) {
-            *child.ppid.write() = ProcessId::REAPER;
+        let (parent, reaper) = {
+            let tree = process_tree().write();
+            let mut has_transferred = false;
+            for child in tree.all().filter(|p| p.ppid() == self.pid) {
+                *child.ppid.write() = ProcessId::REAPER;
+                has_transferred = true;
+            }
+            let _ = self.exit_outcome.try_init_once(|| outcome);
+            let parent = tree.processes.get(&self.ppid()).cloned();
+            let reaper = has_transferred
+                .then(|| tree.processes.get(&ProcessId::REAPER).cloned())
+                .flatten();
+            (parent, reaper)
+        };
+        if let Some(parent) = parent {
+            parent.child_changes.wake_all();
         }
-        let _ = self.exit_outcome.try_init_once(|| outcome);
+        // Waiters of this process must see that it has no children now.
+        self.child_changes.wake_all();
+        if let Some(reaper) = reaper {
+            reaper.child_changes.wake_all();
+        }
     }
 
     pub fn exit_outcome(&self) -> Option<ExitOutcome> {

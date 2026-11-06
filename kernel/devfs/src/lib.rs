@@ -17,7 +17,8 @@ use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CloseError, CreateMode, FdLookup, FsError, FsyncError, IoctlError, MkdirError, MmapError,
-    MmapRegion, OpenError, ReadError, Readiness, Stat, StatError, TruncateError, WriteError,
+    MmapRegion, OpenError, ReadError, Readiness, Stat, StatError, TruncateError, WaitSource,
+    WriteError,
 };
 
 #[derive(Clone)]
@@ -101,6 +102,10 @@ impl FileSystem for ArcLockedDevFs {
 
     fn readiness(&mut self, handle: FsHandle) -> Result<Readiness, FsError> {
         self.inner.write().readiness(handle)
+    }
+
+    fn wait_source(&mut self, handle: FsHandle) -> Result<Option<Arc<dyn WaitSource>>, FsError> {
+        self.inner.write().wait_source(handle)
     }
 }
 

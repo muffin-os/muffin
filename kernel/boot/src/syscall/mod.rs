@@ -41,7 +41,7 @@ use crate::hpet::hpet;
 use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use crate::mcore::mtask::task::Task;
 
-pub(crate) mod access;
+pub mod access;
 mod exec;
 mod fork;
 mod thread;
@@ -588,7 +588,7 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
     let deadline = hpet().read().now().saturating_add(duration);
     let task = Task::current();
 
-    let outcome = task.process().park_current_task(Some(deadline), None, || {
+    let outcome = task.process().park_current_task(Some(deadline), &[], || {
         hpet().read().now() >= deadline || task.has_interrupting_signal()
     });
 

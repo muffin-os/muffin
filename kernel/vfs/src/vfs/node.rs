@@ -9,7 +9,7 @@ use spin::RwLock;
 
 use crate::fs::{FileSystem, FsHandle};
 use crate::path::AbsoluteOwnedPath;
-use crate::readiness::Readiness;
+use crate::readiness::{Readiness, WaitSource};
 use crate::vfs::stat::Stat;
 use crate::{
     FdLookup, FsError, FsyncError, IoctlError, MmapError, MmapRegion, ReadDirError, ReadError,
@@ -180,6 +180,19 @@ impl VfsNode {
 
         let mut guard = fs.write();
         guard.readiness(self.fs_handle)
+    }
+
+    /// Returns the readiness source of this file from
+    /// [`FileSystem::wait_source`].
+    ///
+    /// # Errors
+    /// Returns [`FsError::FileSystemNotOpen`] when the file system is not
+    /// mounted. Otherwise returns each error of [`FileSystem::wait_source`].
+    pub fn wait_source(&self) -> Result<Option<Arc<dyn WaitSource>>, FsError> {
+        let fs = self.fs.upgrade().ok_or(FsError::FileSystemNotOpen)?;
+
+        let mut guard = fs.write();
+        guard.wait_source(self.fs_handle)
     }
 }
 

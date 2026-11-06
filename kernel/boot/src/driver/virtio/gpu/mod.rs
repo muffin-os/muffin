@@ -27,7 +27,7 @@ use self::devfile::{FbDevFile, FbMemory, GpuDevFile, GpuNode};
 use self::device::GpuDevice;
 use crate::UsizeExt;
 use crate::driver::KernelDeviceId;
-use crate::driver::pci::{PCI_DRIVERS, PciDriverDescriptor, PciDriverType};
+use crate::driver::pci::{PCI_DRIVERS, PciDriverDescriptor, PciDriverType, VirtIoCam};
 use crate::driver::raw::RawDevices;
 use crate::driver::virtio::hal::transport;
 use crate::file::devfs::devfs;
@@ -45,7 +45,11 @@ fn virtio_probe(addr: PciAddress, cam: &dyn ConfigurationAccess) -> bool {
 }
 
 fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<(), Box<dyn Error>> {
-    let transport = transport(addr, cam);
+    let cam = VirtIoCam::new(cam);
+    // The driver polls its used ring. An enabled INTx could hold a shared
+    // input line active.
+    cam.set_intx_enabled(addr, false);
+    let transport = transport(addr, &cam);
     let mut gpu = GpuDevice::new(transport)?;
     let scanout = gpu.scanout();
     let (width, height) = (scanout.width, scanout.height);

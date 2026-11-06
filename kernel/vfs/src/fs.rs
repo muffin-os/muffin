@@ -1,10 +1,11 @@
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use kernel_abi::IoctlRequest;
 
 use crate::path::AbsolutePath;
-use crate::readiness::Readiness;
+use crate::readiness::{Readiness, WaitSource};
 use crate::{
     CloseError, CreateMode, FdLookup, FsError, FsyncError, IoctlError, MkdirError, MmapError,
     MmapRegion, OpenError, ReadDirError, ReadError, Stat, StatError, TruncateError, UnlinkError,
@@ -184,5 +185,15 @@ pub trait FileSystem: Send + Sync {
     /// Returns an error when the handle is not valid or is closed.
     fn readiness(&mut self, _handle: FsHandle) -> Result<Readiness, FsError> {
         Ok(Readiness::ALWAYS)
+    }
+
+    /// Returns the source that notifies a change of the [`Readiness`] of the
+    /// file at `handle`. `None` means that the file has no asynchronous
+    /// readiness source. The default impl returns `None`.
+    ///
+    /// # Errors
+    /// Returns an error when the handle is not valid or is closed.
+    fn wait_source(&mut self, _handle: FsHandle) -> Result<Option<Arc<dyn WaitSource>>, FsError> {
+        Ok(None)
     }
 }

@@ -209,8 +209,23 @@ impl KernelTest {
     /// panicked`.
     #[must_use]
     pub fn run(self) -> RunReport {
+        self.run_observing(|_| Ok(()))
+    }
+
+    /// Does the same as [`Self::run`], and also gives each serial line to
+    /// `observe` after the `test-init` contract check. An error from
+    /// `observe` stops the guest and fails the test.
+    ///
+    /// # Panics
+    /// Panics in the same conditions as [`Self::run`], or if `observe`
+    /// rejects a line.
+    #[must_use]
+    pub fn run_observing(self, mut observe: impl FnMut(&str) -> Result<(), String>) -> RunReport {
         let mut tracker = SpawnTracker::default();
-        let transcript = self.run_until_poweroff_observing(|line| tracker.observe(line));
+        let transcript = self.run_until_poweroff_observing(|line| {
+            tracker.observe(line)?;
+            observe(line)
+        });
         assert!(
             tracker.complete(),
             "the guest powered off before test-init reported completion"

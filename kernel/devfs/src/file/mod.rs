@@ -1,7 +1,9 @@
+use alloc::sync::Arc;
+
 use kernel_abi::IoctlRequest;
 use kernel_vfs::{
     FdLookup, FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Readiness, Stat, StatError,
-    WriteError,
+    WaitSource, WriteError,
 };
 
 mod block;
@@ -61,5 +63,12 @@ pub trait DevFile: Send + Sync {
     /// [`Readiness::ALWAYS`].
     fn readiness(&mut self) -> Readiness {
         Readiness::default()
+    }
+
+    /// Returns the source that notifies a change of the [`Readiness`] of the
+    /// device. `None` means that the device has no asynchronous readiness
+    /// source. The default returns `None`.
+    fn wait_source(&mut self) -> Option<Arc<dyn WaitSource>> {
+        None
     }
 }

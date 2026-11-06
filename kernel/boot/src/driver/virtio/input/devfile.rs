@@ -3,22 +3,29 @@
 //! event of the device goes into each queue. Thus two readers of one node
 //! both get all the events.
 //!
-//! The driver has no interrupt path yet. Thus a read or a readiness check
-//! on an open file moves the device events into the queues.
+//! The device interrupt wakes a worker task. The worker moves the device
+//! events into the queues and wakes the readers.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::task::Waker;
 
 use kernel_abi::{
     InputDeviceInfo, InputEvent, InputEventKind, InputSupportedCodes, IoctlRequest, S_IFCHR,
     SyncCode,
 };
 use kernel_devfs::{DevFile, InputQueue};
-use kernel_vfs::{FdLookup, IoctlError, ReadError, Readiness, Stat, StatError, WriteError};
+use kernel_vfs::{
+    FdLookup, IoctlError, ReadError, Readiness, Stat, StatError, WaitKey, WaitSource, WriteError,
+};
 use spin::Mutex;
 use virtio_drivers::device::input::{DevIDs, InputEvent as RawInputEvent};
+use virtio_drivers::transport::InterruptStatus;
 
 use super::InputDevice;
+use crate::mcore::mtask::wait::WaitQueue;
+use crate::sync::IrqMutex;
 
 /// This is the maximum number of events in the queue of one open file. At
 /// 100 events per second, a reader can stop for 40 seconds before it loses a
@@ -27,19 +34,45 @@ const MAX_QUEUED_EVENTS: usize = 4096;
 
 const DEVICE_BATCH_END: u16 = 0;
 
+/// A drain moves at most this many events while it holds the device lock.
+const DRAIN_BATCH: usize = 32;
+
 /// This hub holds one input device and the queues of its open files.
 pub struct InputHub {
-    device: Mutex<InputDevice>,
-    /// A queue goes away when its open file closes. The next drain then removes
-    /// it from this list.
-    readers: Mutex<Vec<Weak<Mutex<InputQueue>>>>,
+    /// The interrupt handler takes this lock too.
+    device: IrqMutex<InputDevice>,
+    /// A reader goes away when its open file closes. The next drain then
+    /// removes it from this list.
+    readers: Mutex<Vec<Weak<InputReader>>>,
+    pub(super) pending: AtomicBool,
+    pub(super) work_ready: WaitQueue,
+}
+
+/// This is the queue of one open file and the tasks that wait for it.
+pub struct InputReader {
+    events: Mutex<InputQueue>,
+    waiters: WaitQueue,
+}
+
+impl WaitSource for InputReader {
+    fn register(&self, waker: Waker) -> WaitKey {
+        self.waiters.register(waker)
+    }
+
+    fn unregister(&self, key: WaitKey) {
+        self.waiters.unregister(key);
+    }
 }
 
 impl InputHub {
+    /// `pending` starts as `true`, so the worker drains the events that come
+    /// before the interrupt is enabled.
     pub fn new(device: InputDevice) -> Self {
         Self {
-            device: Mutex::new(device),
+            device: IrqMutex::new(device),
             readers: Mutex::new(Vec::new()),
+            pending: AtomicBool::new(true),
+            work_ready: WaitQueue::new(),
         }
     }
 
@@ -47,35 +80,84 @@ impl InputHub {
     /// previous drain moved into the other queues. The next drain gives the new
     /// file the events that are still in the device queue.
     pub fn open(self: &Arc<Self>) -> InputDevFile {
-        let queue = Arc::new(Mutex::new(InputQueue::new(MAX_QUEUED_EVENTS)));
-        self.readers.lock().push(Arc::downgrade(&queue));
+        let reader = Arc::new(InputReader {
+            events: Mutex::new(InputQueue::new(MAX_QUEUED_EVENTS)),
+            waiters: WaitQueue::new(),
+        });
+        self.readers.lock().push(Arc::downgrade(&reader));
         InputDevFile {
             hub: self.clone(),
-            queue,
+            reader,
         }
     }
 
-    fn drain(&self) {
-        let mut device = self.device.lock();
-        let mut readers = self.readers.lock();
-        while let Some(raw) = device.pop_pending_event() {
-            let Some(event) = abi_event(raw) else {
-                continue;
-            };
+    /// Acknowledges the device interrupt. This runs in the interrupt handler,
+    /// so it does not take reader locks.
+    pub(super) fn acknowledge(&self) {
+        let status = self.device.lock_without_interrupts().ack_interrupt();
+        if status.intersects(
+            InterruptStatus::QUEUE_INTERRUPT | InterruptStatus::DEVICE_CONFIGURATION_INTERRUPT,
+        ) {
+            self.pending.store(true, Ordering::Release);
+            self.work_ready.wake_all();
+        }
+    }
+
+    pub(super) fn drain(&self) {
+        loop {
+            let mut batch = [InputEvent::default(); DRAIN_BATCH];
+            let mut len = 0;
+            let mut is_empty = false;
+            {
+                let mut device = self.device.lock_without_interrupts();
+                while len < DRAIN_BATCH {
+                    let Some(raw) = device.pop_pending_event() else {
+                        is_empty = true;
+                        break;
+                    };
+                    if let Some(event) = abi_event(raw) {
+                        batch[len] = event;
+                        len += 1;
+                    }
+                }
+            }
+            if len > 0 {
+                self.deliver(&batch[..len]);
+            }
+            if is_empty {
+                return;
+            }
+        }
+    }
+
+    fn deliver(&self, events: &[InputEvent]) {
+        let live = {
+            let mut readers = self.readers.lock();
+            let mut live = Vec::with_capacity(readers.len());
             readers.retain(|reader| {
                 let Some(reader) = reader.upgrade() else {
                     return false;
                 };
-                reader.lock().push(event);
+                live.push(reader);
                 true
             });
+            live
+        };
+        for reader in live {
+            {
+                let mut queue = reader.events.lock();
+                for &event in events {
+                    queue.push(event);
+                }
+            }
+            reader.waiters.wake_all();
         }
     }
 }
 
 pub struct InputDevFile {
     hub: Arc<InputHub>,
-    queue: Arc<Mutex<InputQueue>>,
+    reader: Arc<InputReader>,
 }
 
 fn decode<const N: usize, T>(
@@ -132,8 +214,7 @@ impl DevFile for InputDevFile {
         if buf.len() < InputEvent::SIZE {
             return Err(ReadError::BufferTooSmall);
         }
-        self.hub.drain();
-        let mut queue = self.queue.lock();
+        let mut queue = self.reader.events.lock();
         let mut written = 0;
         for slot in buf.as_chunks_mut::<{ InputEvent::SIZE }>().0 {
             let Some(event) = queue.pop() else {
@@ -154,9 +235,8 @@ impl DevFile for InputDevFile {
 
     /// The file is readable when its queue holds an event.
     fn readiness(&mut self) -> Readiness {
-        self.hub.drain();
         Readiness {
-            readable: !self.queue.lock().is_empty(),
+            readable: !self.reader.events.lock().is_empty(),
             writable: false,
             hung_up: false,
         }
@@ -176,7 +256,7 @@ impl DevFile for InputDevFile {
     ) -> Result<usize, IoctlError> {
         match request {
             IoctlRequest::InputGetInfo => {
-                let mut device = self.hub.device.lock();
+                let mut device = self.hub.device.lock_without_interrupts();
                 let ids = device.ids().map_err(|_| IoctlError::InvalidArgument)?;
                 let name = device.name().map_err(|_| IoctlError::InvalidArgument)?;
                 drop(device);
@@ -189,7 +269,7 @@ impl DevFile for InputDevFile {
                 let supported = self
                     .hub
                     .device
-                    .lock()
+                    .lock_without_interrupts()
                     .ev_bits(event_type)
                     .map_err(|_| IoctlError::InvalidArgument)?;
                 codes.set_bits(&supported);
@@ -204,5 +284,9 @@ impl DevFile for InputDevFile {
             | IoctlRequest::GpuSetScanout
             | IoctlRequest::GpuFlush => Err(IoctlError::NotSupported),
         }
+    }
+
+    fn wait_source(&mut self) -> Option<Arc<dyn WaitSource>> {
+        Some(self.reader.clone())
     }
 }

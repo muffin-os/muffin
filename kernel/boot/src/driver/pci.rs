@@ -78,6 +78,8 @@ pub fn init() {
             }
         }
     });
+
+    crate::driver::virtio::enable_input_interrupts();
 }
 
 unsafe fn iterate_all<C: ConfigurationAccess>(cam: &C) -> impl Iterator<Item = PciAddress> {
@@ -97,11 +99,29 @@ unsafe fn iterate_all<C: ConfigurationAccess>(cam: &C) -> impl Iterator<Item = P
         })
 }
 
+const COMMAND_INTX_DISABLE: u16 = 1 << 10;
+
+#[derive(Clone)]
 pub struct VirtIoCam(Arc<Box<dyn ConfigurationAccess>>);
 
 impl VirtIoCam {
     pub fn new(cam: Box<dyn ConfigurationAccess>) -> Self {
         Self(Arc::new(cam))
+    }
+
+    pub fn read_u8(&self, addr: PciAddress, key: ConfigKey<u8>) -> u8 {
+        self.0.read_config(addr, key)
+    }
+
+    pub fn set_intx_enabled(&self, addr: PciAddress, is_enabled: bool) {
+        let command = self.0.read_config(addr, ConfigKey::<u16>::COMMAND);
+        let command = if is_enabled {
+            command & !COMMAND_INTX_DISABLE
+        } else {
+            command | COMMAND_INTX_DISABLE
+        };
+        self.0
+            .write_config(addr, ConfigKey::<u16>::COMMAND, command);
     }
 }
 
@@ -130,6 +150,6 @@ impl virtio_drivers::transport::pci::bus::ConfigurationAccess for VirtIoCam {
     }
 
     unsafe fn unsafe_clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        self.clone()
     }
 }

@@ -11,6 +11,8 @@ use crate::acpi::acpi_tables;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::{OwnedSegment, VirtualMemoryAllocator, VirtualMemoryHigherHalf};
 
+const IO_APIC_VECTOR_OFFSET: u8 = 32;
+
 static IO_APIC: OnceCell<Mutex<IoApic>> = OnceCell::uninit();
 
 pub fn io_apic() -> &'static Mutex<IoApic> {
@@ -20,6 +22,14 @@ pub fn io_apic() -> &'static Mutex<IoApic> {
 pub struct IoApic {
     _segment: OwnedSegment<'static>,
     inner: x2apic::ioapic::IoApic,
+    global_system_interrupt_base: u32,
+}
+
+impl IoApic {
+    /// Returns the first GSI of this IO APIC, from the MADT.
+    pub fn global_system_interrupt_base(&self) -> u32 {
+        self.global_system_interrupt_base
+    }
 }
 
 impl Deref for IoApic {
@@ -74,10 +84,19 @@ pub fn init() {
         .unwrap();
     let start_addr = segment.start;
 
-    let ioapic = IoApic {
+    let mut ioapic = IoApic {
         _segment: segment,
         inner: unsafe { x2apic::ioapic::IoApic::new(start_addr.as_u64()) },
+        global_system_interrupt_base: apic.global_system_interrupt_base,
     };
+    // Safety: the mapping above covers the IO APIC registers. `init` does not
+    // set the mask bits, so each route gets an explicit mask.
+    unsafe {
+        ioapic.init(IO_APIC_VECTOR_OFFSET);
+        for index in 0..=ioapic.max_table_entry() {
+            ioapic.disable_irq(index);
+        }
+    }
     IO_APIC.init_once(|| Mutex::new(ioapic));
 }
 

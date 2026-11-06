@@ -11,13 +11,13 @@ use kernel_abi::{
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
-    MemoryRegion as _, SignalAccess, SleepAccess,
+    MemoryRegion as _, SignalAccess,
 };
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CreateMode, FdLookup, FsError, FsyncError, IoctlError, MmapError, MmapRegion, OpenError,
-    ReadDirError, ReadError, Stat as VfsStat, TruncateError, UnlinkError, WriteError,
+    ReadDirError, ReadError, Stat as VfsStat, TruncateError, UnlinkError, WaitSource, WriteError,
 };
 use kernel_virtual_memory::Segment;
 use spin::rwlock::RwLock;
@@ -49,6 +49,10 @@ pub struct KernelAccess {
 }
 
 impl KernelAccess {
+    #[expect(
+        clippy::new_without_default,
+        reason = "the value depends on the current task, so a default value misleads"
+    )]
     pub fn new() -> Self {
         KernelAccess {
             process: Process::current().clone(),
@@ -57,23 +61,24 @@ impl KernelAccess {
 
     /// Installs `ofd` on the lowest free descriptor.
     fn install(&self, ofd: Arc<OpenFileDescription>) -> FdNum {
-        let num = self
-            .process
-            .file_descriptors()
-            .read()
-            .keys()
-            .fold(0, |acc, &fd| {
-                if acc == Into::<i32>::into(fd) {
-                    acc + 1
-                } else {
-                    acc
-                }
-            })
-            .into();
-        let fd = FileDescriptor::new(num, FileDescriptorFlags::empty(), ofd);
-
-        self.process.file_descriptors().write().insert(num, fd);
-
+        let num = {
+            let mut table = self.process.file_descriptors().write();
+            let num = table
+                .keys()
+                .fold(0, |acc, &fd| {
+                    if acc == Into::<i32>::into(fd) {
+                        acc + 1
+                    } else {
+                        acc
+                    }
+                })
+                .into();
+            let fd = FileDescriptor::new(num, FileDescriptorFlags::empty(), ofd);
+            table.insert(num, fd);
+            self.process.advance_fd_generation(&mut table);
+            num
+        };
+        self.process.fd_changes().wake_all();
         num
     }
 
@@ -87,7 +92,7 @@ impl KernelAccess {
         let mut result = op();
         let task = Task::current();
         while matches!(result, Err(EAGAIN)) {
-            let outcome = self.process.park_current_task(None, Some(queue), || {
+            let outcome = self.process.park_current_task(None, &[queue], || {
                 result = op();
                 !matches!(result, Err(EAGAIN)) || task.has_interrupting_signal()
             });
@@ -108,6 +113,24 @@ impl KernelAccess {
         );
         EPIPE
     }
+}
+
+/// Advances the offset after a completed read and maps its error to an errno.
+fn finish_read(
+    ofd: &OpenFile,
+    offset: u64,
+    result: Result<usize, ReadError>,
+) -> Result<usize, Errno> {
+    let read = result.map_err(|e| match e {
+        ReadError::WouldBlock => EAGAIN,
+        ReadError::NotReadable => EISDIR,
+        ReadError::BufferTooSmall => EINVAL,
+        ReadError::FsError(_) | ReadError::ReadFailed => EIO,
+    })?;
+    // The load and the store are separate. A fork shares the description
+    // between processes, so a concurrent read can lose an offset update.
+    ofd.position().store(offset + read.into_u64(), Relaxed);
+    Ok(read)
 }
 
 impl CwdAccess for KernelAccess {
@@ -159,36 +182,64 @@ impl FileAccess for KernelAccess {
             let guard = fds.read();
 
             let desc = guard.get(&fd).ok_or(EBADF)?;
-            let socket = match desc.file_description().as_ref() {
-                OpenFileDescription::File(ofd) => {
-                    if !ofd.access().can_read() {
-                        return Err(EBADF);
-                    }
-                    let offset = ofd.position().load(Relaxed);
-                    let read = match ofd.read(&mut *buf, offset.into_usize()) {
-                        Ok(read) => read,
-                        Err(ReadError::WouldBlock) => {
-                            // The wait must not hold the descriptor table lock.
-                            drop(guard);
-                            // TODO(tpdenk): park on a wait queue the device wakes, once
-                            // device IRQs reach the IO APIC. Until then the read polls.
-                            self.sleep_one_poll()?;
-                            continue;
-                        }
-                        Err(ReadError::NotReadable) => return Err(EISDIR),
-                        Err(ReadError::BufferTooSmall) => return Err(EINVAL),
-                        Err(ReadError::FsError(_) | ReadError::ReadFailed) => return Err(EIO),
-                    };
-                    // The load and the store are separate. A fork shares the description
-                    // between processes, so a concurrent read can lose an offset update.
-                    ofd.position().store(offset + read.into_u64(), Relaxed);
-                    return Ok(read);
+            let description = desc.file_description().clone();
+            let generation = self.process.fd_generation();
+            let ofd = match description.as_ref() {
+                OpenFileDescription::File(ofd) => ofd,
+                OpenFileDescription::Socket(socket) => {
+                    let socket = socket.clone();
+                    // The wait must not hold the descriptor table lock.
+                    drop(guard);
+                    return self.block_on(socket.waiters(), || socket.try_read(buf));
                 }
-                OpenFileDescription::Socket(socket) => socket.clone(),
             };
+            if !ofd.access().can_read() {
+                return Err(EBADF);
+            }
+            let offset = ofd.position().load(Relaxed);
+            let result = ofd.read(&mut *buf, offset.into_usize());
             // The wait must not hold the descriptor table lock.
             drop(guard);
-            return self.block_on(socket.waiters(), || socket.try_read(buf));
+            if !matches!(result, Err(ReadError::WouldBlock)) {
+                return finish_read(ofd, offset, result);
+            }
+
+            let device = description.wait_source().map_err(|_| EIO)?;
+            let fd_changes: &dyn WaitSource = self.process.fd_changes();
+            let both;
+            let sources: &[&dyn WaitSource] = match device.as_deref() {
+                Some(device) => {
+                    both = [device, fd_changes];
+                    &both
+                }
+                None => core::slice::from_ref(&fd_changes),
+            };
+            let task = Task::current();
+            let mut is_replaced = false;
+            let mut attempt = None;
+            let outcome = self.process.park_current_task(None, sources, || {
+                let guard = fds.read();
+                if self.process.fd_generation() != generation {
+                    drop(guard);
+                    is_replaced = true;
+                    return true;
+                }
+                let offset = ofd.position().load(Relaxed);
+                let result = ofd.read(&mut *buf, offset.into_usize());
+                drop(guard);
+                let is_blocked = matches!(result, Err(ReadError::WouldBlock));
+                attempt = Some((offset, result));
+                !is_blocked || task.has_interrupting_signal()
+            });
+            // A completed read consumes data, so it wins over an interruption.
+            if let Some((offset, result)) = attempt
+                && !matches!(result, Err(ReadError::WouldBlock))
+            {
+                return finish_read(ofd, offset, result);
+            }
+            if matches!(outcome, ParkOutcome::Interrupted) || !is_replaced {
+                return Err(EINTR);
+            }
         }
     }
 
@@ -236,12 +287,16 @@ impl FileAccess for KernelAccess {
     }
 
     fn close(&self, fd: Self::Fd) -> Result<(), Errno> {
-        self.process
-            .file_descriptors()
-            .write()
-            .remove(&fd)
-            .map(|_| ())
-            .ok_or(EBADF)
+        let removed = {
+            let mut table = self.process.file_descriptors().write();
+            let removed = table.remove(&fd).ok_or(EBADF)?;
+            self.process.advance_fd_generation(&mut table);
+            removed
+        };
+        self.process.fd_changes().wake_all();
+        // Its destructor can notify socket peers, so it runs without the table lock.
+        drop(removed);
+        Ok(())
     }
 
     fn truncate(&self, fd: Self::Fd, len_bytes: u64) -> Result<(), Errno> {

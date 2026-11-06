@@ -7,7 +7,6 @@ mod poll;
 mod process;
 mod region;
 mod signal;
-mod sleep;
 mod socket;
 mod thread;
 
@@ -18,7 +17,6 @@ pub use poll::*;
 pub use process::*;
 pub use region::*;
 pub use signal::*;
-pub use sleep::*;
 pub use socket::*;
 pub use thread::*;
 

@@ -6,6 +6,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,17 +18,24 @@ use kernel::file::vfs;
 use kernel::limine::BASE_REVISION;
 use kernel::mcore;
 use kernel::mcore::mtask::process::mem::{MemoryRegion, PrivateMemoryRegion};
-use kernel::mcore::mtask::process::{ParkOutcome, Process};
+use kernel::mcore::mtask::process::tree::process_tree;
+use kernel::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use kernel::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use kernel::mcore::mtask::task::Task;
+use kernel::mcore::mtask::wait::WaitQueue;
 use kernel::mem::address_space::AddressSpace;
 use kernel::mem::heap::Heap;
 use kernel::mem::phys::PhysicalMemory;
 use kernel::mem::virt::{VirtualMemoryAllocator, VirtualMemoryHigherHalf};
+use kernel::syscall::access::KernelAccess;
+use kernel_abi::ProcessId;
 use kernel_ext2::Ext2Fs;
+use kernel_syscall::access::WaitAccess;
+use kernel_syscall::wait::WaitTarget;
 use kernel_vfs::CreateMode;
 use kernel_vfs::path::{AbsolutePath, ROOT};
 use kernel_virtual_memory::Segment;
+use spin::Mutex;
 use tracing::info;
 use x86_64::VirtAddr;
 use x86_64::registers::control::{Cr8, PriorityClass};
@@ -51,6 +59,14 @@ static COW_CLONE_WROTE: AtomicBool = AtomicBool::new(false);
 static COW_READER_DONE: AtomicBool = AtomicBool::new(false);
 static COW_CLONE_DONE: AtomicBool = AtomicBool::new(false);
 static COW_PROBE_DONE: AtomicBool = AtomicBool::new(false);
+
+const ADOPTION_NAMES: [&str; 3] = ["adoption-ancestor", "adoption-parent", "adoption-child"];
+static ADOPTION_PROCESSES: Mutex<Vec<Arc<Process>>> = Mutex::new(Vec::new());
+static ADOPTION_STEPS: WaitQueue = WaitQueue::new();
+static ADOPTION_BUILT: AtomicBool = AtomicBool::new(false);
+static ADOPTION_CHECKED: AtomicBool = AtomicBool::new(false);
+static ADOPTION_DONE: AtomicBool = AtomicBool::new(false);
+static ADOPTION_CHILD: AtomicU64 = AtomicU64::new(0);
 
 /// Boots the real kernel, mounts the root ext2 filesystem, then starts the
 /// `init=` executable from the kernel cmdline as pid 1. The integration disks
@@ -184,18 +200,25 @@ unsafe extern "C" fn main() -> ! {
 
     let attach_exec_sibling = AbsolutePath::try_new("/exec-sibling")
         .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok());
+    let probe_adoption = AbsolutePath::try_new("/adoption-probe")
+        .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok());
 
     let init_path = cmdline()
         .init()
         .expect("should have init argument on cmdline");
     let path = AbsolutePath::try_new(init_path).expect("init path should be absolute");
-    let init = if attach_exec_sibling {
+    let init = if attach_exec_sibling || probe_adoption {
         let (proc, main_task) = Process::create_unscheduled(Process::root(), path)
             .expect("should be able to create init process");
-        let sibling = Task::create_new(&proc, exec_sibling, ptr::null_mut())
-            .expect("should be able to create the exec sibling task");
-        GlobalTaskQueue::enqueue(Box::pin(sibling));
-        kernel::serial_println!("test-kernel: sibling attached pid={}", proc.pid());
+        if attach_exec_sibling {
+            let sibling = Task::create_new(&proc, exec_sibling, ptr::null_mut())
+                .expect("should be able to create the exec sibling task");
+            GlobalTaskQueue::enqueue(Box::pin(sibling));
+            kernel::serial_println!("test-kernel: sibling attached pid={}", proc.pid());
+        }
+        if probe_adoption {
+            probe_adopted_zombie(&proc);
+        }
         GlobalTaskQueue::enqueue(Box::pin(main_task));
         proc
     } else {
@@ -327,7 +350,7 @@ fn page_frame(index: usize) -> String {
 
 fn spawn_task(process: &Arc<Process>, entry: extern "C" fn(*mut c_void), arg: *mut c_void) {
     let task =
-        Task::create_new(process, entry, arg).expect("should be able to create a cow probe task");
+        Task::create_new(process, entry, arg).expect("should be able to create a probe task");
     GlobalTaskQueue::enqueue(Box::pin(task));
 }
 
@@ -493,7 +516,7 @@ extern "C" fn cow_clone_reader(_: *mut c_void) {
 extern "C" fn exec_sibling(_: *mut c_void) {
     let task = kernel::mcore::mtask::task::Task::current();
     let process = task.process().clone();
-    match process.park_current_task(None, None, || false) {
+    match process.park_current_task(None, &[], || false) {
         ParkOutcome::Interrupted => {
             kernel::serial_println!("test-kernel: sibling terminating");
         }
@@ -503,4 +526,113 @@ extern "C" fn exec_sibling(_: *mut c_void) {
     }
     // Returning falls into `Task::exit`, which the task stack seeds as the
     // return address.
+}
+
+/// Proves that a reaper wakes for a zombie that it adopts. The zombie's
+/// parent belongs to another process, so the exit of that parent does not
+/// notify pid 1 as a parent. Only the adoption can wake pid 1.
+fn probe_adopted_zombie(init: &Arc<Process>) {
+    assert_eq!(
+        init.pid(),
+        ProcessId::REAPER,
+        "the probe needs init as pid 1"
+    );
+    spawn_task(init, adoption_builder, ptr::null_mut());
+    wait_for_adoption_step(&ADOPTION_BUILT);
+    let [ancestor, parent, child]: [Arc<Process>; 3] =
+        core::mem::take(&mut *ADOPTION_PROCESSES.lock())
+            .try_into()
+            .expect("the builders should create one process for each name");
+    child.set_exit_outcome(ExitOutcome::Exited(23));
+    ADOPTION_CHILD.store(child.pid().as_u64(), Ordering::Release);
+    drop(child);
+
+    let waiter = Task::create_new(init, adoption_waiter, ptr::null_mut())
+        .expect("should be able to create the adoption waiter task");
+    GlobalTaskQueue::enqueue(Box::pin(waiter));
+    wait_for_adoption_step(&ADOPTION_CHECKED);
+
+    parent.set_exit_outcome(ExitOutcome::Exited(0));
+    wait_for_adoption_step(&ADOPTION_DONE);
+
+    let removed = {
+        let mut tree = process_tree().write();
+        [ancestor.pid(), parent.pid()].map(|pid| tree.processes.remove(&pid))
+    };
+    assert!(
+        removed.iter().all(Option::is_some),
+        "the probe processes should remain in the tree"
+    );
+    drop(removed);
+    kernel::serial_println!("event-waits: adopted zombie ok");
+}
+
+/// Creates the next probe process as a child of the current process. A new
+/// address space copies the active one, so only a task of the parent can
+/// create the child.
+extern "C" fn adoption_builder(_: *mut c_void) {
+    let mut built = ADOPTION_PROCESSES.lock();
+    let name = ADOPTION_NAMES[built.len()];
+    let process = Process::create_new(Process::current(), name.into(), None::<&AbsolutePath>);
+    built.push(process.clone());
+    let is_complete = built.len() == ADOPTION_NAMES.len();
+    drop(built);
+    if is_complete {
+        finish_adoption_step(&ADOPTION_BUILT);
+    } else {
+        spawn_task(&process, adoption_builder, ptr::null_mut());
+    }
+}
+
+fn wait_for_adoption_step(step: &AtomicBool) {
+    let outcome = Process::current()
+        .park_current_task(None, &[&ADOPTION_STEPS], || step.load(Ordering::Acquire));
+    assert!(
+        matches!(outcome, ParkOutcome::Ready),
+        "the adoption probe wait was interrupted"
+    );
+}
+
+fn finish_adoption_step(step: &AtomicBool) {
+    step.store(true, Ordering::Release);
+    ADOPTION_STEPS.wake_all();
+}
+
+/// Waits as pid 1 through the real `WaitAccess` adapter.
+extern "C" fn adoption_waiter(_: *mut c_void) {
+    let access = KernelAccess::new();
+    let init = Process::current();
+    let (pid, group) = (init.pid(), init.process_group_id());
+    let mut result = access.try_reap_child(pid, group, WaitTarget::AnyChild);
+    assert!(
+        matches!(result, Ok(None)),
+        "the initial reap should find no outcome: {result:?}"
+    );
+    finish_adoption_step(&ADOPTION_CHECKED);
+
+    while matches!(result, Ok(None)) {
+        let waited = access.wait_for_child_change(|| {
+            result = access.try_reap_child(pid, group, WaitTarget::AnyChild);
+            !matches!(result, Ok(None))
+        });
+        if matches!(result, Ok(None)) {
+            waited.expect("the child wait should not be interrupted");
+        }
+    }
+    let reaped = result
+        .expect("the reap should succeed")
+        .expect("the reap should return the adopted child");
+    assert_eq!(
+        reaped.pid.as_u64(),
+        ADOPTION_CHILD.load(Ordering::Acquire),
+        "pid 1 should reap the adopted child"
+    );
+    assert_eq!(reaped.outcome, ExitOutcome::Exited(23));
+
+    let second = access.try_reap_child(pid, group, WaitTarget::AnyChild);
+    assert!(
+        matches!(second, Ok(None)),
+        "a second reap should find no exited child: {second:?}"
+    );
+    finish_adoption_step(&ADOPTION_DONE);
 }

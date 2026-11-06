@@ -73,7 +73,7 @@ impl ThreadAccess for KernelAccess {
         let deadline = timeout.map(|timeout| hpet().read().now().saturating_add(timeout));
         let task = Task::current();
         let mut end = ParkEnd::Interrupted;
-        let outcome = self.process.park_current_task(deadline, Some(queue), || {
+        let outcome = self.process.park_current_task(deadline, &[queue], || {
             end = if should_wake() {
                 ParkEnd::Woken
             } else if deadline.is_some_and(|deadline| hpet().read().now() >= deadline) {
