@@ -255,8 +255,21 @@ pub extern "sysv64" fn syscall_handler_impl(
 
     interrupts::disable();
     let task = Task::current();
-    if !signal::reap_current_if_requested(task) {
-        signal::deliver_pending(stack_frame, regs);
+    // An interrupted call must not return before its handler is set up.
+    while !signal::reap_current_if_requested(task)
+        && matches!(
+            signal::deliver_pending(stack_frame, regs),
+            signal::Delivery::Deferred
+        )
+    {
+        // The lock holder can need this CPU. It can wait in the run queue,
+        // or a user memory writer can wait for this CPU to acknowledge a TLB
+        // shootdown.
+        interrupts::enable();
+        core::hint::spin_loop();
+        interrupts::disable();
+        // Safety: interrupts are off, so the scheduler is this CPU's.
+        unsafe { ExecutionContext::load().scheduler_mut().reschedule() };
     }
     if task.should_terminate() {
         Task::exit_current();
@@ -276,7 +289,9 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
 
     let from_user = stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3;
     if from_user && !signal::reap_current_if_requested(Task::current()) {
-        signal::deliver_pending(stack_frame, regs);
+        // This interrupt did not end a system call, so a deferred signal
+        // can wait for the next return to user mode.
+        let _ = signal::deliver_pending(stack_frame, regs);
     }
 
     unsafe {

@@ -357,13 +357,9 @@ fn signal_eintr(path: &str) -> CaseResult {
             let _ = ready_tx.send(());
             let mut fds = [PollFd::new(fd, PollEvents::IN)];
             let result = sys::poll(&mut fds, None);
-            // The kernel can defer the handler to a later return to user mode,
-            // for example when the sender holds the signal lock. Each yield
-            // is such a return.
-            while HANDLED.load(Ordering::SeqCst) == 0 {
-                thread::yield_now();
-            }
-            let _ = done_tx.send(Ok(result));
+            // POSIX runs the handler before an interrupted call returns.
+            let handled = HANDLED.load(Ordering::SeqCst);
+            let _ = done_tx.send(Ok((result, handled)));
         });
         // A failed preparation drops `ready_tx`, so this receive ends.
         let _ = ready_rx.recv();
@@ -371,8 +367,9 @@ fn signal_eintr(path: &str) -> CaseResult {
             sys::kill(sys::getpid(), Signal::Usr1).map_err(|e| format!("kill: {e:?}"))?;
             match done_rx.recv_timeout(SIGNAL_INTERVAL) {
                 Ok(result) => {
-                    let result = result?;
+                    let (result, handled) = result?;
                     check(result == Err(EINTR), &format!("poll returned {result:?}"))?;
+                    check(handled > 0, "poll returned EINTR before the handler ran")?;
                     return Ok(());
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}

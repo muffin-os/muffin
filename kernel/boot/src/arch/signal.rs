@@ -157,34 +157,44 @@ fn request_stop_park(task: &Task, signals: &mut Signals) {
     }
 }
 
+/// The result of one attempt to act on the pending signals of a task.
+#[must_use]
+pub enum Delivery {
+    /// No deliverable signal remains, or the task acted on the first one.
+    Settled,
+    /// The signals lock or the user memory lock is busy. A deliverable
+    /// signal can still be pending.
+    Deferred,
+}
+
 /// This function acts on pending signals for the current task. It delivers
-/// nothing when the signals lock is busy or a writer of the user mappings is
-/// active. The signal then stays pending until the next delivery attempt.
-pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
+/// nothing and returns [`Delivery::Deferred`] when the signals lock is busy or
+/// a writer of the user mappings is active.
+pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) -> Delivery {
     debug_assert!(!interrupts::are_enabled());
     debug_assert_eq!(frame.code_segment.rpl(), PrivilegeLevel::Ring3);
     let task = Task::current();
     let process = task.process();
     let Some(pin) = process.try_pin_user_memory() else {
-        return;
+        return Delivery::Deferred;
     };
     let Some(mut guard) = process.try_signals_write() else {
-        return;
+        return Delivery::Deferred;
     };
     loop {
         if guard.stopped() {
             request_stop_park(task, &mut guard);
-            return;
+            return Delivery::Settled;
         }
         let Some(signo) = guard.take_next_deliverable(task.signal_mask()) else {
-            return;
+            return Delivery::Settled;
         };
         match guard.disposition(signo) {
             Disposition::Ignore => {}
             Disposition::DefaultStop => {
                 guard.set_stopped(true);
                 request_stop_park(task, &mut guard);
-                return;
+                return Delivery::Settled;
             }
             Disposition::DefaultTerminate => {
                 drop(guard);
@@ -192,7 +202,7 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
                 // The handles must drop while this address space is active.
                 task.abandon_user_allocations();
                 task.set_should_terminate(true);
-                return;
+                return Delivery::Settled;
             }
             Disposition::Handler(action) => {
                 let mut mask = task.signal_mask();
@@ -216,7 +226,7 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
                         f.stack_pointer = VirtAddr::new_truncate(base - 8);
                     });
                 }
-                return;
+                return Delivery::Settled;
             }
         }
     }
