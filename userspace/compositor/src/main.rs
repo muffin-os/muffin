@@ -1,8 +1,9 @@
 //! The compositor owns the display. It serves window clients on
-//! `SOCKET_PATH`, reads the mouse and draws the cursor. Three threads send
-//! events through one channel. The socket thread accepts the clients and
-//! reads their requests. The input thread reads the mouse. The main thread
-//! owns the display and the windows. It draws and writes the responses.
+//! `SOCKET_PATH`, reads the input devices and draws the cursor. The worker
+//! threads send events through one channel. The socket thread accepts the
+//! clients and reads their requests. Each input device has its own input
+//! thread. The main thread owns the display and the windows. It draws and
+//! writes the responses. The escape key powers the machine off.
 //!
 //! The scene texture holds the desktop without the cursor. Each change to
 //! the screen copies the changed part of the scene to the scanout. Then it
@@ -41,7 +42,7 @@ use gfx::backend::virtio::{
 };
 use gfx::error::GfxError;
 use kernel_abi::gfx::{BufferDesc, TextureDesc, TextureFormat};
-use kernel_abi::{InputEvent, InputEventKind, MotionAxis, PollEvents, PollFd};
+use kernel_abi::{InputEvent, InputEventKind, PollEvents, PollFd};
 use muffin_sys::{EINTR, ENOENT, Errno, O_RDONLY};
 
 const CURSOR_VERTEX_BYTES: usize = VERTEX_COUNT * GOURAUD_STRIDE;
@@ -387,7 +388,7 @@ enum Event {
     /// The client closes its stream or sends a bad message. The socket thread
     /// does not read it again.
     Closed(ClientId),
-    /// This is one batch of mouse events in the sequence of the device.
+    /// This is one batch of events of one input device, in the sequence of the device.
     Input(Vec<InputEvent>),
     /// A worker thread fails with this error. The compositor stops too.
     Fatal(io::Error),
@@ -485,18 +486,18 @@ impl Client {
     }
 }
 
-/// This is the first input device that reports motion on the X axis. One
-/// mouse moves the cursor.
-struct Mouse {
+/// This is one node under `/dev/input`. Each node has its own input thread.
+struct InputDevice {
+    path: String,
     fd: c_int,
     buf: [u8; InputEvent::SIZE * 64],
 }
 
-impl Mouse {
-    /// Returns `None` when no input device moves on the X axis. devfs cannot
-    /// list a directory. Thus this function tries the nodes in sequence until
-    /// one is missing.
-    fn open() -> io::Result<Option<Self>> {
+impl InputDevice {
+    /// Opens every input device. devfs cannot list a directory. Thus this
+    /// function tries the nodes in sequence until one is missing.
+    fn open_all() -> io::Result<Vec<Self>> {
+        let mut devices = Vec::new();
         for index in 0.. {
             let path = format!("/dev/input/event{index}");
             let fd = match muffin_sys::open(&path, O_RDONLY) {
@@ -504,20 +505,14 @@ impl Mouse {
                 Err(ENOENT) => break,
                 Err(e) => return Err(errno_error(&path, e)),
             };
-            let has_motion_x = muffin_sys::input_supported_codes(fd, InputEventKind::Motion)
-                .map_err(|e| errno_error(&path, e))?
-                .contains(MotionAxis::X);
-            if has_motion_x {
-                println!("compositor: mouse {path}");
-                return Ok(Some(Self {
-                    fd,
-                    buf: [0; InputEvent::SIZE * 64],
-                }));
-            }
-            muffin_sys::close(fd).map_err(|e| errno_error(&path, e))?;
+            println!("compositor: input {path}");
+            devices.push(Self {
+                path,
+                fd,
+                buf: [0; InputEvent::SIZE * 64],
+            });
         }
-        println!("compositor: no mouse");
-        Ok(None)
+        Ok(devices)
     }
 
     /// Reads the pending events. Blocks when no event is pending.
@@ -526,7 +521,7 @@ impl Mouse {
             match muffin_sys::read(self.fd, &mut self.buf) {
                 Ok(n) => break n,
                 Err(EINTR) => {}
-                Err(e) => return Err(errno_error("mouse", e)),
+                Err(e) => return Err(errno_error(&self.path, e)),
             }
         };
         Ok(self.buf[..n]
@@ -537,7 +532,7 @@ impl Mouse {
             .collect())
     }
 
-    /// This function runs on the input thread. It sends each batch of events to the main
+    /// This function runs on the input thread of the device. It sends each batch of events to the main
     /// thread.
     fn forward_events(mut self, events: &Sender<Event>) -> io::Result<Infallible> {
         loop {
@@ -549,7 +544,7 @@ impl Mouse {
     }
 }
 
-impl Drop for Mouse {
+impl Drop for InputDevice {
     fn drop(&mut self) {
         let _ = muffin_sys::close(self.fd);
     }
@@ -693,6 +688,13 @@ impl Compositor {
                 self.clients.remove(&client);
             }
             Event::Input(batch) => {
+                const KEY_ESC: u16 = 1;
+                if batch
+                    .iter()
+                    .any(|e| e.matches(InputEventKind::Key, KEY_ESC) && e.is_pressed())
+                {
+                    muffin_sys::poweroff();
+                }
                 let changes = self.frame.move_cursor(batch)?;
                 if let Some(reporter) = self.reporter.as_mut() {
                     reporter.report(&self.frame, &changes)?;
@@ -724,13 +726,13 @@ impl Compositor {
 fn run() -> io::Result<()> {
     let is_probing = env::args().skip(1).any(|arg| arg == "--probe");
     let frame = Frame::new(is_probing)?;
-    let mouse = Mouse::open()?;
+    let devices = InputDevice::open_all()?;
     let listener = UnixListener::bind(SOCKET_PATH)?;
     println!("compositor: listening on {SOCKET_PATH}");
 
     let (events, received) = mpsc::channel();
-    if let Some(mouse) = mouse {
-        spawn_worker(events.clone(), move |events| mouse.forward_events(events))?;
+    for device in devices {
+        spawn_worker(events.clone(), move |events| device.forward_events(events))?;
     }
     spawn_worker(events, move |events| {
         SocketReader::new(listener).forward_requests(events)
