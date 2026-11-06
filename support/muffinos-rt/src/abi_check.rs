@@ -4,7 +4,8 @@
 use core::ffi::c_int;
 
 use kernel_abi::{
-    ClockId, MapFlags, ProtFlags, SaFlags, ShutdownHow, SigHandler, SigMaskHow, Signal, Whence,
+    ClockId, MapFlags, PollEvents, ProtFlags, SaFlags, ShutdownHow, SigHandler, SigMaskHow, Signal,
+    Whence,
 };
 
 macro_rules! same_errno {
@@ -212,6 +213,10 @@ same_value!(
     libc::SOL_SOCKET = kernel_abi::SOL_SOCKET,
     libc::SCM_RIGHTS = kernel_abi::SCM_RIGHTS,
     libc::MSG_CTRUNC = kernel_abi::MSG_CTRUNC,
+    libc::POLLIN = PollEvents::IN.bits(),
+    libc::POLLOUT = PollEvents::OUT.bits(),
+    libc::POLLHUP = PollEvents::HUP.bits(),
+    libc::POLLNVAL = PollEvents::NVAL.bits(),
 );
 
 const _: () = assert!(libc::PATH_MAX as usize == kernel_abi::PATH_MAX);
@@ -220,3 +225,5 @@ const _: () = assert!(size_of::<libc::sockaddr_un>() == size_of::<kernel_abi::So
 const _: () = assert!(size_of::<libc::msghdr>() == size_of::<kernel_abi::MsgHdr>());
 const _: () = assert!(size_of::<libc::cmsghdr>() == size_of::<kernel_abi::CmsgHdr>());
 const _: () = assert!(size_of::<libc::iovec>() == size_of::<kernel_abi::IoVec>());
+// `poll` passes the libc array to the kernel as it is.
+const _: () = assert!(size_of::<libc::pollfd>() == size_of::<kernel_abi::PollFd>());

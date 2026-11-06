@@ -9,7 +9,7 @@ use kernel_vfs::fs::{FileSystem, FsHandle};
 use kernel_vfs::path::AbsolutePath;
 use kernel_vfs::{
     CloseError, CreateMode, FdLookup, FsError, FsyncError, IoctlError, MkdirError, MmapError,
-    MmapRegion, OpenError, ReadError, Stat, StatError, TruncateError, WriteError,
+    MmapRegion, OpenError, ReadError, Readiness, Stat, StatError, TruncateError, WriteError,
 };
 use thiserror::Error;
 
@@ -234,6 +234,10 @@ impl FileSystem for DevFs {
         self.resolve_handle(handle)
             .map_err(FsyncError::FsError)?
             .fsync()
+    }
+
+    fn readiness(&mut self, handle: FsHandle) -> Result<Readiness, FsError> {
+        Ok(self.resolve_handle(handle)?.readiness())
     }
 }
 

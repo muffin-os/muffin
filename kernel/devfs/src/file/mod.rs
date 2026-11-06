@@ -1,10 +1,13 @@
 use kernel_abi::IoctlRequest;
 use kernel_vfs::{
-    FdLookup, FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Stat, StatError, WriteError,
+    FdLookup, FsyncError, IoctlError, MmapError, MmapRegion, ReadError, Readiness, Stat, StatError,
+    WriteError,
 };
 
 mod block;
 pub use block::*;
+mod input;
+pub use input::*;
 mod null;
 pub use null::*;
 mod serial;
@@ -49,5 +52,14 @@ pub trait DevFile: Send + Sync {
         _lookup: &dyn FdLookup,
     ) -> Result<usize, IoctlError> {
         Err(IoctlError::NotSupported)
+    }
+
+    /// Returns the [`Readiness`] of the device. The default reports a device
+    /// that is never ready. Thus a device that does not implement this method
+    /// blocks in `poll` and does not spin, also when its `read` can return
+    /// [`ReadError::WouldBlock`]. A device that never blocks returns
+    /// [`Readiness::ALWAYS`].
+    fn readiness(&mut self) -> Readiness {
+        Readiness::default()
     }
 }

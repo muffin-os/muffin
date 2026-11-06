@@ -1,6 +1,6 @@
 use kernel_abi::S_IFBLK;
 use kernel_device::block::BlockDevice;
-use kernel_vfs::{ReadError, Stat, StatError, WriteError};
+use kernel_vfs::{ReadError, Readiness, Stat, StatError, WriteError};
 
 use crate::DevFile;
 
@@ -35,6 +35,10 @@ impl<D: BlockDevice + Send + Sync> DevFile for BlockDeviceFile<D> {
             mode: S_IFBLK | 0o666,
         };
         Ok(())
+    }
+
+    fn readiness(&mut self) -> Readiness {
+        Readiness::ALWAYS
     }
 }
 

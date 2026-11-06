@@ -1,4 +1,4 @@
-use kernel_abi::{Errno, ProcessId, Signal};
+use kernel_abi::{ProcessId, Signal};
 
 pub trait ProcessesAccess {
     type Process: ProcessAccess;
@@ -58,6 +58,4 @@ pub trait WaitAccess {
     /// Removes `pid` from the process table after a parent collected its
     /// status. This is not the task reap of exec.
     fn remove_process(&self, pid: ProcessId);
-    /// Sleeps one poll interval. `EINTR` when a signal interrupts the sleep.
-    fn sleep_one_poll(&self) -> Result<(), Errno>;
 }

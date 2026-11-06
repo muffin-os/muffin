@@ -1,6 +1,25 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
+
+# The cursor has no device code, so it builds and tests on the host.
+rust_library(
+    name = "cursor",
+    srcs = glob(["src/cursor/*.rs"]),
+    crate_name = "compositor_cursor",
+    crate_root = "src/cursor/lib.rs",
+    edition = "2024",
+    deps = [
+        "//kernel/abi",
+        "//userspace/libs/gfx",
+    ],
+)
+
+rust_test(
+    name = "cursor_test",
+    crate = ":cursor",
+    size = "small",
+)
 
 rust_binary(
     name = "compositor",
@@ -8,6 +27,7 @@ rust_binary(
     edition = "2024",
     platform = "//platforms:x86_64-unknown-muffin",
     deps = [
+        ":cursor",
         "//kernel/abi",
         "//userspace/libs/compositor-protocol",
         "//userspace/libs/gfx",

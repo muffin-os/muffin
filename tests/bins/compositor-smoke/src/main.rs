@@ -14,7 +14,7 @@ fn main() {
 }
 
 fn run() -> io::Result<()> {
-    Command::new("/bin/compositor").spawn()?;
+    Command::new("/bin/compositor").arg("--probe").spawn()?;
     let mut demo = Command::new("/bin/compositor-demo").spawn()?;
     sleep(DEMO_RUN_TIME);
     demo.kill()?;

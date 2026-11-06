@@ -5,5 +5,6 @@
 //! boots them and reads the serial transcript back.
 
 pub mod harness;
+pub mod qmp;
 
 pub use harness::{HostEnv, KernelTest, Outcome, RunReport, SpawnedProcess};

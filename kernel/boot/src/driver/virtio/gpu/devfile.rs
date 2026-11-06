@@ -14,8 +14,8 @@ use kernel_abi::{
 };
 use kernel_devfs::DevFile;
 use kernel_vfs::{
-    FdLookup, FsyncError, IoctlError, MappedMemory, MmapError, MmapRegion, ReadError, Stat,
-    StatError, WriteError,
+    FdLookup, FsyncError, IoctlError, MappedMemory, MmapError, MmapRegion, ReadError, Readiness,
+    Stat, StatError, WriteError,
 };
 use spin::Mutex;
 
@@ -83,6 +83,10 @@ impl DevFile for FbDevFile {
         stat.size = self.memory.len;
         stat.mode = S_IFCHR | 0o666;
         Ok(())
+    }
+
+    fn readiness(&mut self) -> Readiness {
+        Readiness::ALWAYS
     }
 
     fn mmap(&mut self) -> Result<MmapRegion, MmapError> {
@@ -215,6 +219,10 @@ impl DevFile for GpuDevFile {
         stat.size = 0;
         stat.mode = S_IFCHR | 0o666;
         Ok(())
+    }
+
+    fn readiness(&mut self) -> Readiness {
+        Readiness::ALWAYS
     }
 
     fn ioctl(

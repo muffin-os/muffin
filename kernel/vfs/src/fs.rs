@@ -4,9 +4,11 @@ use alloc::vec::Vec;
 use kernel_abi::IoctlRequest;
 
 use crate::path::AbsolutePath;
+use crate::readiness::Readiness;
 use crate::{
-    CloseError, CreateMode, FdLookup, FsyncError, IoctlError, MkdirError, MmapError, MmapRegion,
-    OpenError, ReadDirError, ReadError, Stat, StatError, TruncateError, UnlinkError, WriteError,
+    CloseError, CreateMode, FdLookup, FsError, FsyncError, IoctlError, MkdirError, MmapError,
+    MmapRegion, OpenError, ReadDirError, ReadError, Stat, StatError, TruncateError, UnlinkError,
+    WriteError,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -173,5 +175,14 @@ pub trait FileSystem: Send + Sync {
     /// Returns an error if the underlying device fails to commit.
     fn sync(&mut self) -> Result<(), FsyncError> {
         Ok(())
+    }
+
+    /// Returns the [`Readiness`] of the file at `handle`. The default impl
+    /// reports a file that never blocks.
+    ///
+    /// # Errors
+    /// Returns an error when the handle is not valid or is closed.
+    fn readiness(&mut self, _handle: FsHandle) -> Result<Readiness, FsError> {
+        Ok(Readiness::ALWAYS)
     }
 }

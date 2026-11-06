@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use kernel_abi::{EINTR, Errno, ProcessId};
-use kernel_syscall::access::{Child, WaitAccess};
+use kernel_syscall::access::{Child, SleepAccess, WaitAccess};
 
 use crate::hpet::hpet;
 use crate::mcore::mtask::process::ParkOutcome;
@@ -33,7 +33,9 @@ impl WaitAccess for KernelAccess {
     fn remove_process(&self, pid: ProcessId) {
         process_tree().write().processes.remove(&pid);
     }
+}
 
+impl SleepAccess for KernelAccess {
     fn sleep_one_poll(&self) -> Result<(), Errno> {
         let deadline = hpet().read().now().saturating_add(POLL_INTERVAL);
         let outcome = self.process.park_current_task(Some(deadline), None, || {

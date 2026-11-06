@@ -44,6 +44,39 @@ impl TryFrom<u16> for InputEventKind {
     }
 }
 
+/// The code of an [`InputEventKind::Sync`] event. The kernel owns these
+/// codes. A driver maps the sync codes of its device to them.
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncCode {
+    /// This code ends a batch of events that occur at the same time. The value
+    /// is 0.
+    BatchEnd = 0,
+    /// The queue of the reader becomes full and discards whole batches. The
+    /// value is the number of events that the queue discards before the reader
+    /// reads this event. The events after it are complete batches. A button can
+    /// change in a lost batch, so the reader must read the device state again.
+    EventsLost = 1,
+}
+
+impl From<SyncCode> for u16 {
+    fn from(code: SyncCode) -> Self {
+        code as u16
+    }
+}
+
+impl TryFrom<u16> for SyncCode {
+    type Error = Errno;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::BatchEnd),
+            1 => Ok(Self::EventsLost),
+            _ => Err(EINVAL),
+        }
+    }
+}
+
 /// The code of a [`InputEventKind::Motion`] event.
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +174,15 @@ pub struct InputEvent {
 impl InputEvent {
     pub const SIZE: usize = size_of::<Self>();
 
+    #[must_use]
+    pub fn sync(code: SyncCode, value: i32) -> Self {
+        Self {
+            event_type: InputEventKind::Sync.into(),
+            code: code.into(),
+            value,
+        }
+    }
+
     /// Returns `None` when the kernel does not know the event type.
     #[must_use]
     pub fn kind(self) -> Option<InputEventKind> {
@@ -155,6 +197,31 @@ impl InputEvent {
     #[must_use]
     pub fn matches(self, kind: InputEventKind, code: impl Into<u16>) -> bool {
         self.kind() == Some(kind) && self.code == code.into()
+    }
+
+    /// Returns the axis of a motion event. Returns `None` for other events and
+    /// for an unknown axis.
+    #[must_use]
+    pub fn motion_axis(self) -> Option<MotionAxis> {
+        (self.kind() == Some(InputEventKind::Motion))
+            .then(|| MotionAxis::try_from(self.code).ok())
+            .flatten()
+    }
+
+    /// Returns the button of a key event. Returns `None` for other events and for
+    /// a key that is not a pointer button.
+    #[must_use]
+    pub fn button(self) -> Option<Button> {
+        (self.kind() == Some(InputEventKind::Key))
+            .then(|| Button::try_from(self.code).ok())
+            .flatten()
+    }
+
+    /// Returns true when a key event reports that the key is down. A key repeat
+    /// also reports that the key is down.
+    #[must_use]
+    pub fn is_pressed(self) -> bool {
+        self.value != 0
     }
 
     #[must_use]
@@ -188,7 +255,10 @@ impl fmt::Display for InputEvent {
         } = *self;
         match self.kind() {
             None => write!(f, "type={event_type} code={code} {value}"),
-            Some(InputEventKind::Sync) => write!(f, "sync code={code} {value}"),
+            Some(InputEventKind::Sync) => match SyncCode::try_from(code) {
+                Ok(sync) => write!(f, "sync {sync:?} {value}"),
+                Err(_) => write!(f, "sync code={code} {value}"),
+            },
             Some(InputEventKind::Key) => match Button::try_from(code) {
                 Ok(button) => write!(f, "button {button:?} {value}"),
                 Err(_) => write!(f, "key {code} {value}"),
@@ -435,7 +505,10 @@ mod tests {
         assert!(!codes.is_empty());
         assert!(codes.contains(1u16));
         assert!(!codes.contains(0u16));
-        assert!(!codes.contains(16u16), "a code past the valid bytes is not supported");
+        assert!(
+            !codes.contains(16u16),
+            "a code past the valid bytes is not supported"
+        );
         codes.set_bits(&[0b0000_0010, 0, 0b0000_0001]);
         assert!(codes.contains(16u16));
         assert_eq!(InputSupportedCodes::from_bytes(codes.to_bytes()), codes);
@@ -446,7 +519,10 @@ mod tests {
         let mut codes = InputSupportedCodes::for_kind(InputEventKind::Key);
         let too_long = [0xFF; INPUT_SUPPORTED_CODES_MAX_BYTES + 1];
         codes.set_bits(&too_long);
-        assert_eq!(codes.bits_len_bytes as usize, INPUT_SUPPORTED_CODES_MAX_BYTES);
+        assert_eq!(
+            codes.bits_len_bytes as usize,
+            INPUT_SUPPORTED_CODES_MAX_BYTES
+        );
         assert!(codes.contains((INPUT_SUPPORTED_CODES_MAX_BYTES * 8 - 1) as u16));
         assert!(!codes.contains((INPUT_SUPPORTED_CODES_MAX_BYTES * 8) as u16));
     }

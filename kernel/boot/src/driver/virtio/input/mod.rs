@@ -14,12 +14,11 @@ use kernel_pci::PciAddress;
 use kernel_pci::config::ConfigurationAccess;
 use kernel_vfs::path::AbsolutePath;
 use linkme::distributed_slice;
-use spin::Mutex;
 use tracing::info;
 use virtio_drivers::device::input::VirtIOInput;
 use virtio_drivers::transport::pci::PciTransport;
 
-use self::devfile::InputDevFile;
+use self::devfile::InputHub;
 use crate::driver::pci::{PCI_DRIVERS, PciDriverDescriptor, PciDriverType};
 use crate::driver::virtio::hal::{HalImpl, transport};
 use crate::file::devfs::devfs;
@@ -48,11 +47,9 @@ fn virtio_init(addr: PciAddress, cam: Box<dyn ConfigurationAccess>) -> Result<()
     let path = format!("/input/event{}", NEXT_EVENT_NODE.fetch_add(1, Relaxed));
     info!(%name, %path, "input device");
 
-    let device = Arc::new(Mutex::new(device));
+    let hub = Arc::new(InputHub::new(device));
     devfs()
         .write()
-        .register_file(AbsolutePath::try_new(&path)?, move || {
-            Ok(InputDevFile::new(device.clone()))
-        })?;
+        .register_file(AbsolutePath::try_new(&path)?, move || Ok(hub.open()))?;
     Ok(())
 }

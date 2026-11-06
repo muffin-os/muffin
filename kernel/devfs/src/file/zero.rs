@@ -1,5 +1,5 @@
 use kernel_abi::S_IFCHR;
-use kernel_vfs::{ReadError, Stat, StatError, WriteError};
+use kernel_vfs::{ReadError, Readiness, Stat, StatError, WriteError};
 
 use crate::DevFile;
 
@@ -20,5 +20,9 @@ impl DevFile for Zero {
         stat.size = 0;
         stat.mode = S_IFCHR | 0o666;
         Ok(())
+    }
+
+    fn readiness(&mut self) -> Readiness {
+        Readiness::ALWAYS
     }
 }

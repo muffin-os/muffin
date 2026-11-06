@@ -6,14 +6,22 @@
 //! finds the mouse and the keyboard by their supported codes, waits for one
 //! event of each, and prints the value of each event. The host checks the
 //! printed values against what it injected.
+//!
+//! A second open file of the mouse must get each event that the first file
+//! reads. Thus the guest reads a batch through the first file. Then it checks
+//! that the second file holds the same batch, without a wait.
 
 use std::ffi::c_int;
 use std::process::exit;
+use std::time::Duration;
 
-use kernel_abi::{InputEvent, InputEventKind, MotionAxis};
+use kernel_abi::{InputEvent, InputEventKind, MotionAxis, PollEvents, PollFd};
 use muffin_sys::{Errno, O_RDONLY};
 
 const KEY_A: u16 = 30;
+/// This is the number of motion events that the first reader collects
+/// before the test checks the second reader.
+const BATCH_MOTIONS: usize = 10;
 
 fn fail(step: &str, detail: impl std::fmt::Debug) -> ! {
     println!("input-nodes: FAIL {step} {detail:?}");
@@ -47,6 +55,30 @@ fn wait_for(fd: c_int, kind: InputEventKind, code: impl Into<u16> + Copy) -> Inp
     }
 }
 
+/// Reads all the events that `fd` holds now. Returns no events when a read blocks.
+fn drain(fd: c_int) -> Vec<InputEvent> {
+    let mut fds = [PollFd::new(fd, PollEvents::IN)];
+    let ready = unwrap_or_fail("poll", muffin_sys::poll(&mut fds, Some(Duration::ZERO)));
+    if ready == 0 {
+        return Vec::new();
+    }
+    let mut buf = [0u8; InputEvent::SIZE * 4096];
+    let n = unwrap_or_fail("read", muffin_sys::read(fd, &mut buf));
+    buf[..n]
+        .as_chunks::<{ InputEvent::SIZE }>()
+        .0
+        .iter()
+        .map(|raw| InputEvent::from_bytes(*raw))
+        .collect()
+}
+
+fn count_motions(events: &[InputEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| event.matches(InputEventKind::Motion, MotionAxis::X))
+        .count()
+}
+
 fn main() {
     let mut mouse = None;
     let mut keyboard = None;
@@ -69,18 +101,34 @@ fn main() {
         )
         .contains(KEY_A);
         match (has_motion_x, has_key_a) {
-            (true, false) => mouse = Some(fd),
+            (true, false) => mouse = Some((path, fd)),
             (false, true) => keyboard = Some(fd),
             other => fail(path, other),
         }
     }
-    let mouse = mouse.unwrap_or_else(|| fail("mouse", "no device with motion on x"));
+    let (mouse_path, mouse) = mouse.unwrap_or_else(|| fail("mouse", "no device with motion on x"));
     let keyboard = keyboard.unwrap_or_else(|| fail("keyboard", "no device with KEY_A"));
 
     let motion = wait_for(mouse, InputEventKind::Motion, MotionAxis::X);
     println!("input-nodes: motion x value={}", motion.value);
     let press = wait_for(keyboard, InputEventKind::Key, KEY_A);
     println!("input-nodes: key a value={}", press.value);
+
+    // From now on, each event that the first reader gets must also go to the
+    // second reader. The second file does not get the events that the first
+    // file queued before the second open. Thus the test discards them first.
+    let second = unwrap_or_fail("second-open", muffin_sys::open(mouse_path, O_RDONLY));
+    drain(mouse);
+    let mut first_motions = 0;
+    while first_motions < BATCH_MOTIONS {
+        wait_for(mouse, InputEventKind::Motion, MotionAxis::X);
+        first_motions += 1;
+    }
+    let second_motions = count_motions(&drain(second));
+    println!("input-nodes: second reader motions={second_motions}");
+    if second_motions < BATCH_MOTIONS {
+        fail("second-reader", second_motions);
+    }
 
     println!("input-nodes: ok");
 }

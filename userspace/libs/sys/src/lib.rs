@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 use core::arch::asm;
 use core::arch::x86_64::_mm_pause;
 use core::ffi::{c_int, c_void};
+use core::time::Duration;
 
 pub use heap::GrowingHeap;
 pub use kernel_abi::{
@@ -20,18 +21,18 @@ pub use kernel_abi::{
     EINVAL, EISDIR, EMSGSIZE, ENAMETOOLONG, ENOBUFS, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTCONN,
     ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW, EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE, ERANGE,
     ESPIPE, ESRCH, Errno, FbScreenInfo, InputDeviceInfo, InputEventKind, InputSupportedCodes,
-    IoVec, IoctlRequest, MSG_CTRUNC, MapFlags, MsgHdr,
-    O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC,
-    O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC,
-    O_TTY_INIT, O_WRONLY, PATH_MAX, ProtFlags, S_IFMT, S_IFSOCK, SCM_RIGHTS, SOCK_STREAM,
-    SOL_SOCKET, SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME, SYS_CLOSE,
-    SYS_CONNECT, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC, SYS_FTRUNCATE,
-    SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL, SYS_LISTEN, SYS_LSEEK,
-    SYS_MMAP, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POWEROFF, SYS_READ, SYS_RECVMSG,
-    SYS_SENDMSG, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN,
-    SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE, SaFamily, SaFlags, ShutdownHow, SigAction,
-    SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, StrSlice, Timespec,
-    WaitOptions, Whence,
+    IoVec, IoctlRequest, MSG_CTRUNC, MapFlags, MsgHdr, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK,
+    O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY,
+    O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX,
+    POLL_TIMEOUT_INFINITE, PollEvents, PollFd, ProtFlags, S_IFMT, S_IFSOCK, SCM_RIGHTS,
+    SOCK_STREAM, SOL_SOCKET, SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME,
+    SYS_CLOSE, SYS_CONNECT, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC,
+    SYS_FTRUNCATE, SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL,
+    SYS_LISTEN, SYS_LSEEK, SYS_MMAP, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POLL, SYS_POWEROFF,
+    SYS_READ, SYS_RECVMSG, SYS_SENDMSG, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
+    SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE, SaFamily,
+    SaFlags, ShutdownHow, SigAction, SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen,
+    Stat, StrSlice, Timespec, WaitOptions, Whence,
 };
 
 pub fn exit(code: i32) -> ! {
@@ -170,6 +171,29 @@ pub fn nanosleep(req: &Timespec, rem: Option<&mut Timespec>) -> Result<(), Errno
     // Safety: `req` and `rem` are live references for the whole call, `rem`
     // exclusive.
     ret(unsafe { syscall2(SYS_NANOSLEEP, req as *const Timespec as usize, rem_ptr) }).map(|_| ())
+}
+
+/// Waits until a descriptor in `fds` is ready, or until `timeout` passes.
+/// With `None`, it waits without a limit. Returns the number of entries with
+/// a nonzero `revents`. `Ok(0)` tells that the timeout passed. This function
+/// cuts a `timeout` above `i32::MAX` milliseconds to that value.
+///
+/// # Errors
+/// Returns `EINTR` when a signal interrupts the wait. Returns `EFAULT` when
+/// `fds` is not readable and writable user memory.
+pub fn poll(fds: &mut [PollFd], timeout: Option<Duration>) -> Result<usize, Errno> {
+    let timeout_ms = timeout.map_or(POLL_TIMEOUT_INFINITE, |t| {
+        i32::try_from(t.as_millis()).unwrap_or(i32::MAX) as isize
+    });
+    // Safety: `fds` is a live, exclusive slice for the whole call.
+    ret(unsafe {
+        syscall3(
+            SYS_POLL,
+            fds.as_mut_ptr() as usize,
+            fds.len(),
+            timeout_ms as usize,
+        )
+    })
 }
 
 /// Returns the number of path bytes written into `buf`.

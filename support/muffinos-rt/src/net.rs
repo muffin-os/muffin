@@ -1,7 +1,8 @@
 use core::ffi::{c_char, c_int, c_void};
 use core::slice;
+use core::time::Duration;
 
-use kernel_abi::{ENOSYS, EOPNOTSUPP, ShutdownHow};
+use kernel_abi::{ENOSYS, EOPNOTSUPP, PollFd, ShutdownHow};
 use libc::{addrinfo, msghdr, nfds_t, pollfd, size_t, sockaddr, socklen_t, ssize_t};
 
 use crate::errno::{fail, ret, set_errno};
@@ -105,6 +106,25 @@ pub unsafe extern "C" fn recvmsg(fd: c_int, msg: *mut msghdr, flags: c_int) -> s
     ret(unsafe { muffin_sys::recvmsg_raw(fd, msg.cast(), flags) }.map(|n| n as ssize_t))
 }
 
+/// With a negative `timeout`, poll waits until a descriptor is ready.
+///
+/// # Safety
+///
+/// The `fds` pointer must be valid for reads and writes of `nfds` entries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn poll(fds: *mut pollfd, nfds: nfds_t, timeout: c_int) -> c_int {
+    // The `fds` pointer can be null when `nfds` is 0. Thus this code makes no
+    // slice from it.
+    let fds: &mut [PollFd] = if nfds == 0 {
+        &mut []
+    } else {
+        // `pollfd` and `PollFd` have the same layout, as `abi_check` asserts.
+        unsafe { slice::from_raw_parts_mut(fds.cast::<PollFd>(), nfds) }
+    };
+    let timeout = u64::try_from(timeout).ok().map(Duration::from_millis);
+    ret(muffin_sys::poll(fds, timeout).map(|n| n as c_int))
+}
+
 // shortcut: kernel has no syscall for these; upgrade when
 // `kernel/abi/src/syscall.rs` adds one.
 enosys! {
@@ -115,7 +135,6 @@ enosys! {
     fn socketpair(c_int, c_int, c_int, *mut c_int) -> c_int;
     fn sendto(c_int, *const c_void, size_t, c_int, *const sockaddr, socklen_t) -> ssize_t;
     fn recvfrom(c_int, *mut c_void, size_t, c_int, *mut sockaddr, *mut socklen_t) -> ssize_t;
-    fn poll(*mut pollfd, nfds_t, c_int) -> c_int;
 }
 
 /// Returns the EAI code, not `-1`, because that is the `getaddrinfo` convention.

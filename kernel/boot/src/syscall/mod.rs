@@ -8,15 +8,16 @@ use core::time::Duration;
 use access::KernelAccess;
 use kernel_abi::{
     AF_UNIX, ClockId, EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno,
-    IoVec, IoctlRequest, MapFlags, MsgHdr, ProcessId, ProtFlags, SOMAXCONN, SaFamily, ShutdownHow,
-    SigAction, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen, Stat, Timespec, WaitOptions,
-    Whence, syscall_name,
+    IoVec, IoctlRequest, MapFlags, MsgHdr, POLL_TIMEOUT_INFINITE, PollFd, ProcessId, ProtFlags,
+    SOMAXCONN, SaFamily, ShutdownHow, SigAction, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen,
+    Stat, Timespec, WaitOptions, Whence, syscall_name,
 };
 use kernel_syscall::access::{
     FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess, SocketAccess,
 };
 use kernel_syscall::fcntl::{sys_open, sys_unlink};
 use kernel_syscall::mman::{sys_mmap, sys_munmap};
+use kernel_syscall::poll::sys_poll;
 use kernel_syscall::signal::{SignalTarget, sys_kill};
 use kernel_syscall::socket::{
     sys_accept, sys_bind, sys_connect, sys_listen, sys_recvmsg, sys_sendmsg, sys_shutdown,
@@ -95,6 +96,7 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_FTRUNCATE => dispatch_sys_ftruncate(arg1, arg2),
         kernel_abi::SYS_UNLINK => dispatch_sys_unlink(arg1, arg2),
         kernel_abi::SYS_MUNMAP => dispatch_sys_munmap(arg1, arg2),
+        kernel_abi::SYS_POLL => dispatch_sys_poll(arg1, arg2, arg3),
         _ => {
             error!("unknown syscall number {n}");
             Err(ENOSYS)
@@ -408,6 +410,31 @@ fn dispatch_sys_write(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errn
     let slice = unsafe { slice_from_ptr_and_len(buf, nbyte) }?;
     make_user_range_resident(buf, nbyte, UserAccess::Read)?;
     sys_write(&cx, fd, slice)
+}
+
+/// Runs POSIX poll. The `timeout` argument is a number of milliseconds as
+/// `isize`, or [`POLL_TIMEOUT_INFINITE`].
+fn dispatch_sys_poll(fds: usize, nfds: usize, timeout: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let timeout = match timeout as isize {
+        POLL_TIMEOUT_INFINITE => None,
+        ms @ 0.. => Some(Duration::from_millis(ms as u64)),
+        _ => return Err(EINVAL),
+    };
+    // A call with no entries is valid. Then poll only sleeps for `timeout`.
+    let fds: &mut [PollFd] = if nfds == 0 {
+        &mut []
+    } else {
+        if !fds.is_multiple_of(align_of::<PollFd>()) {
+            return Err(EFAULT);
+        }
+        let byte_len = nfds.checked_mul(size_of::<PollFd>()).ok_or(EINVAL)?;
+        let slice = unsafe { slice_from_ptr_and_len_mut::<PollFd>(fds, nfds) }?;
+        make_user_range_resident(fds, byte_len, UserAccess::Write)?;
+        slice
+    };
+    sys_poll(&cx, fds, timeout)
 }
 
 fn dispatch_sys_ioctl(fd: usize, request: usize, argp: usize) -> Result<usize, Errno> {

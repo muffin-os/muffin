@@ -3,9 +3,9 @@ use core::ops::Deref;
 use core::sync::atomic::AtomicU64;
 
 use kernel_syscall::access::AccessMode;
-use kernel_vfs::Vfs;
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
+use kernel_vfs::{FsError, Readiness, Vfs};
 use spin::RwLock;
 use tracing::{Level, instrument};
 
@@ -66,6 +66,18 @@ impl OpenFileDescription {
         match self {
             Self::File(_) => None,
             Self::Socket(socket) => Some(socket),
+        }
+    }
+
+    /// Returns the [`Readiness`] of the file or the socket.
+    ///
+    /// # Errors
+    /// Returns the error of [`VfsNode::readiness`] when the description is a
+    /// file.
+    pub fn readiness(&self) -> Result<Readiness, FsError> {
+        match self {
+            Self::File(file) => file.readiness(),
+            Self::Socket(socket) => Ok(socket.readiness()),
         }
     }
 }

@@ -25,6 +25,22 @@ impl Rect {
             height: bottom - y,
         }
     }
+
+    /// Returns true when the rectangles share one or more pixels. An empty
+    /// rectangle intersects nothing.
+    pub fn intersects(self, other: Rect) -> bool {
+        let left = self.x.max(other.x);
+        let top = self.y.max(other.y);
+        let right = self
+            .x
+            .saturating_add(self.width)
+            .min(other.x.saturating_add(other.width));
+        let bottom = self
+            .y
+            .saturating_add(self.height)
+            .min(other.y.saturating_add(other.height));
+        left < right && top < bottom
+    }
 }
 
 /// The data type of one vertex attribute.
@@ -167,4 +183,29 @@ pub trait GfxFence {
     fn wait(&self);
     /// Returns the device-wide monotonic id of the fence. `0` means that no GPU work is pending.
     fn id(&self) -> u64;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn intersects_needs_a_shared_pixel() {
+        let cursor = rect(10, 10, 14, 20);
+        assert!(cursor.intersects(rect(0, 0, 11, 11)), "corner overlap");
+        assert!(cursor.intersects(rect(12, 12, 1, 1)), "inside");
+        assert!(!cursor.intersects(rect(0, 0, 10, 10)), "touching corner");
+        assert!(!cursor.intersects(rect(24, 10, 5, 5)), "right of it");
+        assert!(!cursor.intersects(rect(10, 30, 5, 5)), "below it");
+        assert!(!cursor.intersects(rect(12, 12, 0, 5)), "empty");
+    }
 }

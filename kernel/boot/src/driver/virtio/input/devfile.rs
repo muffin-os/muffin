@@ -1,25 +1,81 @@
-//! The device file `/dev/input/eventN`. A read returns whole
-//! [`InputEvent`]s and never splits one. Every open file drains the same
-//! device queue, so two readers of one node each see a part of the stream.
+//! This module is the device file `/dev/input/eventN`. A read returns only
+//! whole [`InputEvent`]s. Each open file has its own [`InputQueue`], and each
+//! event of the device goes into each queue. Thus two readers of one node
+//! both get all the events.
+//!
+//! The driver has no interrupt path yet. Thus a read or a readiness check
+//! on an open file moves the device events into the queues.
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 
-use kernel_abi::{InputDeviceInfo, InputEvent, InputSupportedCodes, IoctlRequest, S_IFCHR};
-use kernel_devfs::DevFile;
-use kernel_vfs::{FdLookup, IoctlError, ReadError, Stat, StatError, WriteError};
+use kernel_abi::{
+    InputDeviceInfo, InputEvent, InputEventKind, InputSupportedCodes, IoctlRequest, S_IFCHR,
+    SyncCode,
+};
+use kernel_devfs::{DevFile, InputQueue};
+use kernel_vfs::{FdLookup, IoctlError, ReadError, Readiness, Stat, StatError, WriteError};
 use spin::Mutex;
 use virtio_drivers::device::input::{DevIDs, InputEvent as RawInputEvent};
 
 use super::InputDevice;
 
-pub struct InputDevFile {
-    device: Arc<Mutex<InputDevice>>,
+/// This is the maximum number of events in the queue of one open file. At
+/// 100 events per second, a reader can stop for 40 seconds before it loses a
+/// batch.
+const MAX_QUEUED_EVENTS: usize = 4096;
+
+const DEVICE_BATCH_END: u16 = 0;
+
+/// This hub holds one input device and the queues of its open files.
+pub struct InputHub {
+    device: Mutex<InputDevice>,
+    /// A queue goes away when its open file closes. The next drain then removes
+    /// it from this list.
+    readers: Mutex<Vec<Weak<Mutex<InputQueue>>>>,
 }
 
-impl InputDevFile {
-    pub fn new(device: Arc<Mutex<InputDevice>>) -> Self {
-        Self { device }
+impl InputHub {
+    pub fn new(device: InputDevice) -> Self {
+        Self {
+            device: Mutex::new(device),
+            readers: Mutex::new(Vec::new()),
+        }
     }
+
+    /// Opens the device file. The new file does not get the events that a
+    /// previous drain moved into the other queues. The next drain gives the new
+    /// file the events that are still in the device queue.
+    pub fn open(self: &Arc<Self>) -> InputDevFile {
+        let queue = Arc::new(Mutex::new(InputQueue::new(MAX_QUEUED_EVENTS)));
+        self.readers.lock().push(Arc::downgrade(&queue));
+        InputDevFile {
+            hub: self.clone(),
+            queue,
+        }
+    }
+
+    fn drain(&self) {
+        let mut device = self.device.lock();
+        let mut readers = self.readers.lock();
+        while let Some(raw) = device.pop_pending_event() {
+            let Some(event) = abi_event(raw) else {
+                continue;
+            };
+            readers.retain(|reader| {
+                let Some(reader) = reader.upgrade() else {
+                    return false;
+                };
+                reader.lock().push(event);
+                true
+            });
+        }
+    }
+}
+
+pub struct InputDevFile {
+    hub: Arc<InputHub>,
+    queue: Arc<Mutex<InputQueue>>,
 }
 
 fn decode<const N: usize, T>(
@@ -36,13 +92,20 @@ fn encode<const N: usize>(arg: &mut [u8], bytes: [u8; N]) -> Result<usize, Ioctl
     Ok(0)
 }
 
-/// The device sends the value as `u32`; the evdev value is signed.
-fn abi_event(raw: RawInputEvent) -> InputEvent {
-    InputEvent {
+/// The device sends the value as `u32`, and the ABI value is signed. The
+/// kernel owns the sync codes of the ABI. Thus the batch end of the device
+/// becomes [`SyncCode::BatchEnd`], and each other sync event of the device
+/// gives `None`.
+fn abi_event(raw: RawInputEvent) -> Option<InputEvent> {
+    let value = i32::from_ne_bytes(raw.value.to_ne_bytes());
+    if raw.event_type == u16::from(InputEventKind::Sync) {
+        return (raw.code == DEVICE_BATCH_END).then(|| InputEvent::sync(SyncCode::BatchEnd, value));
+    }
+    Some(InputEvent {
         event_type: raw.event_type,
         code: raw.code,
-        value: i32::from_ne_bytes(raw.value.to_ne_bytes()),
-    }
+        value,
+    })
 }
 
 fn device_info(ids: &DevIDs, name: &str) -> InputDeviceInfo {
@@ -59,9 +122,9 @@ fn device_info(ids: &DevIDs, name: &str) -> InputDeviceInfo {
 }
 
 impl DevFile for InputDevFile {
-    /// Copies the pending events that fit into `buf`. A buffer shorter than
-    /// one event is an error, except an empty one, which reads nothing. With
-    /// no pending event the read would block.
+    /// Copies the queued events that fit into `buf`. A buffer that is shorter
+    /// than one event causes an error. An empty buffer reads nothing. When the
+    /// queue is empty, the read blocks.
     fn read(&mut self, buf: &mut [u8], _offset: usize) -> Result<usize, ReadError> {
         if buf.is_empty() {
             return Ok(0);
@@ -69,10 +132,11 @@ impl DevFile for InputDevFile {
         if buf.len() < InputEvent::SIZE {
             return Err(ReadError::BufferTooSmall);
         }
-        let mut device = self.device.lock();
+        self.hub.drain();
+        let mut queue = self.queue.lock();
         let mut written = 0;
         for slot in buf.as_chunks_mut::<{ InputEvent::SIZE }>().0 {
-            let Some(event) = device.pop_pending_event().map(abi_event) else {
+            let Some(event) = queue.pop() else {
                 break;
             };
             slot.copy_from_slice(&event.to_bytes());
@@ -86,6 +150,16 @@ impl DevFile for InputDevFile {
 
     fn write(&mut self, _buf: &[u8], _offset: usize) -> Result<usize, WriteError> {
         Err(WriteError::NotWritable)
+    }
+
+    /// The file is readable when its queue holds an event.
+    fn readiness(&mut self) -> Readiness {
+        self.hub.drain();
+        Readiness {
+            readable: !self.queue.lock().is_empty(),
+            writable: false,
+            hung_up: false,
+        }
     }
 
     fn stat(&mut self, stat: &mut Stat) -> Result<(), StatError> {
@@ -102,7 +176,7 @@ impl DevFile for InputDevFile {
     ) -> Result<usize, IoctlError> {
         match request {
             IoctlRequest::InputGetInfo => {
-                let mut device = self.device.lock();
+                let mut device = self.hub.device.lock();
                 let ids = device.ids().map_err(|_| IoctlError::InvalidArgument)?;
                 let name = device.name().map_err(|_| IoctlError::InvalidArgument)?;
                 drop(device);
@@ -113,6 +187,7 @@ impl DevFile for InputDevFile {
                 let event_type =
                     u8::try_from(codes.event_type).map_err(|_| IoctlError::InvalidArgument)?;
                 let supported = self
+                    .hub
                     .device
                     .lock()
                     .ev_bits(event_type)

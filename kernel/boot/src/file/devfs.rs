@@ -5,7 +5,7 @@ use conquer_once::spin::OnceCell;
 use kernel_abi::S_IFCHR;
 use kernel_devfs::{ArcLockedDevFs, DevFile, Null, Serial};
 use kernel_vfs::path::AbsolutePath;
-use kernel_vfs::{ReadError, Stat, StatError, WriteError};
+use kernel_vfs::{ReadError, Readiness, Stat, StatError, WriteError};
 use raw_cpuid::CpuId;
 use tracing::{Level, instrument};
 
@@ -88,6 +88,10 @@ impl DevFile for Urandom {
         stat.size = 0;
         stat.mode = S_IFCHR | 0o444;
         Ok(())
+    }
+
+    fn readiness(&mut self) -> Readiness {
+        Readiness::ALWAYS
     }
 }
 

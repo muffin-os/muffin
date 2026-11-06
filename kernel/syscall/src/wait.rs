@@ -1,7 +1,7 @@
 use kernel_abi::{ECHILD, ESRCH, Errno, ProcessId, WaitOptions};
 use tracing::{Level, instrument};
 
-use crate::access::{Child, Identity, PermissionAccess, WaitAccess};
+use crate::access::{Child, Identity, PermissionAccess, SleepAccess, WaitAccess};
 use crate::ptr::UserspaceMutPtr;
 
 #[instrument(level = Level::TRACE, skip(cx))]
@@ -28,7 +28,7 @@ pub enum WaitTarget {
 /// `ECHILD` when no child matches `target`. `EINTR` when a signal interrupts
 /// the wait.
 #[instrument(level = Level::TRACE, skip(cx, status))]
-pub fn sys_waitpid<Cx: WaitAccess + PermissionAccess>(
+pub fn sys_waitpid<Cx: WaitAccess + SleepAccess + PermissionAccess>(
     cx: &Cx,
     target: WaitTarget,
     options: WaitOptions,
@@ -82,7 +82,7 @@ mod tests {
     struct TestContext {
         current: ProcessId,
         processes: RefCell<Vec<(ProcessId, ProcessId, Option<ExitOutcome>)>>,
-        interrupt_sleep: bool,
+        should_interrupt_sleep: bool,
     }
 
     impl TestContext {
@@ -90,7 +90,7 @@ mod tests {
             Self {
                 current,
                 processes: RefCell::new(Vec::new()),
-                interrupt_sleep: false,
+                should_interrupt_sleep: false,
             }
         }
 
@@ -144,9 +144,11 @@ mod tests {
         fn remove_process(&self, pid: ProcessId) {
             self.processes.borrow_mut().retain(|(p, _, _)| *p != pid);
         }
+    }
 
+    impl SleepAccess for TestContext {
         fn sleep_one_poll(&self) -> Result<(), Errno> {
-            if self.interrupt_sleep {
+            if self.should_interrupt_sleep {
                 return Err(EINTR);
             }
             // The child exits during the sleep.
@@ -222,7 +224,7 @@ mod tests {
     #[test]
     fn waitpid_returns_eintr_from_the_sleep() {
         let mut cx = TestContext::new(pid(1));
-        cx.interrupt_sleep = true;
+        cx.should_interrupt_sleep = true;
         cx.add(pid(2), pid(1), None);
         assert_eq!(
             sys_waitpid(&cx, WaitTarget::Child(pid(2)), WaitOptions::empty(), None),

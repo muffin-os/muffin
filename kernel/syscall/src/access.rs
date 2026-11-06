@@ -3,17 +3,21 @@ use kernel_abi::{Errno, ProcessId};
 mod cwd;
 mod file;
 mod mem;
+mod poll;
 mod process;
 mod region;
 mod signal;
+mod sleep;
 mod socket;
 
 pub use cwd::*;
 pub use file::*;
 pub use mem::*;
+pub use poll::*;
 pub use process::*;
 pub use region::*;
 pub use signal::*;
+pub use sleep::*;
 pub use socket::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

@@ -11,6 +11,7 @@ use kernel_abi::{
     EADDRINUSE, EAGAIN, ECONNREFUSED, EDESTADDRREQ, EINVAL, EISCONN, ENOBUFS, ENOTCONN, EOPNOTSUPP,
     EPIPE, Errno, ShutdownHow,
 };
+use kernel_vfs::Readiness;
 use kernel_vfs::path::AbsoluteOwnedPath;
 use spin::Mutex;
 
@@ -379,6 +380,53 @@ impl<N: Notify, P: Send + Sync + 'static> UnixSocket<N, P> {
         }
         Ok(())
     }
+
+    /// A listener is readable when it has a pending connection. A connected
+    /// socket is readable when `try_read` returns at once. It is writable when
+    /// the peer inbox has space. It is hung up when the peer is gone.
+    pub fn readiness(&self) -> Readiness {
+        let state = self.state.lock();
+        let (peer, readable, outbox_closed) = match &*state {
+            State::Unbound | State::Bound(_) => return Readiness::default(),
+            State::Listening { pending, .. } => {
+                return Readiness {
+                    readable: !pending.is_empty(),
+                    ..Readiness::default()
+                };
+            }
+            State::Connected {
+                peer,
+                inbox,
+                inbox_closed,
+                outbox_closed,
+            } => (
+                peer.clone(),
+                !inbox.is_empty() || *inbox_closed,
+                *outbox_closed,
+            ),
+        };
+        // Do not hold the two locks at the same time, as in `try_sendmsg`.
+        drop(state);
+        let Some(peer) = peer.upgrade() else {
+            return Readiness {
+                readable: true,
+                writable: false,
+                hung_up: true,
+            };
+        };
+        let writable = !outbox_closed
+            && match &*peer.state.lock() {
+                State::Connected { inbox, .. } => inbox.bytes.len() < SOCKET_BUFFER_BYTES,
+                State::Unbound | State::Bound(_) | State::Listening { .. } => {
+                    unreachable!("a peer is always connected")
+                }
+            };
+        Readiness {
+            readable,
+            writable,
+            hung_up: false,
+        }
+    }
 }
 
 impl<N: Notify, P: Send + Sync + 'static> Debug for UnixSocket<N, P> {
@@ -612,5 +660,84 @@ mod tests {
             assert_eq!(c.try_sendmsg(b"a", alloc::vec![0; 16]), Ok(1));
         }
         assert_eq!(c.try_sendmsg(b"a", alloc::vec![0; 16]), Err(ENOBUFS));
+    }
+
+    #[test]
+    fn listener_is_readable_with_a_pending_connection() {
+        let l = listener("/poll-listener", 4);
+        assert_eq!(l.readiness(), Readiness::default());
+        let c = Socket::new(&REGISTRY);
+        c.try_connect(&path("/poll-listener")).unwrap();
+        assert_eq!(
+            l.readiness(),
+            Readiness {
+                readable: true,
+                writable: false,
+                hung_up: false,
+            }
+        );
+        let _s = l.try_accept().unwrap();
+        assert_eq!(l.readiness(), Readiness::default());
+    }
+
+    #[test]
+    fn unconnected_socket_is_not_ready() {
+        let s = Socket::new(&REGISTRY);
+        assert_eq!(s.readiness(), Readiness::default());
+        s.bind(path("/poll-bound")).unwrap();
+        assert_eq!(s.readiness(), Readiness::default());
+    }
+
+    #[test]
+    fn connected_socket_is_readable_with_bytes() {
+        let (_l, c, s) = pair("/poll-bytes");
+        let idle = Readiness {
+            readable: false,
+            writable: true,
+            hung_up: false,
+        };
+        assert_eq!(s.readiness(), idle);
+        c.try_write(b"x").unwrap();
+        assert_eq!(
+            s.readiness(),
+            Readiness {
+                readable: true,
+                ..idle
+            }
+        );
+        s.try_read(&mut [0; 4]).unwrap();
+        assert_eq!(s.readiness(), idle);
+    }
+
+    #[test]
+    fn peer_drop_gives_readable_and_hung_up() {
+        let (_l, c, s) = pair("/poll-hup");
+        drop(c);
+        assert_eq!(
+            s.readiness(),
+            Readiness {
+                readable: true,
+                writable: false,
+                hung_up: true,
+            }
+        );
+    }
+
+    #[test]
+    fn full_peer_inbox_is_not_writable() {
+        let (_l, c, s) = pair("/poll-full");
+        let big = alloc::vec![7; SOCKET_BUFFER_BYTES];
+        assert_eq!(c.try_write(&big), Ok(SOCKET_BUFFER_BYTES));
+        assert!(!c.readiness().writable);
+        s.try_read(&mut [0; 1]).unwrap();
+        assert!(c.readiness().writable);
+    }
+
+    #[test]
+    fn shutdown_write_is_not_writable_and_peer_reads_eof() {
+        let (_l, c, s) = pair("/poll-shut");
+        c.shutdown(ShutdownHow::Write).unwrap();
+        assert!(!c.readiness().writable);
+        assert!(s.readiness().readable);
     }
 }

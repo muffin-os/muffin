@@ -10,7 +10,7 @@ use kernel_abi::{
 };
 use kernel_syscall::access::{
     AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
-    MemoryRegion as _, SignalAccess, WaitAccess,
+    MemoryRegion as _, SignalAccess, SleepAccess,
 };
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
@@ -35,6 +35,7 @@ use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::VirtualMemoryAllocator;
 use crate::{U64Ext, UsizeExt};
 
+mod poll;
 mod signal;
 mod socket;
 mod wait;

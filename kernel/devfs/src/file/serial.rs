@@ -2,7 +2,7 @@ use core::fmt::Write;
 use core::str::from_utf8;
 
 use kernel_abi::S_IFCHR;
-use kernel_vfs::{ReadError, Stat, StatError, WriteError};
+use kernel_vfs::{ReadError, Readiness, Stat, StatError, WriteError};
 
 use crate::DevFile;
 
@@ -37,5 +37,9 @@ where
         stat.size = 0;
         stat.mode = S_IFCHR | 0o666;
         Ok(())
+    }
+
+    fn readiness(&mut self) -> Readiness {
+        Readiness::ALWAYS
     }
 }
