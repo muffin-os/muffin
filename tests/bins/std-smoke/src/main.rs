@@ -20,6 +20,7 @@ const STEPS: &[(&str, Step)] = &[
     ("args", args),
     ("env", environment),
     ("read", read),
+    ("try_clone", try_clone),
     ("write", write),
     ("readdir", readdir),
     ("metadata", metadata),
@@ -77,6 +78,15 @@ fn environment() -> Result<(), Box<dyn Error>> {
 fn read() -> Result<(), Box<dyn Error>> {
     let text = fs::read_to_string("/data/hello.txt")?;
     check(text == "muffin says hi\n", "unexpected content")
+}
+
+fn try_clone() -> Result<(), Box<dyn Error>> {
+    let mut file = File::open("/data/hello.txt")?;
+    let mut clone = file.try_clone()?;
+    file.seek(SeekFrom::Start(7))?;
+    let mut tail = String::new();
+    clone.read_to_string(&mut tail)?;
+    check(tail == "says hi\n", "the clone does not share the offset")
 }
 
 fn write() -> Result<(), Box<dyn Error>> {

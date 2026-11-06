@@ -221,44 +221,28 @@ fn close_nval(path: &str) -> CaseResult {
 
 /// Case 6: a replacement of the polled descriptor makes the wait observe the
 /// replacement. The old description stays alive and becomes readable, but
-/// only data on the replacement may end the wait.
-///
-/// The kernel has no `dup2`. A received descriptor takes the lowest free
-/// number, so the polled number comes from a receive, and the replacement
-/// receive after its close reuses it. The close and the install are two
-/// syscalls. A waiter that wakes between them sees `NVAL` and polls again.
-/// Thus the final outcome is deterministic.
+/// only data on the replacement may end the wait. `dup2` replaces the
+/// descriptor in one step, so the waiter never sees the number closed.
 fn replacement(path: &str) -> CaseResult {
     let (old_a, mut old_b) = pair(&format!("{path}-old"))?;
     let (new_a, mut new_b) = pair(&format!("{path}-new"))?;
-    let (transfer_a, transfer_b) = pair(&format!("{path}-transfer"))?;
     let errno = |what: &'static str| move |e| format!("{what}: {e:?}");
-    sys::send_fd(transfer_b.as_raw_fd(), old_a.as_raw_fd()).map_err(errno("send old"))?;
-    let fd = sys::recv_fd(transfer_a.as_raw_fd()).map_err(errno("receive old"))?;
-    sys::send_fd(transfer_b.as_raw_fd(), new_a.as_raw_fd()).map_err(errno("send new"))?;
+    let fd = sys::dupfd(old_a.as_raw_fd(), 0).map_err(errno("dup old"))?;
     let new_sent = AtomicBool::new(false);
     let (ready_tx, ready_rx) = mpsc::channel();
     let revents = thread::scope(|s| -> Result<PollEvents, Box<dyn Error>> {
         let waiter = s.spawn(|| -> Result<PollEvents, String> {
             let _ = ready_tx.send(());
-            loop {
-                let mut fds = [PollFd::new(fd, PollEvents::IN)];
-                poll_fds(&mut fds, None)?;
-                if fds[0].revents != PollEvents::NVAL {
-                    if !new_sent.load(Ordering::Acquire) {
-                        return Err(format!("woke before new data: {:?}", fds[0].revents));
-                    }
-                    return Ok(fds[0].revents);
-                }
+            let mut fds = [PollFd::new(fd, PollEvents::IN)];
+            poll_fds(&mut fds, None)?;
+            if !new_sent.load(Ordering::Acquire) {
+                return Err(format!("woke before new data: {:?}", fds[0].revents));
             }
+            Ok(fds[0].revents)
         });
         ready_rx.recv()?;
-        sys::close(fd).map_err(errno("close"))?;
-        let installed = sys::recv_fd(transfer_a.as_raw_fd()).map_err(errno("receive new"))?;
-        check(
-            installed == fd,
-            &format!("the replacement is fd {installed}"),
-        )?;
+        let installed = sys::dup2(new_a.as_raw_fd(), fd).map_err(errno("dup2"))?;
+        check(installed == fd, &format!("dup2 returned fd {installed}"))?;
         old_b.write_all(b"old")?;
         new_sent.store(true, Ordering::Release);
         new_b.write_all(b"new")?;

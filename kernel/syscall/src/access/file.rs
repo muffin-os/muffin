@@ -156,6 +156,28 @@ pub trait FileAccess {
     }
 }
 
+/// This trait gives `dup2` and `F_DUPFD` the descriptor table. A duplicate
+/// shares the open file description, so it shares the offset.
+pub trait DuplicateAccess {
+    type Fd: From<c_int> + Into<c_int> + Clone + core::fmt::Debug;
+
+    /// Installs the description of `fd` on the lowest free descriptor that
+    /// is not below `min`, and returns that descriptor.
+    ///
+    /// # Errors
+    /// Returns `EBADF` when `fd` is not open. Returns `EMFILE` when no
+    /// descriptor number is free.
+    fn duplicate(&self, fd: Self::Fd, min: Self::Fd) -> Result<Self::Fd, Errno>;
+
+    /// Makes `target` refer to the description of `fd`. An open `target`
+    /// closes in the same step, so no other call can see `target` free. When
+    /// `fd` equals `target`, nothing changes.
+    ///
+    /// # Errors
+    /// Returns `EBADF` when `fd` is not open.
+    fn duplicate_to(&self, fd: Self::Fd, target: Self::Fd) -> Result<(), Errno>;
+}
+
 #[cfg(test)]
 pub mod testing {
     use alloc::borrow::ToOwned;

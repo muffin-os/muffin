@@ -2,8 +2,8 @@ use core::ffi::{c_char, c_int, c_void};
 use core::{mem, ptr, slice};
 
 use kernel_abi::{
-    DirentHeader, EINVAL, ENOSYS, ENOTDIR, ENOTTY, Errno, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD,
-    F_GETFL, F_SETFD, F_SETFL, IoctlRequest, O_RDONLY, Stat, Whence,
+    DirentHeader, EINVAL, ENOTDIR, ENOTTY, Errno, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL,
+    F_SETFD, F_SETFL, IoctlRequest, O_RDONLY, Stat, Whence,
 };
 use libc::{DIR, DT_UNKNOWN, S_IFDIR, S_IFMT, dirent, off_t, ssize_t};
 
@@ -136,15 +136,33 @@ pub unsafe extern "C" fn lstat(path: *const c_char, buf: *mut libc::stat) -> c_i
 }
 
 /// Accepts the descriptor and status flag commands without effect, because
-/// the kernel keeps no such flags. Duplication fails with `ENOSYS`, because
-/// the kernel has no dup syscall.
+/// the kernel keeps no such flags. For the same reason, `F_DUPFD_CLOEXEC`
+/// duplicates like `F_DUPFD`.
+///
+/// # Safety
+///
+/// For `F_DUPFD` and `F_DUPFD_CLOEXEC`, the variadic argument must be a
+/// `c_int`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcntl(_: c_int, cmd: c_int, _: ...) -> c_int {
+pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, mut args: ...) -> c_int {
     match cmd {
         F_GETFD | F_SETFD | F_GETFL | F_SETFL => 0,
-        F_DUPFD | F_DUPFD_CLOEXEC => fail(ENOSYS),
+        F_DUPFD | F_DUPFD_CLOEXEC => {
+            let min = unsafe { args.next_arg::<c_int>() };
+            ret(muffin_sys::dupfd(fd, min))
+        }
         _ => fail(EINVAL),
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dup(fd: c_int) -> c_int {
+    ret(muffin_sys::dupfd(fd, 0))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dup2(fd: c_int, fd2: c_int) -> c_int {
+    ret(muffin_sys::dup2(fd, fd2))
 }
 
 /// Reads one pointer argument, the buffer of the request. An unknown request

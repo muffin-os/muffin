@@ -6,7 +6,7 @@ use core::time::Duration;
 
 use access::KernelAccess;
 use kernel_abi::{
-    AF_UNIX, ClockId, EFAULT, EINTR, EINVAL, ENOENT, ENOSYS, ERANGE, ESRCH, Errno, IoVec,
+    AF_UNIX, ClockId, EBADF, EFAULT, EINTR, EINVAL, ENOENT, ENOSYS, ERANGE, ESRCH, Errno, IoVec,
     IoctlRequest, MapFlags, MsgHdr, PATH_MAX, POLL_TIMEOUT_INFINITE, PollFd, ProcessId, ProtFlags,
     SOMAXCONN, SaFamily, ShutdownHow, SigAction, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen,
     Timespec, WaitOptions, Whence, syscall_name,
@@ -24,8 +24,8 @@ use kernel_syscall::socket::{
     sys_socket,
 };
 use kernel_syscall::unistd::{
-    sys_close, sys_fsync, sys_ftruncate, sys_getcwd, sys_getdents, sys_ioctl, sys_lseek, sys_read,
-    sys_write,
+    sys_close, sys_dup2, sys_dupfd, sys_fsync, sys_ftruncate, sys_getcwd, sys_getdents, sys_ioctl,
+    sys_lseek, sys_read, sys_write,
 };
 use kernel_syscall::wait::{WaitTarget, sys_getppid, sys_waitpid};
 use kernel_unix_socket::SOCKET_BUFFER_BYTES;
@@ -78,6 +78,8 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_IOCTL => dispatch_sys_ioctl(arg1, arg2, arg3),
         kernel_abi::SYS_FSYNC => dispatch_sys_fsync(arg1),
         kernel_abi::SYS_CLOSE => dispatch_sys_close(arg1),
+        kernel_abi::SYS_DUP2 => dispatch_sys_dup2(arg1, arg2),
+        kernel_abi::SYS_DUPFD => dispatch_sys_dupfd(arg1, arg2),
         kernel_abi::SYS_FSTAT => dispatch_sys_fstat(arg1, arg2),
         kernel_abi::SYS_LSEEK => dispatch_sys_lseek(arg1, arg2, arg3),
         kernel_abi::SYS_CLOCK_GETTIME => dispatch_sys_clock_gettime(arg1, arg2),
@@ -403,6 +405,27 @@ fn dispatch_sys_ftruncate(fd: usize, len: usize) -> Result<usize, Errno> {
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     sys_ftruncate(&cx, fd, len as i64)
+}
+
+/// Userspace passes a `c_int` sign-extended into the register.
+fn c_int_arg(arg: usize, invalid: Errno) -> Result<c_int, Errno> {
+    c_int::try_from(arg as isize).map_err(|_| invalid)
+}
+
+fn dispatch_sys_dup2(fildes: usize, fildes2: usize) -> Result<usize, Errno> {
+    sys_dup2(
+        &KernelAccess::new(),
+        c_int_arg(fildes, EBADF)?,
+        c_int_arg(fildes2, EBADF)?,
+    )
+}
+
+fn dispatch_sys_dupfd(fildes: usize, min: usize) -> Result<usize, Errno> {
+    sys_dupfd(
+        &KernelAccess::new(),
+        c_int_arg(fildes, EBADF)?,
+        c_int_arg(min, EINVAL)?,
+    )
 }
 
 fn dispatch_sys_close(fd: usize) -> Result<usize, Errno> {

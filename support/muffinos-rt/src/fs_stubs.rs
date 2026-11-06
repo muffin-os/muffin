@@ -22,8 +22,6 @@ enosys! {
     fn truncate(*const c_char, off_t) -> c_int;
     fn utimensat(c_int, *const c_char, *const timespec, c_int) -> c_int;
     fn futimens(c_int, *const timespec) -> c_int;
-    fn dup(c_int) -> c_int;
-    fn dup2(c_int, c_int) -> c_int;
     fn pipe(*mut c_int) -> c_int;
     fn pipe2(*mut c_int, c_int) -> c_int;
 }

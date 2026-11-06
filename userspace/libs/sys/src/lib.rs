@@ -18,21 +18,21 @@ pub use heap::GrowingHeap;
 pub use kernel_abi::{
     AF_UNIX, ARG_MAX, ClockId, CmsgHdr, DefaultAction, DirentHeader, E2BIG, EACCES, EADDRINUSE,
     EAFNOSUPPORT, EBADF, EBUSY, ECONNREFUSED, ECONNRESET, EDESTADDRREQ, EEXIST, EFAULT, EINTR,
-    EINVAL, EISDIR, EMSGSIZE, ENAMETOOLONG, ENOBUFS, ENOENT, ENOEXEC, ENOMEM, ENOSYS, ENOTCONN,
-    ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW, EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE, ERANGE,
-    ESPIPE, ESRCH, Errno, FbScreenInfo, InputDeviceInfo, InputEventKind, InputSupportedCodes,
-    IoVec, IoctlRequest, MSG_CTRUNC, MapFlags, MsgHdr, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CLOFORK,
-    O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW, O_NONBLOCK, O_RDONLY,
-    O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY, PATH_MAX,
-    POLL_TIMEOUT_INFINITE, PollEvents, PollFd, ProtFlags, S_IFMT, S_IFSOCK, SCM_RIGHTS,
+    EINVAL, EISDIR, EMFILE, EMSGSIZE, ENAMETOOLONG, ENOBUFS, ENOENT, ENOEXEC, ENOMEM, ENOSYS,
+    ENOTCONN, ENOTDIR, ENOTSOCK, ENOTTY, EOVERFLOW, EPERM, EPIPE, EPROTONOSUPPORT, EPROTOTYPE,
+    ERANGE, ESPIPE, ESRCH, Errno, FbScreenInfo, InputDeviceInfo, InputEventKind,
+    InputSupportedCodes, IoVec, IoctlRequest, MSG_CTRUNC, MapFlags, MsgHdr, O_ACCMODE, O_APPEND,
+    O_CLOEXEC, O_CLOFORK, O_CREAT, O_DIRECTORY, O_DSYNC, O_EXCL, O_EXEC, O_NOCTTY, O_NOFOLLOW,
+    O_NONBLOCK, O_RDONLY, O_RDWR, O_RSYNC, O_SEARCH, O_SYNC, O_TRUNC, O_TTY_INIT, O_WRONLY,
+    PATH_MAX, POLL_TIMEOUT_INFINITE, PollEvents, PollFd, ProtFlags, S_IFMT, S_IFSOCK, SCM_RIGHTS,
     SOCK_STREAM, SOL_SOCKET, SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME,
-    SYS_CLOSE, SYS_CONNECT, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC,
-    SYS_FTRUNCATE, SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL,
-    SYS_LISTEN, SYS_LSEEK, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POLL,
-    SYS_POWEROFF, SYS_READ, SYS_RECVMSG, SYS_SENDMSG, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
-    SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE, SaFamily,
-    SaFlags, ShutdownHow, SigAction, SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen,
-    Stat, StrSlice, Timespec, WaitOptions, Whence,
+    SYS_CLOSE, SYS_CONNECT, SYS_DUP2, SYS_DUPFD, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK,
+    SYS_FSTAT, SYS_FSYNC, SYS_FTRUNCATE, SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID,
+    SYS_IOCTL, SYS_KILL, SYS_LISTEN, SYS_LSEEK, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP,
+    SYS_OPEN, SYS_POLL, SYS_POWEROFF, SYS_READ, SYS_RECVMSG, SYS_SENDMSG, SYS_SHUTDOWN,
+    SYS_SIGACTION, SYS_SIGPENDING, SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_SOCKET, SYS_UNLINK,
+    SYS_WAITPID, SYS_WRITE, SaFamily, SaFlags, ShutdownHow, SigAction, SigHandler, SigMaskHow,
+    SigSet, Signal, SockAddrUn, SockLen, Stat, StrSlice, Timespec, WaitOptions, Whence,
 };
 
 pub fn exit(code: i32) -> ! {
@@ -152,6 +152,25 @@ pub fn unlink(path: &str) -> Result<(), Errno> {
 
 pub fn close(fd: c_int) -> Result<(), Errno> {
     ret(unsafe { syscall1(SYS_CLOSE, fd as usize) }).map(|_| ())
+}
+
+/// Makes `fd2` refer to the open file description of `fd` and returns `fd2`.
+/// An open `fd2` closes in the same step.
+///
+/// # Errors
+/// Returns `EBADF` when `fd` is not open or `fd2` is negative.
+pub fn dup2(fd: c_int, fd2: c_int) -> Result<c_int, Errno> {
+    ret(unsafe { syscall2(SYS_DUP2, fd as usize, fd2 as usize) }).map(|fd| fd as c_int)
+}
+
+/// Installs the open file description of `fd` on the lowest free descriptor
+/// that is not below `min`, as `fcntl` with `F_DUPFD` does.
+///
+/// # Errors
+/// Returns `EBADF` when `fd` is not open, `EINVAL` when `min` is negative and
+/// `EMFILE` when no descriptor number is free.
+pub fn dupfd(fd: c_int, min: c_int) -> Result<c_int, Errno> {
+    ret(unsafe { syscall2(SYS_DUPFD, fd as usize, min as usize) }).map(|fd| fd as c_int)
 }
 
 pub fn clock_gettime(clockid: ClockId, tp: &mut Timespec) -> Result<(), Errno> {

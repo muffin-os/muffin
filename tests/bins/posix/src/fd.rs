@@ -1,8 +1,8 @@
 use minilib::{
     DirentHeader, EACCES, EBADF, EEXIST, EFAULT, EINVAL, EISDIR, ENOENT, ENOTDIR, ENOTTY,
     FbScreenInfo, IoctlRequest, O_CREAT, O_EXCL, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY, SYS_IOCTL,
-    SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, close, fstat, fsync, getdents, ioctl, lseek,
-    open, read, ret, write,
+    SYS_LSEEK, SYS_READ, SYS_WRITE, Stat, Whence, close, dup2, dupfd, fstat, fsync, getdents,
+    ioctl, lseek, open, read, ret, write,
 };
 
 use crate::check;
@@ -225,4 +225,53 @@ pub fn run() {
         open("/dev/newfile", O_CREAT | O_WRONLY),
         EACCES,
     );
+    duplicates();
+}
+
+fn duplicates() {
+    let original = check::unwrap_or_fail("fd/dup_open", open("/data/hello.txt", O_RDONLY));
+    let copy = check::unwrap_or_fail("fd/dup", dupfd(original, 0));
+    check::require("fd/dup_new_number", copy != original);
+    check::expect_ok("fd/dup_seek_original", lseek(original, 10, Whence::Set), 10);
+    check::expect_ok("fd/dup_shares_offset", lseek(copy, 0, Whence::Cur), 10);
+
+    check::expect_ok("fd/dupfd_min", dupfd(original, 100), 100);
+    check::expect_ok("fd/dupfd_min_next_free", dupfd(original, 100), 101);
+    check::expect_err("fd/dupfd_negative_min", dupfd(original, -1), EINVAL);
+    check::expect_err("fd/dupfd_unopened", dupfd(UNOPENED_FD, 0), EBADF);
+
+    let target = check::unwrap_or_fail("fd/dup2_target", open("/dev/null", O_RDWR));
+    check::expect_ok("fd/dup2_replaces", dup2(original, target), target);
+    let mut tail = [0_u8; 5];
+    check::expect_ok("fd/dup2_reads_source", read(target, &mut tail), 5);
+    check::require("fd/dup2_reads_source_contents", &tail == b"s hi\n");
+    check::expect_ok("fd/dup2_shares_offset", lseek(copy, 0, Whence::Cur), 15);
+    check::expect_ok("fd/dup2_same_fd", dup2(original, original), original);
+    check::expect_err(
+        "fd/dup2_same_unopened",
+        dup2(UNOPENED_FD, UNOPENED_FD),
+        EBADF,
+    );
+    check::expect_err("fd/dup2_negative_target", dup2(original, -1), EBADF);
+    check::expect_err("fd/dup2_unopened_source", dup2(UNOPENED_FD, target), EBADF);
+    check::expect_ok(
+        "fd/dup2_failure_keeps_target",
+        lseek(target, 0, Whence::Cur),
+        15,
+    );
+    check::expect_ok(
+        "fd/dup2_unopened_target",
+        dup2(original, UNOPENED_FD),
+        UNOPENED_FD,
+    );
+
+    check::expect_ok("fd/dup_close_original", close(original), ());
+    check::expect_ok("fd/dup_outlives_original", lseek(copy, 0, Whence::Set), 0);
+    let mut buf = [0_u8; HELLO.len()];
+    check::expect_ok("fd/dup_read_after_close", read(copy, &mut buf), HELLO.len());
+    check::require("fd/dup_read_after_close_contents", &buf[..] == HELLO);
+
+    for fd in [copy, 100, 101, target, UNOPENED_FD] {
+        check::expect_ok("fd/dup_close", close(fd), ());
+    }
 }

@@ -70,4 +70,6 @@ n! {
     SYS_ADDR_WAIT = 74,
     SYS_ADDR_WAKE = 75,
     SYS_MPROTECT = 76,
+    SYS_DUP2 = 77,
+    SYS_DUPFD = 78,
 }

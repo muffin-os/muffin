@@ -1,17 +1,19 @@
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ffi::c_int;
 use core::ops::Range;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
-    EACCES, EAGAIN, EBADF, EBUSY, EEXIST, EFBIG, EINTR, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODEV,
-    ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTTY, EPERM, EPIPE, ESPIPE, Errno, FdNum,
+    EACCES, EAGAIN, EBADF, EBUSY, EEXIST, EFBIG, EINTR, EINVAL, EIO, EISDIR, EMFILE, ENAMETOOLONG,
+    ENODEV, ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTTY, EPERM, EPIPE, ESPIPE, Errno, FdNum,
     IoctlRequest, ProtFlags, S_IFSOCK, SigInfo, SigInfoField, Signal, Stat,
 };
 use kernel_syscall::access::{
-    AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, FileAccess, Location,
-    MemoryRegion as _, SignalAccess,
+    AccessMode, AllocationStrategy, CreateMappingError, CwdAccess, DuplicateAccess, FileAccess,
+    Location, MemoryRegion as _, SignalAccess,
 };
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::AbsolutePath;
@@ -61,25 +63,23 @@ impl KernelAccess {
 
     /// Installs `ofd` on the lowest free descriptor.
     fn install(&self, ofd: Arc<OpenFileDescription>) -> FdNum {
+        self.install_from(ofd, FdNum::from(0))
+            .expect("descriptor numbers exhausted")
+    }
+
+    /// Installs `ofd` on the lowest free descriptor that is not below `min`.
+    /// Returns `None` when no such number is free.
+    fn install_from(&self, ofd: Arc<OpenFileDescription>, min: FdNum) -> Option<FdNum> {
         let num = {
             let mut table = self.process.file_descriptors().write();
-            let num = table
-                .keys()
-                .fold(0, |acc, &fd| {
-                    if acc == Into::<i32>::into(fd) {
-                        acc + 1
-                    } else {
-                        acc
-                    }
-                })
-                .into();
+            let num = lowest_free(&table, min)?;
             let fd = FileDescriptor::new(num, FileDescriptorFlags::empty(), ofd);
             table.insert(num, fd);
             self.process.advance_fd_generation(&mut table);
             num
         };
         self.process.fd_changes().wake_all();
-        num
+        Some(num)
     }
 
     /// Retries `op` while it would block. Between tries, the task parks on `queue`.
@@ -131,6 +131,53 @@ fn finish_read(
     // between processes, so a concurrent read can lose an offset update.
     ofd.position().store(offset + read.into_u64(), Relaxed);
     Ok(read)
+}
+
+/// Returns the lowest descriptor number that is not below `min` and not in
+/// `table`. Returns `None` when every such number is in use.
+fn lowest_free(table: &BTreeMap<FdNum, FileDescriptor>, min: FdNum) -> Option<FdNum> {
+    let mut candidate = c_int::from(min);
+    for &used in table.range(min..).map(|(num, _)| num) {
+        if c_int::from(used) != candidate {
+            break;
+        }
+        candidate = candidate.checked_add(1)?;
+    }
+    Some(FdNum::from(candidate))
+}
+
+impl DuplicateAccess for KernelAccess {
+    type Fd = FdNum;
+
+    fn duplicate(&self, fd: FdNum, min: FdNum) -> Result<FdNum, Errno> {
+        let description = self
+            .process
+            .file_descriptors()
+            .read()
+            .get(&fd)
+            .ok_or(EBADF)?
+            .file_description()
+            .clone();
+        self.install_from(description, min).ok_or(EMFILE)
+    }
+
+    fn duplicate_to(&self, fd: FdNum, target: FdNum) -> Result<(), Errno> {
+        let replaced = {
+            let mut table = self.process.file_descriptors().write();
+            let description = table.get(&fd).ok_or(EBADF)?.file_description().clone();
+            if fd == target {
+                return Ok(());
+            }
+            let duplicate = FileDescriptor::new(target, FileDescriptorFlags::empty(), description);
+            let replaced = table.insert(target, duplicate);
+            self.process.advance_fd_generation(&mut table);
+            replaced
+        };
+        self.process.fd_changes().wake_all();
+        // Its destructor can notify socket peers, so it runs without the table lock.
+        drop(replaced);
+        Ok(())
+    }
 }
 
 impl CwdAccess for KernelAccess {

@@ -14,6 +14,7 @@ fn std_smoke() {
         "std-smoke: args ok",
         "std-smoke: env ok",
         "std-smoke: read ok",
+        "std-smoke: try_clone ok",
         "std-smoke: write ok",
         "std-smoke: readdir ok",
         "std-smoke: metadata ok",

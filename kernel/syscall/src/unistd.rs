@@ -1,7 +1,11 @@
-use kernel_abi::{DirentHeader, EINVAL, EIO, EOVERFLOW, ERANGE, Errno, IoctlRequest, Whence};
+use core::ffi::c_int;
+
+use kernel_abi::{
+    DirentHeader, EBADF, EINVAL, EIO, EOVERFLOW, ERANGE, Errno, IoctlRequest, Whence,
+};
 use tracing::{Level, instrument};
 
-use crate::access::{CwdAccess, FileAccess};
+use crate::access::{CwdAccess, DuplicateAccess, FileAccess};
 
 /// This function writes the working directory and a terminating NUL into
 /// `buf`. It returns the number of bytes written, the NUL included.
@@ -52,6 +56,40 @@ pub fn sys_fsync<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd) -> Result<usize, Errno
 
 pub fn sys_close<Cx: FileAccess>(cx: &Cx, fildes: Cx::Fd) -> Result<usize, Errno> {
     cx.close(fildes).map(|()| 0)
+}
+
+/// Runs POSIX `dup2`. It makes `fildes2` refer to the description of
+/// `fildes` and returns `fildes2`. An open `fildes2` closes in the same step.
+///
+/// # Errors
+/// Returns `EBADF` when `fildes2` is negative. Passes through any error of
+/// [`DuplicateAccess::duplicate_to`].
+#[instrument(level = Level::TRACE, skip(cx))]
+pub fn sys_dup2<Cx: DuplicateAccess>(
+    cx: &Cx,
+    fildes: c_int,
+    fildes2: c_int,
+) -> Result<usize, Errno> {
+    let target = usize::try_from(fildes2).map_err(|_| EBADF)?;
+    cx.duplicate_to(Cx::Fd::from(fildes), Cx::Fd::from(fildes2))?;
+    Ok(target)
+}
+
+/// Runs `fcntl` with `F_DUPFD`. It returns the lowest free descriptor that
+/// is not below `min` and refers to the description of `fildes`.
+///
+/// # Errors
+/// Returns `EINVAL` when `min` is negative. Passes through any error of
+/// [`DuplicateAccess::duplicate`].
+#[instrument(level = Level::TRACE, skip(cx))]
+pub fn sys_dupfd<Cx: DuplicateAccess>(cx: &Cx, fildes: c_int, min: c_int) -> Result<usize, Errno> {
+    if min < 0 {
+        return Err(EINVAL);
+    }
+    let fd: c_int = cx
+        .duplicate(Cx::Fd::from(fildes), Cx::Fd::from(min))?
+        .into();
+    Ok(fd as usize)
 }
 
 /// Sets the size of the file behind `fildes` to `len`.
@@ -144,16 +182,21 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec;
     use alloc::vec::Vec;
+    use core::cell::Cell;
+    use core::ffi::c_int;
 
-    use kernel_abi::{EBADF, EINVAL, ENOTDIR, EOVERFLOW, ERANGE, Whence};
+    use kernel_abi::{EBADF, EINVAL, ENOTDIR, EOVERFLOW, ERANGE, Errno, Whence};
     use kernel_vfs::CreateMode;
     use kernel_vfs::path::AbsoluteOwnedPath;
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
 
     use crate::access::testing::{MemoryFd, MemoryFile, MemoryFileAccess};
-    use crate::access::{AccessMode, CwdAccess, FileAccess};
-    use crate::unistd::{sys_ftruncate, sys_getcwd, sys_getdents, sys_lseek, sys_read, sys_write};
+    use crate::access::{AccessMode, CwdAccess, DuplicateAccess, FileAccess};
+    use crate::unistd::{
+        sys_dup2, sys_dupfd, sys_ftruncate, sys_getcwd, sys_getdents, sys_lseek, sys_read,
+        sys_write,
+    };
 
     struct Cwd(RwLock<AbsoluteOwnedPath>);
 
@@ -389,5 +432,45 @@ mod tests {
         let (cx, fd) = lseek_fixture();
 
         assert_eq!(Err(ENOTDIR), sys_getdents(&cx, fd, &mut [0_u8; 16]));
+    }
+
+    /// Counts the calls that reach the table.
+    #[derive(Default)]
+    struct DuplicateTable {
+        calls: Cell<usize>,
+    }
+
+    impl DuplicateAccess for DuplicateTable {
+        type Fd = c_int;
+
+        fn duplicate(&self, _fd: c_int, min: c_int) -> Result<c_int, Errno> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(min)
+        }
+
+        fn duplicate_to(&self, _fd: c_int, _target: c_int) -> Result<(), Errno> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dup2_returns_the_target() {
+        let table = DuplicateTable::default();
+        assert_eq!(sys_dup2(&table, 3, 7), Ok(7));
+    }
+
+    #[test]
+    fn dup2_rejects_a_negative_target_before_the_table() {
+        let table = DuplicateTable::default();
+        assert_eq!(sys_dup2(&table, 3, -1), Err(EBADF));
+        assert_eq!(table.calls.get(), 0);
+    }
+
+    #[test]
+    fn dupfd_rejects_a_negative_minimum_before_the_table() {
+        let table = DuplicateTable::default();
+        assert_eq!(sys_dupfd(&table, 3, -1), Err(EINVAL));
+        assert_eq!(table.calls.get(), 0);
     }
 }
