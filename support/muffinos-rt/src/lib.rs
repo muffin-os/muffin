@@ -1,12 +1,12 @@
-//! C runtime that the patched `libc` crate and `std` link against on muffin.
+//! This crate is the C runtime that the patched `libc` crate and `std` link
+//! against on muffin.
 //!
-//! The crate exports `_start`, `environ`, `__errno_location`, the C library
-//! functions that std calls, and the `libm` functions that std's float methods
-//! and LLVM libcalls expect. Each function that has a kernel syscall forwards
-//! to `muffin_sys`. Functions the kernel cannot serve fail with `ENOSYS`. The
-//! process has one thread, so the pthread functions keep their state without
-//! atomics, and each pthread function that needs a second thread returns a
-//! fixed code.
+//! The crate exports `_start`, `environ` and `__errno_location`. It exports
+//! the C library functions that std calls. It also exports the `libm`
+//! functions that std's float methods and LLVM libcalls expect. Each function
+//! that has a kernel syscall forwards to `muffin_sys`. Functions the kernel
+//! cannot serve fail with `ENOSYS`. The pthread functions run threads on the
+//! kernel thread syscalls. Each thread has its own errno.
 //!
 //! On failure, the C functions set errno and return `-1` or a null pointer.
 //! `posix_memalign`, `strerror_r` and the pthread functions return the error
@@ -14,6 +14,8 @@
 #![cfg_attr(not(test), no_std)]
 // `open`, `fcntl` and `ioctl` take C variadic arguments.
 #![cfg_attr(not(test), feature(c_variadic))]
+// Each thread has its own copy of errno and of the pthread state in ELF TLS.
+#![feature(thread_local)]
 // Host unit tests build only the modules with pure logic, without their C
 // symbols. Those symbols would replace the host libc ones in the test binary.
 #![cfg_attr(test, allow(dead_code))]
@@ -33,6 +35,7 @@ macro_rules! enosys {
 
 #[cfg(not(test))]
 mod abi_check;
+mod deadline;
 mod env;
 #[cfg(not(test))]
 mod env_stubs;

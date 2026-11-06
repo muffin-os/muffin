@@ -32,7 +32,7 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
         }
 
         let location = if flags.contains(MapFlags::FIXED) {
-            if addr.as_ptr().is_null() || !addr.addr().is_multiple_of(PAGE_SIZE) {
+            if addr.addr() == 0 || !addr.addr().is_multiple_of(PAGE_SIZE) {
                 return Err(EINVAL);
             }
             addr.validate_range(len)?;
@@ -75,14 +75,13 @@ pub fn sys_mmap<Cx: MemoryRegionAccess>(
     }
 }
 
-/// Removes the mapping at `addr` of `len` bytes.
-///
-/// TODO(tpdenk): unmap part of a mapping once a caller needs it; this unmaps
-/// one whole mapping.
+/// This function removes the pages of `[addr, addr + len)` from the mappings
+/// that overlap the range. `len` rounds up to a whole page. A page without a
+/// mapping is not an error.
 ///
 /// # Errors
-/// Returns `EINVAL` for a zero `len`, for an `addr` that is not page aligned,
-/// and for an `addr`/`len` pair that is not exactly one mapping.
+/// This function returns `EINVAL` for a zero `len` and for an `addr` that is
+/// not page aligned. It passes through each error of [`MemoryRegionAccess::unmap`].
 #[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_munmap<Cx: MemoryRegionAccess>(
     cx: &Cx,
@@ -92,7 +91,33 @@ pub fn sys_munmap<Cx: MemoryRegionAccess>(
     if len == 0 || !addr.addr().is_multiple_of(PAGE_SIZE) {
         return Err(EINVAL);
     }
+    let len = len.checked_next_multiple_of(PAGE_SIZE).ok_or(EINVAL)?;
     cx.unmap(addr, len).map(|()| 0)
+}
+
+/// This function gives the pages of `[addr, addr + len)` the access `prot`.
+/// `len` rounds up to a whole page. With an empty `prot`, each access to the
+/// pages kills the task with `SIGSEGV`.
+///
+/// # Errors
+/// This function returns `EINVAL` for a zero `len`, for an `addr` that is not
+/// page aligned, and for a `prot` with `WRITE` and `EXEC` together. It passes
+/// through each error of [`MemoryRegionAccess::protect`].
+#[instrument(level = Level::TRACE, skip(cx))]
+pub fn sys_mprotect<Cx: MemoryRegionAccess>(
+    cx: &Cx,
+    addr: UserspacePtr<u8>,
+    len: usize,
+    prot: ProtFlags,
+) -> Result<usize, Errno> {
+    if len == 0 || !addr.addr().is_multiple_of(PAGE_SIZE) {
+        return Err(EINVAL);
+    }
+    if prot.contains(ProtFlags::WRITE | ProtFlags::EXEC) {
+        return Err(EINVAL);
+    }
+    let len = len.checked_next_multiple_of(PAGE_SIZE).ok_or(EINVAL)?;
+    cx.protect(addr, len, prot).map(|()| 0)
 }
 
 #[cfg(test)]
@@ -100,14 +125,14 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec::Vec;
 
-    use kernel_abi::{EINVAL, ENODEV, Errno, MapFlags, ProtFlags};
+    use kernel_abi::{EINVAL, ENODEV, ENOMEM, Errno, MapFlags, ProtFlags};
     use spin::mutex::Mutex;
 
     use crate::UserspacePtr;
     use crate::access::{
         AllocationStrategy, CreateMappingError, Location, MemoryRegion, MemoryRegionAccess,
     };
-    use crate::mman::{sys_mmap, sys_munmap};
+    use crate::mman::{sys_mmap, sys_mprotect, sys_munmap};
 
     struct TestRegion {
         addr: UserspacePtr<u8>,
@@ -128,6 +153,11 @@ mod tests {
         mappings: Mutex<Vec<(usize, usize, ProtFlags)>>, // (addr, size, prot)
         regions: Mutex<Vec<(usize, usize)>>,             // (addr, size)
         next_addr: Mutex<usize>,
+        // Each tuple holds the address and the length of one unmap call.
+        unmapped: Mutex<Vec<(usize, usize)>>,
+        // Each tuple holds the address, the length and the protection of one protect call.
+        protected: Mutex<Vec<(usize, usize, ProtFlags)>>,
+        protect_result: Result<(), Errno>,
     }
 
     impl TestMemoryAccess {
@@ -136,6 +166,9 @@ mod tests {
                 mappings: Mutex::new(Vec::new()),
                 regions: Mutex::new(Vec::new()),
                 next_addr: Mutex::new(0x1000), // Start at page boundary
+                unmapped: Mutex::new(Vec::new()),
+                protected: Mutex::new(Vec::new()),
+                protect_result: Ok(()),
             }
         }
     }
@@ -187,15 +220,18 @@ mod tests {
         }
 
         fn unmap(&self, addr: UserspacePtr<u8>, len: usize) -> Result<(), Errno> {
-            let mut regions = self.regions.lock();
-            let index = regions
-                .iter()
-                .position(|&(start, size)| {
-                    start == addr.addr() && size == len.next_multiple_of(4096)
-                })
-                .ok_or(EINVAL)?;
-            regions.remove(index);
+            self.unmapped.lock().push((addr.addr(), len));
             Ok(())
+        }
+
+        fn protect(
+            &self,
+            addr: UserspacePtr<u8>,
+            len: usize,
+            prot: ProtFlags,
+        ) -> Result<(), Errno> {
+            self.protected.lock().push((addr.addr(), len, prot));
+            self.protect_result
         }
     }
 
@@ -444,38 +480,93 @@ mod tests {
         );
     }
 
-    #[test]
-    fn munmap_removes_exactly_one_whole_region() {
-        let cx = Arc::new(TestMemoryAccess::new());
-        let zero = UserspacePtr::try_from_usize(0).unwrap();
-        let addr = sys_mmap(
-            &cx,
-            zero,
-            8192,
-            ProtFlags::READ,
-            MapFlags::ANONYMOUS | MapFlags::PRIVATE,
-            0,
-            0,
-        )
-        .unwrap();
-        let ptr = UserspacePtr::try_from_usize(addr).unwrap();
+    fn ptr(addr: usize) -> UserspacePtr<u8> {
+        UserspacePtr::try_from_usize(addr).unwrap()
+    }
 
-        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr, 0));
+    #[test]
+    fn munmap_rejects_a_zero_len_and_an_unaligned_addr() {
+        let cx = Arc::new(TestMemoryAccess::new());
+
+        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr(0x2000), 0));
+        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr(0x2001), 4096));
+        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr(0x2000), usize::MAX));
+        assert!(
+            cx.unmapped.lock().is_empty(),
+            "no invalid range reaches unmap"
+        );
+    }
+
+    #[test]
+    fn munmap_forwards_the_page_rounded_range() {
+        let cx = Arc::new(TestMemoryAccess::new());
+
+        assert_eq!(Ok(0), sys_munmap(&cx, ptr(0x2000), 1));
+        assert_eq!(Ok(0), sys_munmap(&cx, ptr(0x4000), 8192));
+        assert_eq!(Ok(0), sys_munmap(&cx, ptr(0x8000), 8193));
+        assert_eq!(
+            *cx.unmapped.lock(),
+            [(0x2000, 4096), (0x4000, 8192), (0x8000, 12288)]
+        );
+    }
+
+    #[test]
+    fn mprotect_rejects_invalid_arguments() {
+        let cx = Arc::new(TestMemoryAccess::new());
+
         assert_eq!(
             Err(EINVAL),
-            sys_munmap(&cx, UserspacePtr::try_from_usize(addr + 1).unwrap(), 8192)
+            sys_mprotect(&cx, ptr(0x2000), 0, ProtFlags::READ),
+            "zero len"
         );
         assert_eq!(
             Err(EINVAL),
-            sys_munmap(
-                &cx,
-                UserspacePtr::try_from_usize(addr + 8192).unwrap(),
-                4096
-            )
+            sys_mprotect(&cx, ptr(0x2001), 4096, ProtFlags::READ),
+            "unaligned addr"
         );
-        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr, 4096), "partial unmap");
-        assert_eq!(Ok(0), sys_munmap(&cx, ptr, 8192));
-        assert!(cx.regions.lock().is_empty());
-        assert_eq!(Err(EINVAL), sys_munmap(&cx, ptr, 8192), "already unmapped");
+        assert_eq!(
+            Err(EINVAL),
+            sys_mprotect(&cx, ptr(0x2000), 4096, ProtFlags::WRITE | ProtFlags::EXEC),
+            "write and exec together"
+        );
+        assert_eq!(
+            Err(EINVAL),
+            sys_mprotect(&cx, ptr(0x2000), usize::MAX, ProtFlags::READ),
+            "len without a page-rounded value"
+        );
+        assert!(
+            cx.protected.lock().is_empty(),
+            "no invalid call reaches protect"
+        );
+    }
+
+    #[test]
+    fn mprotect_forwards_the_page_rounded_range_and_prot() {
+        let cx = Arc::new(TestMemoryAccess::new());
+
+        assert_eq!(Ok(0), sys_mprotect(&cx, ptr(0x2000), 1, ProtFlags::empty()));
+        assert_eq!(
+            Ok(0),
+            sys_mprotect(&cx, ptr(0x4000), 8192, ProtFlags::READ | ProtFlags::EXEC)
+        );
+        assert_eq!(
+            *cx.protected.lock(),
+            [
+                (0x2000, 4096, ProtFlags::empty()),
+                (0x4000, 8192, ProtFlags::READ | ProtFlags::EXEC)
+            ]
+        );
+    }
+
+    #[test]
+    fn mprotect_passes_through_the_error_of_protect() {
+        let mut access = TestMemoryAccess::new();
+        access.protect_result = Err(ENOMEM);
+        let cx = Arc::new(access);
+
+        assert_eq!(
+            Err(ENOMEM),
+            sys_mprotect(&cx, ptr(0x2000), 4096, ProtFlags::READ)
+        );
     }
 }

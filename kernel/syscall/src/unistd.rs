@@ -1,39 +1,30 @@
-use core::slice::from_raw_parts_mut;
-
 use kernel_abi::{DirentHeader, EINVAL, EIO, EOVERFLOW, ERANGE, Errno, IoctlRequest, Whence};
 use tracing::{Level, instrument};
 
 use crate::access::{CwdAccess, FileAccess};
-use crate::ptr::UserspaceMutPtr;
 
-#[instrument(level = Level::TRACE, skip(cx))]
-pub fn sys_getcwd<Cx: CwdAccess>(
-    cx: &Cx,
-    buf: UserspaceMutPtr<u8>,
-    size: usize,
-) -> Result<usize, Errno> {
-    if buf.as_ptr().is_null() {
+/// This function writes the working directory and a terminating NUL into
+/// `buf`. It returns the number of bytes written, the NUL included.
+///
+/// # Errors
+/// This function returns `EINVAL` for an empty `buf`. It returns `ERANGE`
+/// when the path and the NUL do not fit `buf`.
+#[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
+pub fn sys_getcwd<Cx: CwdAccess>(cx: &Cx, buf: &mut [u8]) -> Result<usize, Errno> {
+    if buf.is_empty() {
         return Err(EINVAL);
     }
-    if size == 0 {
-        return Err(EINVAL);
-    }
-
-    let mut buf = buf;
-    let slice = unsafe { from_raw_parts_mut(buf.as_mut_ptr(), size) };
 
     let cwd = cx.current_working_directory();
     let guard = cwd.read();
     let bytelen = guard.len();
-    if size <= bytelen {
+    if buf.len() <= bytelen {
         return Err(ERANGE);
     }
-    slice.iter_mut().zip(guard.bytes()).for_each(|(s, b)| {
-        *s = b;
-    });
-    slice[bytelen] = 0;
+    buf[..bytelen].copy_from_slice(guard.as_bytes());
+    buf[bytelen] = 0;
 
-    Ok(buf.addr())
+    Ok(bytelen + 1)
 }
 
 #[instrument(level = Level::TRACE, skip(cx, buf), fields(len = buf.len()))]
@@ -179,33 +170,27 @@ mod tests {
     }
 
     #[test]
-    fn getcwd_rejects_zero_size() {
+    fn getcwd_rejects_an_empty_buffer() {
         let cwd = Cwd::new("/test/path");
-        let mut buf = [0u8; 1];
-        let ptr = buf.as_mut_ptr().try_into().unwrap();
 
-        assert_eq!(Err(EINVAL), sys_getcwd(&cwd, ptr, 0));
+        assert_eq!(Err(EINVAL), sys_getcwd(&cwd, &mut []));
     }
 
     #[test]
     fn getcwd_needs_room_for_the_nul() {
         let cwd = Cwd::new("/test/path");
         let mut buf = [0u8; 10];
-        let ptr = buf.as_mut_ptr().try_into().unwrap();
 
-        assert_eq!(Err(ERANGE), sys_getcwd(&cwd, ptr, buf.len()));
+        assert_eq!(Err(ERANGE), sys_getcwd(&cwd, &mut buf));
     }
 
     #[test]
-    fn getcwd_writes_nul_terminated_path() {
+    fn getcwd_writes_nul_terminated_path_and_returns_its_length() {
         let cwd = Cwd::new("/test/path");
-        let mut buf = [0xFFu8; 11];
-        let ptr = buf.as_mut_ptr();
+        let mut buf = [0xFFu8; 12];
 
-        let returned = sys_getcwd(&cwd, ptr.try_into().unwrap(), buf.len()).unwrap();
-
-        assert_eq!(ptr as usize, returned);
-        assert_eq!(b"/test/path\0", &buf);
+        assert_eq!(Ok(11), sys_getcwd(&cwd, &mut buf));
+        assert_eq!(b"/test/path\0\xFF", &buf);
     }
 
     fn lseek_fixture() -> (Mutex<MemoryFileAccess>, MemoryFd) {

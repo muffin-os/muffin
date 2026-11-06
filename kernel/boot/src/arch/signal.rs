@@ -2,8 +2,8 @@ use core::arch::asm;
 use core::arch::x86_64::{_fxrstor64, _fxsave64};
 
 use kernel_abi::{SigAction, SigSet, Signal};
-use kernel_syscall::UserspaceMutPtr;
-use kernel_syscall::signal::Disposition;
+use kernel_syscall::UserspacePtr;
+use kernel_syscall::signal::{Disposition, SignalMask};
 use tracing::info;
 use x86_64::instructions::{hlt, interrupts};
 use x86_64::registers::control::{Cr0, Cr0Flags};
@@ -16,6 +16,7 @@ use crate::arch::idt::SyscallRegisters;
 use crate::mcore::mtask::process::{ExitOutcome, Process, Signals};
 use crate::mcore::mtask::task::Task;
 use crate::mcore::mtask::wait::try_reserve;
+use crate::syscall::user_mem::{UserMemoryGuard, read_user};
 
 /// Marker written into every signal frame so `sigreturn` can reject a frame the
 /// userspace program corrupted or forged.
@@ -85,16 +86,17 @@ fn capture_fpu(fx: &mut [u8; 512]) -> bool {
     }
 }
 
-/// Build a signal frame on the user stack and return the frame base address.
-/// Terminates the process on `Segfault` when the frame range is not mapped
-/// user writable memory.
+/// This function builds a signal frame on the user stack and returns the frame base address.
+/// It returns `None` when the frame range is not mapped user writable memory.
+/// `_pin` keeps the range mapped until the writes end.
 fn write_sigframe(
+    _pin: &UserMemoryGuard<'_>,
     frame: &InterruptStackFrame,
     regs: &SyscallRegisters,
     signo: Signal,
     old_blocked: SigSet,
     action: &SigAction,
-) -> u64 {
+) -> Option<u64> {
     let user_rsp = frame.stack_pointer.as_u64();
     let size = size_of::<SigFrame>() as u64;
     // Skip the 128 byte red zone for ABI-conforming binaries (Muffin's own
@@ -103,21 +105,16 @@ fn write_sigframe(
     let base = user_rsp.wrapping_sub(128).wrapping_sub(size) & !0xF;
     let start = base.wrapping_sub(8);
 
-    let mut uptr = match UserspaceMutPtr::<u8>::try_from_usize(start as usize) {
-        Ok(ptr) => ptr,
-        Err(_) => terminate_current(Signal::Segfault),
-    };
+    let uptr = UserspacePtr::<u8>::try_from_usize(start as usize).ok()?;
     let len = size_of::<SigFrame>() + 8;
-    if uptr.validate_range(len).is_err() {
-        terminate_current(Signal::Segfault);
-    }
+    uptr.validate_range(len).ok()?;
     // Delivery runs with interrupts off, so a lazily mapped page cannot be
     // paged in here and counts as unwritable.
     if !Process::current()
         .address_space()
         .is_user_writable(VirtAddr::new(start), len)
     {
-        terminate_current(Signal::Segfault);
+        return None;
     }
 
     let mut sf = SigFrame {
@@ -133,15 +130,15 @@ fn write_sigframe(
     };
     sf.fx_valid = capture_fpu(&mut sf.fx);
 
-    let dst = uptr.as_mut_ptr();
+    let dst = start as *mut u8;
     unsafe {
         // Safety: the range start .. start + len is lower half, resident and
-        // user writable, so these writes cannot fault.
+        // user writable. `_pin` keeps it so, therefore these writes cannot fault.
         core::ptr::write_unaligned(dst.cast::<u64>(), action.restorer as u64);
         core::ptr::write_unaligned(dst.add(8).cast::<SigFrame>(), sf);
     }
 
-    base
+    Some(base)
 }
 
 /// Reserves a lot slot for the current task and keeps the unpark ticket
@@ -160,13 +157,17 @@ fn request_stop_park(task: &Task, signals: &mut Signals) {
     }
 }
 
-/// Act on pending signals for the current task. A contended signals lock
-/// delivers nothing, the signal stays pending until the next delivery attempt.
+/// This function acts on pending signals for the current task. It delivers
+/// nothing when the signals lock is busy or a writer of the user mappings is
+/// active. The signal then stays pending until the next delivery attempt.
 pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
     debug_assert!(!interrupts::are_enabled());
     debug_assert_eq!(frame.code_segment.rpl(), PrivilegeLevel::Ring3);
     let task = Task::current();
     let process = task.process();
+    let Some(pin) = process.try_pin_user_memory() else {
+        return;
+    };
     let Some(mut guard) = process.try_signals_write() else {
         return;
     };
@@ -175,7 +176,7 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
             request_stop_park(task, &mut guard);
             return;
         }
-        let Some(signo) = guard.take_next_deliverable() else {
+        let Some(signo) = guard.take_next_deliverable(task.signal_mask()) else {
             return;
         };
         match guard.disposition(signo) {
@@ -187,15 +188,24 @@ pub fn deliver_pending(frame: &mut InterruptStackFrame, regs: &mut SyscallRegist
             }
             Disposition::DefaultTerminate => {
                 drop(guard);
-                // free the user allocations while this address space is active
-                task.free_user_allocations();
+                process.terminate_all_tasks();
+                // The handles must drop while this address space is active.
+                task.abandon_user_allocations();
                 task.set_should_terminate(true);
                 return;
             }
             Disposition::Handler(action) => {
-                let old_blocked = guard.apply_handler_entry(signo, &action);
+                let mut mask = task.signal_mask();
+                guard.reset_handler_if_requested(signo, &action);
+                let old_blocked = mask.enter_handler(signo, &action);
                 drop(guard);
-                let base = write_sigframe(frame, regs, signo, old_blocked, &action);
+                task.set_signal_mask(mask);
+                let Some(base) = write_sigframe(&pin, frame, regs, signo, old_blocked, &action)
+                else {
+                    // The read lock must not live longer than the task.
+                    drop(pin);
+                    terminate_current(Signal::Segfault);
+                };
                 regs.rdi = signo.number() as usize;
                 unsafe {
                     // Safety: base - 8 is a validated user stack address and the
@@ -216,7 +226,7 @@ pub fn reap_current_if_requested(task: &Task) -> bool {
     if !task.process().reap_requested_for(task.id()) {
         return false;
     }
-    task.free_user_allocations();
+    task.abandon_user_allocations();
     task.set_should_terminate(true);
     true
 }
@@ -226,24 +236,9 @@ pub fn reap_current_if_requested(task: &Task) -> bool {
 /// the frame is not readable user memory or its magic does not match.
 pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters) {
     let addr = frame.stack_pointer.as_u64() as usize;
-    let ptr = match UserspaceMutPtr::<SigFrame>::try_from_usize(addr) {
-        Ok(ptr) => ptr,
-        Err(_) => terminate_current(Signal::Segfault),
+    let Ok(saved) = read_user::<SigFrame>(addr) else {
+        terminate_current(Signal::Segfault);
     };
-    if ptr.validate_range(size_of::<SigFrame>()).is_err() {
-        terminate_current(Signal::Segfault);
-    }
-
-    if !Process::current()
-        .address_space()
-        .is_user_readable(frame.stack_pointer, size_of::<SigFrame>())
-    {
-        terminate_current(Signal::Segfault);
-    }
-
-    // Safety: lower half pointer, range validated and user readable, read by
-    // value.
-    let saved = unsafe { core::ptr::read_unaligned(ptr.as_ptr()) };
     if saved.magic != SIGFRAME_MAGIC {
         terminate_current(Signal::Segfault);
     }
@@ -266,9 +261,7 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
         });
     }
 
-    Process::current()
-        .signals_write()
-        .set_blocked_raw(saved.old_blocked);
+    Task::current().set_signal_mask(SignalMask::blocking(saved.old_blocked));
 
     if saved.fx_valid {
         let mut buf = FxBuf([0u8; 512]);
@@ -282,8 +275,8 @@ pub fn sys_sigreturn(frame: &mut InterruptStackFrame, regs: &mut SyscallRegister
     }
 }
 
-/// Terminate the current process on `signo` and never return. Shared by default
-/// terminate delivery, unhandled faults, and `SYS_EXIT`.
+/// This function ends every thread of the current process on `signo` and never returns.
+/// Unhandled faults, a corrupt sigreturn frame and a failed fork copy use it.
 pub fn terminate_current(signo: Signal) -> ! {
     // The fault path runs on the page fault IST stack. A context switch would
     // save the task's registers there, and the next page fault on this CPU
@@ -294,6 +287,7 @@ pub fn terminate_current(signo: Signal) -> ! {
     let process = Process::current();
     let pid = process.pid();
     process.set_exit_outcome(ExitOutcome::Signaled(signo));
+    process.terminate_all_tasks();
     info!("terminating process on signal {} (pid {pid})", signo.name());
     Task::exit();
     loop {
@@ -313,14 +307,26 @@ pub fn force_fatal_current(signo: Signal) -> ! {
 /// re-executes the faulting instruction. Otherwise the process dies, which is
 /// the safe choice POSIX leaves undefined for ignored or blocked fault signals.
 pub fn deliver_fault(frame: &mut InterruptStackFrame, regs: &mut SyscallRegisters, signo: Signal) {
-    let process = Process::current().clone();
+    let task = Task::current();
+    let process = task.process();
     let mut guard = process.signals_write();
+    let mut mask = task.signal_mask();
 
     match guard.disposition(signo) {
-        Disposition::Handler(action) if !guard.blocked().contains(signo) => {
-            let old_blocked = guard.apply_handler_entry(signo, &action);
+        Disposition::Handler(action) if !mask.blocks(signo) => {
+            // A writer of the user mappings is active. The return to user
+            // mode runs the faulting instruction again, and it faults again.
+            let Some(pin) = process.try_pin_user_memory() else {
+                return;
+            };
+            guard.reset_handler_if_requested(signo, &action);
+            let old_blocked = mask.enter_handler(signo, &action);
             drop(guard);
-            let base = write_sigframe(frame, regs, signo, old_blocked, &action);
+            task.set_signal_mask(mask);
+            let Some(base) = write_sigframe(&pin, frame, regs, signo, old_blocked, &action) else {
+                drop(pin);
+                terminate_current(Signal::Segfault);
+            };
             regs.rdi = signo.number() as usize;
             // Safety: same as the handler path in deliver_pending.
             unsafe {

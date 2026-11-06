@@ -144,7 +144,7 @@ impl Scheduler {
         if let Some(guard) = self.current_task.tls().try_read()
             && let Some(tls) = guard.as_ref()
         {
-            FsBase::write(tls.start());
+            FsBase::write(tls.thread_pointer());
         } else {
             FsBase::write(VirtAddr::zero());
         }

@@ -13,7 +13,7 @@ use x86_64::registers::model_specific::FsBase;
 use x86_64::registers::rflags::RFlags;
 use x86_64::structures::idt::InterruptStackFrame;
 
-use super::{UserAccess, make_user_range_resident, slice_from_ptr_and_len};
+use super::user_mem::{copy_in, read_user_array};
 use crate::arch::gdt::Selectors;
 use crate::arch::idt::SyscallRegisters;
 use crate::arch::signal::terminate_current;
@@ -53,13 +53,18 @@ pub fn dispatch_sys_execve(
     let task = Task::current();
 
     let sole = process.reap_sibling_tasks(task.id());
+    process.reset_threads(task.id(), &sole);
 
-    task.free_user_allocations();
-    FsBase::write(VirtAddr::zero());
-    process.executable_segments().write().clear();
-    process
-        .memory_regions()
-        .clear(process.address_space(), &sole);
+    // `sole` already rules out a reader. The guard documents this rule.
+    {
+        let exclusive = process.exclusive_user_memory();
+        task.free_user_allocations(&exclusive);
+        FsBase::write(VirtAddr::zero());
+        process.executable_segments().write().clear();
+        process
+            .memory_regions()
+            .clear(process.address_space(), &sole);
+    }
 
     let Ok((entry, rsp)) = setup_user_image(
         &process,
@@ -104,9 +109,8 @@ fn copy_in_path(ptr: usize, len: usize) -> Result<AbsoluteOwnedPath, Errno> {
     if len > PATH_MAX {
         return Err(ENAMETOOLONG);
     }
-    make_user_range_resident(ptr, len, UserAccess::Read)?;
-    let bytes = unsafe { slice_from_ptr_and_len::<u8>(ptr, len) }?;
-    let s = core::str::from_utf8(bytes).map_err(|_| EINVAL)?;
+    let bytes = copy_in(ptr, len)?;
+    let s = core::str::from_utf8(&bytes).map_err(|_| EINVAL)?;
     let rel = Path::new(s);
     if let Ok(p) = AbsolutePath::try_new(rel) {
         Ok(p.to_owned())
@@ -144,10 +148,7 @@ impl ExecArgs {
             if budget.saturating_add(count.saturating_mul(STACK_BYTES_PER_ARG)) > ARG_MAX {
                 return Err(E2BIG);
             }
-            make_user_range_resident(ptr, count * size_of::<StrSlice>(), UserAccess::Read)?;
-
-            for i in 0..count {
-                let slot = unsafe { (ptr as *const StrSlice).add(i).read_unaligned() };
+            for slot in read_user_array::<StrSlice>(ptr, count)? {
                 let (slot_ptr, slot_len) = (slot.ptr(), slot.len());
                 budget = budget
                     .saturating_add(slot_len)
@@ -155,14 +156,11 @@ impl ExecArgs {
                 if budget > ARG_MAX {
                     return Err(E2BIG);
                 }
-                if !slot.is_empty() {
-                    make_user_range_resident(slot_ptr, slot_len, UserAccess::Read)?;
-                    let src = unsafe { slice_from_ptr_and_len::<u8>(slot_ptr, slot_len) }?;
-                    if src.contains(&0) {
-                        return Err(EINVAL);
-                    }
-                    bytes.extend_from_slice(src);
+                let src = copy_in(slot_ptr, slot_len)?;
+                if src.contains(&0) {
+                    return Err(EINVAL);
                 }
+                bytes.extend_from_slice(&src);
                 lens.push(slot_len);
             }
         }

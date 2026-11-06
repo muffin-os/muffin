@@ -48,6 +48,10 @@ package(default_visibility = ["//visibility:public"])
         "std_panic_exit": "std-panic-exit",
         "std_smoke": "std-smoke",
         "std_unix_socket": "std-unix-socket",
+        "threads_exit": "threads/exit",
+        "threads_last": "threads/last",
+        "threads_stack_overflow_main": "threads/stack-overflow-main",
+        "threads_stack_overflow_thread": "threads/stack-overflow-thread",
     }.items()
 ]
 
@@ -70,6 +74,38 @@ rust_binary(
     deps = [
         "//kernel/abi",
         "//userspace/libs/sys",
+    ],
+)
+
+rust_binary(
+    name = "threads",
+    srcs = ["threads/src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = [
+        "//kernel/abi",
+        "//userspace/libs/sys",
+        "@rust_libc//:libc",
+    ],
+)
+
+rust_binary(
+    name = "threads_fork",
+    srcs = ["threads/fork-threads/src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = ["@rust_libc//:libc"],
+)
+
+rust_binary(
+    name = "unmap_race",
+    srcs = ["unmap-race/src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = [
+        "//kernel/abi",
+        "//userspace/libs/sys",
+        "@rust_libc//:libc",
     ],
 )
 

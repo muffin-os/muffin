@@ -7,6 +7,7 @@ use kernel_syscall::access::{Child, SleepAccess, WaitAccess};
 use crate::hpet::hpet;
 use crate::mcore::mtask::process::ParkOutcome;
 use crate::mcore::mtask::process::tree::process_tree;
+use crate::mcore::mtask::task::Task;
 use crate::syscall::access::KernelAccess;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -38,13 +39,11 @@ impl WaitAccess for KernelAccess {
 impl SleepAccess for KernelAccess {
     fn sleep_one_poll(&self) -> Result<(), Errno> {
         let deadline = hpet().read().now().saturating_add(POLL_INTERVAL);
+        let task = Task::current();
         let outcome = self.process.park_current_task(Some(deadline), None, || {
-            hpet().read().now() >= deadline
-                || self.process.signals_read().has_interrupting_deliverable()
+            hpet().read().now() >= deadline || task.has_interrupting_signal()
         });
-        if matches!(outcome, ParkOutcome::Interrupted)
-            || self.process.signals_read().has_interrupting_deliverable()
-        {
+        if matches!(outcome, ParkOutcome::Interrupted) || task.has_interrupting_signal() {
             return Err(EINTR);
         }
         Ok(())

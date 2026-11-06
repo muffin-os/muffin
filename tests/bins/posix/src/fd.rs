@@ -113,15 +113,15 @@ pub fn run() {
         EINVAL,
     );
 
-    check::expect_err("fd/read_zero_len", read(fd, &mut []), EINVAL);
-    check::expect_err("fd/write_zero_len", write(1, &[]), EINVAL);
+    check::expect_ok("fd/read_zero_len", read(fd, &mut []), 0);
+    check::expect_ok("fd/write_zero_len", write(1, &[]), 0);
 
     // Safety: these buffers are deliberately invalid, and the kernel rejecting
     // them before any access is what each check asserts.
     check::expect_err(
         "fd/read_null_buf",
         ret(unsafe { minilib::syscall3(SYS_READ, fd as usize, 0, one.len()) }),
-        EINVAL,
+        EFAULT,
     );
     check::expect_err(
         "fd/read_kernel_buf",

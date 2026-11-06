@@ -1,9 +1,10 @@
 use core::ffi::c_int;
 use core::time::Duration;
 
-use kernel_abi::{ClockId, EINTR, Errno, Timespec};
+use kernel_abi::{ClockId, Errno, Timespec};
 use libc::{clockid_t, timespec};
 
+use crate::deadline::time_between;
 use crate::errno::ret;
 
 fn to_kernel(time: &timespec) -> Timespec {
@@ -26,21 +27,11 @@ fn now(clock: ClockId) -> Result<Timespec, Errno> {
     Ok(now)
 }
 
-/// Sleeps until `clock` reads `deadline` or later. Fails with `EINVAL` for a
-/// deadline outside the POSIX `timespec` range.
-pub(crate) fn sleep_until(clock: ClockId, deadline: &timespec) -> Result<(), Errno> {
-    let deadline = Duration::try_from(to_kernel(deadline))?;
-    loop {
-        let left = match deadline.checked_sub(Duration::try_from(now(clock)?)?) {
-            Some(left) if !left.is_zero() => left,
-            _ => return Ok(()),
-        };
-        // A signal ends the sleep early; the loop sleeps for the rest.
-        match muffin_sys::nanosleep(&Timespec::from(left), None) {
-            Ok(()) | Err(EINTR) => {}
-            Err(errno) => return Err(errno),
-        }
-    }
+/// This function returns the time until `clock` reads `deadline`. It returns
+/// `None` when the clock reads `deadline` or later. It fails with `EINVAL`
+/// for a deadline outside the POSIX `timespec` range.
+pub(crate) fn time_left(clock: ClockId, deadline: &timespec) -> Result<Option<Duration>, Errno> {
+    time_between(now(clock)?, to_kernel(deadline))
 }
 
 /// # Safety

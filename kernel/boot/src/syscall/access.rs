@@ -1,6 +1,7 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ops::Range;
 use core::sync::atomic::Ordering::Relaxed;
 
 use kernel_abi::{
@@ -27,9 +28,11 @@ use x86_64::structures::paging::{PageSize, PageTableFlags, PhysFrame, Size4KiB};
 use crate::file::{OpenFile, OpenFileDescription, vfs};
 use crate::mcore::mtask::process::fd::{FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::{
-    FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion, SharedMemoryRegion,
+    FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion, SetProtectionError,
+    SharedMemoryRegion, SplitError,
 };
 use crate::mcore::mtask::process::{ParkOutcome, Process};
+use crate::mcore::mtask::task::Task;
 use crate::mcore::mtask::wait::WaitQueue;
 use crate::mem::address_space::AddressSpace;
 use crate::mem::virt::VirtualMemoryAllocator;
@@ -38,6 +41,7 @@ use crate::{U64Ext, UsizeExt};
 mod poll;
 mod signal;
 mod socket;
+mod thread;
 mod wait;
 
 pub struct KernelAccess {
@@ -81,11 +85,11 @@ impl KernelAccess {
         mut op: impl FnMut() -> Result<T, Errno>,
     ) -> Result<T, Errno> {
         let mut result = op();
+        let task = Task::current();
         while matches!(result, Err(EAGAIN)) {
             let outcome = self.process.park_current_task(None, Some(queue), || {
                 result = op();
-                !matches!(result, Err(EAGAIN))
-                    || self.process.signals_read().has_interrupting_deliverable()
+                !matches!(result, Err(EAGAIN)) || task.has_interrupting_signal()
             });
             if matches!(outcome, ParkOutcome::Interrupted) || matches!(result, Err(EAGAIN)) {
                 return Err(EINTR);
@@ -358,7 +362,7 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
             self.process
                 .vmm()
                 .mark_as_reserved(Segment::new(
-                    VirtAddr::from_ptr(addr.as_ptr()),
+                    VirtAddr::new(addr.addr().into_u64()),
                     page_aligned_size.into_u64(),
                 ))
                 .map_err(|_| CreateMappingError::LocationAlreadyMapped)?
@@ -490,25 +494,65 @@ impl kernel_syscall::access::MemoryRegionAccess for KernelAccess {
     }
 
     fn unmap(&self, addr: kernel_syscall::UserspacePtr<u8>, len: usize) -> Result<(), Errno> {
+        let range = user_range(addr, len).ok_or(EINVAL)?;
+        let _exclusive = self.process.exclusive_user_memory();
         let regions = self.process.memory_regions();
-        let region = regions
-            .region_for(VirtAddr::new(addr.addr().into_u64()))
-            .ok_or(EINVAL)?;
-        if region.addr().as_u64() != addr.addr().into_u64()
-            || region.size() != len.next_multiple_of(Size4KiB::SIZE.into_usize())
-        {
-            return Err(EINVAL);
-        }
         // The drop of the last `Arc` frees the frames of a private region.
         // For a shared region, the drop releases the file's mapping.
-        regions.remove_region(self.process.address_space(), &region);
+        for region in regions.carve(&range).map_err(split_errno)? {
+            regions.remove_region(self.process.address_space(), &region);
+        }
+        Ok(())
+    }
+
+    fn protect(
+        &self,
+        addr: kernel_syscall::UserspacePtr<u8>,
+        len: usize,
+        prot: ProtFlags,
+    ) -> Result<(), Errno> {
+        let range = user_range(addr, len).ok_or(ENOMEM)?;
+        let _exclusive = self.process.exclusive_user_memory();
+        let regions = self.process.memory_regions();
+        if !regions.covers(&range) {
+            return Err(ENOMEM);
+        }
+        let flags = page_flags(prot);
+        for region in regions.carve(&range).map_err(split_errno)? {
+            region
+                .set_protection(self.process.address_space(), flags)
+                .map_err(|e| match e {
+                    SetProtectionError::UnsupportedRegion => EACCES,
+                    SetProtectionError::RemapFailed => EINVAL,
+                })?;
+        }
         Ok(())
     }
 }
 
+/// This function returns the addresses `[addr, addr + len)` of a user range.
+/// It returns `None` when the range leaves the lower half.
+fn user_range(addr: kernel_syscall::UserspacePtr<u8>, len: usize) -> Option<Range<u64>> {
+    addr.validate_range(len).ok()?;
+    let start = addr.addr().into_u64();
+    Some(start..start + len.into_u64())
+}
+
+fn split_errno(error: SplitError) -> Errno {
+    match error {
+        SplitError::EagerBacking | SplitError::Shared | SplitError::InUse => EINVAL,
+    }
+}
+
+/// This function grants user access only for a `prot` that allows some
+/// access. A `PROT_NONE` page then faults on each user access.
 fn page_flags(prot: ProtFlags) -> PageTableFlags {
     PageTableFlags::PRESENT
-        | PageTableFlags::USER_ACCESSIBLE
+        | if prot.intersects(ProtFlags::READ | ProtFlags::WRITE | ProtFlags::EXEC) {
+            PageTableFlags::USER_ACCESSIBLE
+        } else {
+            PageTableFlags::empty()
+        }
         | if prot.contains(ProtFlags::WRITE) {
             PageTableFlags::WRITABLE
         } else {

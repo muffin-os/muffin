@@ -26,7 +26,8 @@ fn main() -> i32 {
         }
         Ok(pid) => {
             let mut status = 0;
-            if let Err(e) = waitpid(pid, &mut status, WaitOptions::empty()) {
+            // SAFETY: `status` is a live local.
+            if let Err(e) = unsafe { waitpid(pid, &raw mut status, WaitOptions::empty()) } {
                 println!("fork: FAIL waitpid {e}");
                 return 1;
             }

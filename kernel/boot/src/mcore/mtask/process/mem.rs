@@ -2,6 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ops::Range;
 use core::sync::atomic::{Ordering, fence};
 use core::{mem, slice};
 
@@ -48,16 +49,98 @@ impl MemoryRegions {
         region
     }
 
-    /// Removes `region` by pointer identity and unmaps its pages.
+    /// This function removes `region` by pointer identity, unmaps its pages,
+    /// and drops the TLB entries of every CPU for them. The frames stay
+    /// allocated until the caller drops its `Arc`. That drop comes after the
+    /// flush.
     ///
     /// # Panics
-    /// In debug builds, panics if `address_space` is not active on this CPU.
+    /// This function panics if interrupts are off. In debug builds, it also
+    /// panics if `address_space` is not active on this CPU.
     pub fn remove_region(&self, address_space: &AddressSpace, region: &Arc<MemoryRegion>) {
         debug_assert!(address_space.is_active());
         self.regions
             .lock_without_interrupts()
             .retain(|r| !Arc::ptr_eq(r, region));
         region.unmap_from(address_space);
+        // See `AddressSpace::flush_on_all_cpus` for the lock rule.
+        address_space.flush_on_all_cpus();
+    }
+
+    /// This function splits each region that `range` covers only in part at
+    /// the bounds of `range`. It returns the regions that lie fully inside
+    /// `range`. The bounds of `range` are page aligned addresses.
+    ///
+    /// The regions to split are absent from the list while they split. The
+    /// caller holds the exclusive user memory guard. Therefore no fault and
+    /// no syscall of the process looks for these regions during that time.
+    ///
+    /// # Errors
+    /// This function returns the [`SplitError`] of the first region that
+    /// cannot split. The regions that split before the failure stay split,
+    /// and this changes no mapping. It returns `InUse` when a kernel handle
+    /// of a region inside `range` exists.
+    pub fn carve(&self, range: &Range<u64>) -> Result<Vec<Arc<MemoryRegion>>, SplitError> {
+        let partial: Vec<Arc<MemoryRegion>> = {
+            let mut regions = self.regions.lock_without_interrupts();
+            let (partial, kept) = mem::take(&mut *regions)
+                .into_iter()
+                .partition(|r| r.overlaps(range) && !r.lies_inside(range));
+            *regions = kept;
+            partial
+        };
+
+        let mut first_error = None;
+        for region in partial {
+            if first_error.is_some() {
+                self.regions.lock_without_interrupts().push(region);
+                continue;
+            }
+            match MemoryRegion::split_at_bounds(region, range) {
+                Ok(parts) => {
+                    for part in parts {
+                        self.add_region(part);
+                    }
+                }
+                Err((region, error)) => {
+                    first_error = Some(error);
+                    self.regions.lock_without_interrupts().push(region);
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+
+        let regions = self.regions.lock_without_interrupts();
+        let inside = regions.iter().filter(|r| r.lies_inside(range));
+        // The list holds one `Arc`. Any other `Arc` is a kernel handle. An
+        // example is the allocation of a TLS block, whose memory the kernel
+        // uses.
+        if inside.clone().any(|r| Arc::strong_count(r) > 1) {
+            return Err(SplitError::InUse);
+        }
+        Ok(inside.cloned().collect())
+    }
+
+    /// This function returns true when the regions cover each address of `range`.
+    pub fn covers(&self, range: &Range<u64>) -> bool {
+        let mut spans: Vec<Range<u64>> = self
+            .regions
+            .lock_without_interrupts()
+            .iter()
+            .filter(|r| r.overlaps(range))
+            .map(|r| r.span())
+            .collect();
+        spans.sort_unstable_by_key(|span| span.start);
+        let mut covered_until = range.start;
+        for span in spans {
+            if span.start > covered_until {
+                return false;
+            }
+            covered_until = covered_until.max(span.end);
+        }
+        covered_until >= range.end
     }
 
     pub fn region_for(&self, addr: VirtAddr) -> Option<Arc<MemoryRegion>> {
@@ -132,6 +215,9 @@ impl MemoryRegions {
         // snapshot keeps the shootdown outside the lock.
         let regions = self.regions.lock_without_interrupts().clone();
         for region in regions {
+            if region.is_per_thread() {
+                continue;
+            }
             target.add_region(region.clone_into(address_space, target_vmm)?);
         }
         Ok(())
@@ -214,6 +300,96 @@ impl MemoryRegion {
         addr.as_u64()
             .checked_sub(self.addr().as_u64())
             .is_some_and(|offset| offset < self.size().into_u64())
+    }
+
+    /// This function returns the addresses of the region as a half-open range.
+    fn span(&self) -> Range<u64> {
+        let start = self.addr().as_u64();
+        start..start + self.size().into_u64()
+    }
+
+    fn overlaps(&self, range: &Range<u64>) -> bool {
+        let span = self.span();
+        !(span.end <= range.start || span.start >= range.end)
+    }
+
+    fn lies_inside(&self, range: &Range<u64>) -> bool {
+        let span = self.span();
+        range.start <= span.start && span.end <= range.end
+    }
+
+    /// This function returns true when the region is the TLS block, the FX
+    /// area or the main user stack of one thread. A fork copies these regions
+    /// only for the calling thread.
+    pub fn is_per_thread(&self) -> bool {
+        match self {
+            MemoryRegion::Private(r) => r.per_thread,
+            MemoryRegion::FileBacked(r) => r.region.per_thread,
+            MemoryRegion::Shared(_) => false,
+        }
+    }
+
+    /// This function splits the region at each bound of `range` that lies
+    /// strictly inside the region. It returns the parts in address order.
+    ///
+    /// # Errors
+    /// This function returns the unchanged region together with an error.
+    /// The error comes from [`MemoryRegion::check_split`], or it is `InUse`
+    /// when another `Arc` of the region exists.
+    fn split_at_bounds(
+        this: Arc<Self>,
+        range: &Range<u64>,
+    ) -> Result<Vec<Self>, (Arc<Self>, SplitError)> {
+        if let Err(error) = this.check_split() {
+            return Err((this, error));
+        }
+        let mut rest = Arc::try_unwrap(this).map_err(|this| (this, SplitError::InUse))?;
+        let mut parts = Vec::new();
+        for bound in [range.start, range.end] {
+            if bound > rest.span().start && rest.span().contains(&bound) {
+                let (low, high) = rest.split(VirtAddr::new(bound));
+                parts.push(low);
+                rest = high;
+            }
+        }
+        parts.push(rest);
+        Ok(parts)
+    }
+
+    /// # Errors
+    /// This function returns `Shared` for a shared mapping. It returns
+    /// `EagerBacking` for a region with a contiguous kernel allocation,
+    /// which is never split.
+    fn check_split(&self) -> Result<(), SplitError> {
+        match self {
+            MemoryRegion::Private(r) => r.check_split(),
+            MemoryRegion::FileBacked(r) => r.region.check_split(),
+            MemoryRegion::Shared(_) => Err(SplitError::Shared),
+        }
+    }
+
+    /// This function splits the region at `at` into the part below `at` and
+    /// the part from `at` on. Each part keeps the flags, the fork policy and
+    /// the pages of its own addresses.
+    ///
+    /// # Panics
+    /// This function panics when [`MemoryRegion::check_split`] fails. It also
+    /// panics when `at` is not a page boundary strictly inside the region.
+    fn split(self, at: VirtAddr) -> (Self, Self) {
+        match self {
+            MemoryRegion::Private(r) => {
+                let (low, high) = r.split(at);
+                (MemoryRegion::Private(low), MemoryRegion::Private(high))
+            }
+            MemoryRegion::FileBacked(r) => {
+                let (low, high) = r.split(at);
+                (
+                    MemoryRegion::FileBacked(low),
+                    MemoryRegion::FileBacked(high),
+                )
+            }
+            MemoryRegion::Shared(_) => panic!("a shared mapping is never split"),
+        }
     }
 
     pub fn as_slice(&self) -> &[u8] {
@@ -316,6 +492,8 @@ pub enum PageInError {
     ReadFailed,
     #[error("write to read-only region")]
     NotWritable,
+    #[error("access to a region without user access")]
+    NotAccessible,
 }
 
 #[derive(Debug, Error)]
@@ -324,6 +502,16 @@ pub enum SetProtectionError {
     UnsupportedRegion,
     #[error("failed to remap a mapped page")]
     RemapFailed,
+}
+
+#[derive(Debug, Error)]
+pub enum SplitError {
+    #[error("a contiguous kernel allocation is never split")]
+    EagerBacking,
+    #[error("a shared mapping is never split")]
+    Shared,
+    #[error("a kernel handle of the region exists")]
+    InUse,
 }
 
 #[derive(Debug, Error)]
@@ -338,9 +526,11 @@ pub enum CloneRegionError {
     MapFailed,
 }
 
-/// Maps `frame` at a transient higher-half address of the active address
-/// space and hands the byte view to `f`. The kernel-half L4 entries are
-/// shared between all address spaces, so the mapping is process independent.
+/// This function maps `frame` at a transient higher-half address of the
+/// active address space and gives the byte view to `f`. All address spaces
+/// share the kernel-half L4 entries, so the mapping does not depend on the
+/// process. `f` runs without the kernel-half lock. Therefore `f` can
+/// allocate kernel memory and read from a file.
 fn with_frame_mapped<R>(
     address_space: &AddressSpace,
     frame: PhysFrame<Size4KiB>,
@@ -350,16 +540,19 @@ fn with_frame_mapped<R>(
         .reserve(1)
         .ok_or(PageInError::OutOfMemory)?;
     let page = Page::<Size4KiB>::containing_address(segment.start);
-    let _kernel_half = AddressSpace::lock_kernel_half();
-    address_space
-        .map(
-            page,
-            frame,
-            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
-        )
-        .map_err(|_| PageInError::MapFailed)?;
+    {
+        let _kernel_half = AddressSpace::lock_kernel_half();
+        address_space
+            .map(
+                page,
+                frame,
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
+            )
+            .map_err(|_| PageInError::MapFailed)?;
+    }
     let buf = unsafe { &mut *segment.start.as_mut_ptr::<[u8; 4096]>() };
     let result = f(buf);
+    let _kernel_half = AddressSpace::lock_kernel_half();
     address_space.unmap::<Size4KiB>(page);
     Ok(result)
 }
@@ -386,8 +579,12 @@ impl PrivateRegionState {
         (offset < backing.len()).then(|| (Arc::strong_count(backing), backing.start + offset))
     }
 
-    /// The caller holds the region lock and has already checked that `page`
-    /// is unmapped, so the map cannot collide.
+    /// This function maps `page` and fills it. The caller holds the region
+    /// lock. `page` has no mapping at this point, so the map cannot collide.
+    /// The page becomes visible only with its final content and flags.
+    /// Another thread of the process can touch the page on another CPU at any
+    /// time. A page that is present but not yet executable kills that thread
+    /// when the thread executes code on it.
     fn map_and_fill(
         &mut self,
         address_space: &AddressSpace,
@@ -396,28 +593,10 @@ impl PrivateRegionState {
     ) -> Result<(), PageInError> {
         let frame = PhysicalMemory::allocate_frame::<Size4KiB>().ok_or(PageInError::OutOfMemory)?;
         let owned = OwnedPhysicalMemory::from_physical_frame(frame);
-
+        with_frame_mapped(address_space, frame, fill)??;
         address_space
-            .map(
-                page,
-                frame,
-                PageTableFlags::PRESENT
-                    | PageTableFlags::WRITABLE
-                    | PageTableFlags::USER_ACCESSIBLE
-                    | PageTableFlags::NO_EXECUTE,
-            )
+            .map(page, frame, self.flags)
             .map_err(|_| PageInError::MapFailed)?;
-
-        let buf = unsafe { &mut *page.start_address().as_mut_ptr::<[u8; 4096]>() };
-        if let Err(e) = fill(buf) {
-            address_space.unmap::<Size4KiB>(page);
-            return Err(e);
-        }
-
-        address_space
-            .remap::<Size4KiB, _>(page, |_| self.flags)
-            .map_err(|_| PageInError::MapFailed)?;
-
         self.pages.insert(page, Arc::new(owned));
         Ok(())
     }
@@ -446,6 +625,8 @@ pub struct PrivateMemoryRegion {
     /// guard pages.
     size: usize,
     fork: ForkPolicy,
+    /// See [`MemoryRegion::is_per_thread`].
+    per_thread: bool,
     /// Serializes all backing mutations, all flags changes, and all fault
     /// resolution for this region.
     state: Mutex<PrivateRegionState>,
@@ -458,6 +639,7 @@ impl PrivateMemoryRegion {
             _segment: segment,
             size,
             fork: ForkPolicy::CopyOnWrite,
+            per_thread: false,
             state: Mutex::new(PrivateRegionState {
                 flags,
                 pages: BTreeMap::new(),
@@ -477,6 +659,7 @@ impl PrivateMemoryRegion {
         page_count: usize,
         flags: PageTableFlags,
         fork: ForkPolicy,
+        per_thread: bool,
         address_space: &AddressSpace,
     ) -> Result<Self, PageInError> {
         debug_assert!(flags.contains(PageTableFlags::WRITABLE));
@@ -488,6 +671,7 @@ impl PrivateMemoryRegion {
             _segment: segment,
             size,
             fork,
+            per_thread,
             state: Mutex::new(PrivateRegionState {
                 flags,
                 pages: BTreeMap::new(),
@@ -528,15 +712,15 @@ impl PrivateMemoryRegion {
         Ok(region)
     }
 
-    /// Replaces the logical flags and remaps every currently mapped page.
-    /// Pages governed by shared backings get the new flags minus WRITABLE.
-    /// Unmapped backings are left for the fault handler. When a mapped page
-    /// loses write access, every other CPU drops its TLB entries for this
-    /// address space.
+    /// This function replaces the logical flags and remaps every currently
+    /// mapped page. Pages governed by shared backings get the new flags
+    /// minus WRITABLE. The fault handler handles unmapped backings later.
+    /// When a mapped page loses write access or user access, every other CPU
+    /// drops its TLB entries for this address space.
     ///
     /// # Panics
-    /// Panics if a mapped page loses write access while interrupts are
-    /// disabled.
+    /// This function panics if a mapped page loses write access or user
+    /// access while interrupts are off.
     fn set_protection(
         &self,
         address_space: &AddressSpace,
@@ -551,7 +735,8 @@ impl PrivateMemoryRegion {
             };
             match address_space.remap::<Size4KiB, _>(page, move |_| flags) {
                 Ok(()) => {
-                    demoted |= !flags.contains(PageTableFlags::WRITABLE);
+                    demoted |= !flags.contains(PageTableFlags::WRITABLE)
+                        || !flags.contains(PageTableFlags::USER_ACCESSIBLE);
                     Ok(())
                 }
                 Err(FlagUpdateError::PageNotMapped) => Ok(()),
@@ -653,6 +838,7 @@ impl PrivateMemoryRegion {
             start: self.start,
             size: self.size,
             fork: self.fork,
+            per_thread: self.per_thread,
             state: Mutex::new(state),
         })
     }
@@ -695,6 +881,7 @@ impl PrivateMemoryRegion {
             start: self.start,
             size: self.size,
             fork: self.fork,
+            per_thread: self.per_thread,
             state: Mutex::new(PrivateRegionState {
                 flags: state.flags,
                 pages,
@@ -705,6 +892,66 @@ impl PrivateMemoryRegion {
 
     pub fn start(&self) -> VirtAddr {
         self.start
+    }
+
+    /// # Errors
+    /// This function returns `EagerBacking` when the region holds a
+    /// contiguous kernel allocation, which is never split.
+    fn check_split(&self) -> Result<(), SplitError> {
+        if self.state.lock().ranges.is_empty() {
+            Ok(())
+        } else {
+            Err(SplitError::EagerBacking)
+        }
+    }
+
+    /// This function splits the region at `at`. The reservation, the
+    /// accessible size and the pages divide at `at`. Both parts keep the
+    /// flags, the fork policy and the per-thread mark.
+    ///
+    /// # Panics
+    /// This function panics when [`PrivateMemoryRegion::check_split`] fails.
+    /// It also panics when `at` is not a page boundary strictly inside the
+    /// region.
+    fn split(self, at: VirtAddr) -> (Self, Self) {
+        let low_size = (at - self.start).into_usize();
+        assert!(
+            at.is_aligned(Size4KiB::SIZE) && self.start < at && low_size < self.size,
+            "split point {at:p} is not a page inside the region"
+        );
+
+        let Self {
+            _segment: segment,
+            start,
+            size,
+            fork,
+            per_thread,
+            state,
+        } = self;
+        let PrivateRegionState {
+            flags,
+            pages: mut low_pages,
+            ranges,
+        } = state.into_inner();
+        assert!(ranges.is_empty(), "an eager allocation is never split");
+        let high_pages = low_pages.split_off(&Page::containing_address(at));
+        let (low_segment, high_segment) = segment.split(at);
+        let part = |segment, start, size, pages| Self {
+            _segment: segment,
+            start,
+            size,
+            fork,
+            per_thread,
+            state: Mutex::new(PrivateRegionState {
+                flags,
+                pages,
+                ranges: BTreeMap::new(),
+            }),
+        };
+        (
+            part(low_segment, start, low_size, low_pages),
+            part(high_segment, at, size - low_size, high_pages),
+        )
     }
 
     fn unmap_from(&self, address_space: &AddressSpace) {
@@ -732,6 +979,9 @@ impl PrivateMemoryRegion {
     ) -> Result<(), PageInError> {
         let mut state = self.state.lock();
         let flags = state.flags;
+        if !flags.contains(PageTableFlags::USER_ACCESSIBLE) {
+            return Err(PageInError::NotAccessible);
+        }
         match address_space.translate_flags(page.start_address()) {
             // Mapped already, so a racing task resolved the fault or a
             // stale TLB entry produced it. Retrying makes progress. #PF
@@ -796,22 +1046,19 @@ impl PrivateMemoryRegion {
                             .map(page, frame, flags - PageTableFlags::WRITABLE)
                             .map_err(|_| PageInError::MapFailed)?;
                     } else {
+                        // The copy completes before the page becomes visible.
+                        // Therefore no other thread reads a half-copied page.
                         let new = PhysicalMemory::allocate_frame::<Size4KiB>()
                             .ok_or(PageInError::OutOfMemory)?;
                         let owned = OwnedPhysicalMemory::from_physical_frame(new);
+                        with_frame_mapped(address_space, new, |dst| {
+                            with_frame_mapped(address_space, frame, |src| {
+                                dst.copy_from_slice(src);
+                            })
+                        })??;
                         address_space
                             .map(page, new, flags)
                             .map_err(|_| PageInError::MapFailed)?;
-                        if let Err(e) = with_frame_mapped(address_space, frame, |src| {
-                            let dst =
-                                unsafe { &mut *page.start_address().as_mut_ptr::<[u8; 4096]>() };
-                            dst.copy_from_slice(src);
-                        }) {
-                            // Never leave a mapping to a frame that
-                            // `owned` frees.
-                            address_space.unmap::<Size4KiB>(page);
-                            return Err(e);
-                        }
                         state.pages.insert(page, Arc::new(owned));
                     }
                     Ok(())
@@ -846,6 +1093,38 @@ impl FileBackedMemoryRegion {
 
     pub fn start(&self) -> VirtAddr {
         self.region.start()
+    }
+
+    /// This function splits the region at `at`, as
+    /// [`PrivateMemoryRegion::split`] does. Each part reads the bytes of the
+    /// file that back its own addresses.
+    ///
+    /// # Panics
+    /// This function panics in each case in which
+    /// [`PrivateMemoryRegion::split`] panics.
+    fn split(self, at: VirtAddr) -> (Self, Self) {
+        let Self {
+            region,
+            node,
+            file_offset,
+            file_len,
+        } = self;
+        let low_size = (at - region.start()).into_usize();
+        let (low, high) = region.split(at);
+        (
+            Self {
+                region: low,
+                node: node.clone(),
+                file_offset,
+                file_len: file_len.min(low_size),
+            },
+            Self {
+                region: high,
+                node,
+                file_offset: file_offset + low_size,
+                file_len: file_len.saturating_sub(low_size),
+            },
+        )
     }
 
     fn handle_fault(

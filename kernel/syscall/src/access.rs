@@ -9,6 +9,7 @@ mod region;
 mod signal;
 mod sleep;
 mod socket;
+mod thread;
 
 pub use cwd::*;
 pub use file::*;
@@ -19,6 +20,7 @@ pub use region::*;
 pub use signal::*;
 pub use sleep::*;
 pub use socket::*;
+pub use thread::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Capability {

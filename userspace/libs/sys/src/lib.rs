@@ -28,8 +28,8 @@ pub use kernel_abi::{
     SOCK_STREAM, SOL_SOCKET, SOMAXCONN, SUN_PATH_MAX, SYS_ACCEPT, SYS_BIND, SYS_CLOCK_GETTIME,
     SYS_CLOSE, SYS_CONNECT, SYS_EXE_PATH, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_FSTAT, SYS_FSYNC,
     SYS_FTRUNCATE, SYS_GETCWD, SYS_GETDENTS, SYS_GETPID, SYS_GETPPID, SYS_IOCTL, SYS_KILL,
-    SYS_LISTEN, SYS_LSEEK, SYS_MMAP, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POLL, SYS_POWEROFF,
-    SYS_READ, SYS_RECVMSG, SYS_SENDMSG, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
+    SYS_LISTEN, SYS_LSEEK, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NANOSLEEP, SYS_OPEN, SYS_POLL,
+    SYS_POWEROFF, SYS_READ, SYS_RECVMSG, SYS_SENDMSG, SYS_SHUTDOWN, SYS_SIGACTION, SYS_SIGPENDING,
     SYS_SIGPROCMASK, SYS_SIGRETURN, SYS_SOCKET, SYS_UNLINK, SYS_WAITPID, SYS_WRITE, SaFamily,
     SaFlags, ShutdownHow, SigAction, SigHandler, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen,
     Stat, StrSlice, Timespec, WaitOptions, Whence,
@@ -263,17 +263,24 @@ pub fn getppid() -> i64 {
     unsafe { syscall0(SYS_GETPPID) as i64 }
 }
 
-/// Waits for a child that the POSIX `pid` forms select and returns the reaped
-/// pid. `status` receives the exit code, or 128 plus the signal number. With
-/// `WaitOptions::NOHANG` it returns `Ok(0)` instead of blocking while the
-/// selected children run; `status` is left as is then.
-pub fn waitpid(pid: i64, status: &mut i32, options: WaitOptions) -> Result<i64, Errno> {
-    // Safety: `status` is a live, exclusive reference for the whole call.
+/// This function waits for a child that the POSIX `pid` forms select. It returns the reaped
+/// pid. The kernel writes the exit code, or 128 plus the signal number, to
+/// `status`. A null `status` receives nothing. With `WaitOptions::NOHANG`, the function
+/// returns `Ok(0)` instead of blocking while the selected children run.
+/// The function does not change `status` in this case.
+///
+/// # Safety
+/// `status` must be null or valid for one `i32` write.
+///
+/// # Errors
+/// The function returns `ECHILD` when no child matches `pid`. It returns `EFAULT` when the
+/// kernel cannot write `status`. The kernel reaps the child in this case.
+pub unsafe fn waitpid(pid: i64, status: *mut i32, options: WaitOptions) -> Result<i64, Errno> {
     ret(unsafe {
         syscall3(
             SYS_WAITPID,
             pid as usize,
-            status as *mut i32 as usize,
+            status as usize,
             options.bits() as usize,
         )
     })
@@ -439,15 +446,29 @@ pub fn mmap(
     .map(|a| a as *mut u8)
 }
 
-/// Removes the mapping that `mmap` returned at `addr` with `len` bytes.
+/// This function removes the pages in `[addr, addr + len)`. The range can be a part of a
+/// mapping. A range without a mapping is not an error.
 ///
 /// # Safety
-/// No reference into the mapping may exist after the call.
+/// No reference into the range may exist after the call.
 ///
 /// # Errors
-/// Returns `EINVAL` when `addr` and `len` do not name exactly one mapping.
+/// The function returns `EINVAL` when `addr` is not page aligned or `len` is 0.
 pub unsafe fn munmap(addr: *mut u8, len: usize) -> Result<(), Errno> {
     ret(unsafe { syscall2(SYS_MUNMAP, addr as usize, len) }).map(|_| ())
+}
+
+/// This function sets the protection of the pages in `[addr, addr + len)` to `prot`.
+/// An access to a page with `ProtFlags::NONE` kills the task with `SIGSEGV`.
+///
+/// # Safety
+/// No reference into the range may exist that `prot` makes invalid.
+///
+/// # Errors
+/// The function returns `EINVAL` for an unaligned `addr`, for `len == 0`, and for `WRITE`
+/// with `EXEC`. It returns `ENOMEM` when a part of the range has no mapping.
+pub unsafe fn mprotect(addr: *mut u8, len: usize, prot: ProtFlags) -> Result<(), Errno> {
+    ret(unsafe { syscall3(SYS_MPROTECT, addr as usize, len, prot.bits() as usize) }).map(|_| ())
 }
 
 /// Opens `path` with the `O_*` flags in `oflag` and returns the new fd.

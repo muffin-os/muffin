@@ -4,12 +4,14 @@ use alloc::vec::Vec;
 use kernel_abi::{Errno, ProcessId, SigInfo};
 use kernel_syscall::access::{
     Capability, Identity, PermissionAccess, ProcessAccess, ProcessesAccess, SignalAccess,
+    SignalMaskAccess,
 };
-use kernel_syscall::signal::Disposition;
+use kernel_syscall::signal::{Disposition, SignalMask};
 use tracing::info;
 
 use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::process::{ExitOutcome, Process};
+use crate::mcore::mtask::task::Task;
 use crate::syscall::access::KernelAccess;
 
 /// Local wrapper so the foreign `ProcessAccess` trait can be implemented
@@ -59,6 +61,8 @@ impl SignalAccess for KernelAccess {
         let Some(process) = process_tree().read().processes.get(&pid).cloned() else {
             return;
         };
+        let sender = Task::current();
+        let sender_mask = (sender.process().pid() == pid).then(|| sender.signal_mask());
         let mut guard = process.signals_write();
         let effect = guard.deliver(info.signo);
         // Log stop and terminate outcomes at generation time. The victim may
@@ -83,7 +87,16 @@ impl SignalAccess for KernelAccess {
             info!("continuing process {pid}");
             guard.resume_stopped_tasks();
         }
-        // Spurious wakes are by design, the woken task re-checks its condition.
-        process.wake_interruptible();
+        process.wake_signal_taker(info.signo, sender_mask);
+    }
+}
+
+impl SignalMaskAccess for KernelAccess {
+    fn signal_mask(&self) -> SignalMask {
+        Task::current().signal_mask()
+    }
+
+    fn set_signal_mask(&self, mask: SignalMask) {
+        Task::current().set_signal_mask(mask);
     }
 }

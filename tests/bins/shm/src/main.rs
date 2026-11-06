@@ -105,8 +105,8 @@ fn run() -> Result<(), &'static str> {
         return Err("resize keeps the data");
     }
 
-    if unsafe { munmap(addr, LEN) } != Err(EINVAL) {
-        return Err("second munmap is EINVAL");
+    if unsafe { munmap(addr, LEN) } != Ok(()) {
+        return Err("second munmap is not a no-op");
     }
 
     let mut survivor = File::open(PATH).map_err(|_| "open before unlink")?;

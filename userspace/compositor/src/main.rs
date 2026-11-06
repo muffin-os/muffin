@@ -1,6 +1,8 @@
 //! The compositor owns the display. It serves window clients on
-//! `SOCKET_PATH`, reads the mouse and draws the cursor. The process has one
-//! thread, so one `poll` loop drives the listener, each client and the mouse.
+//! `SOCKET_PATH`, reads the mouse and draws the cursor. Three threads send
+//! events through one channel. The socket thread accepts the clients and
+//! reads their requests. The input thread reads the mouse. The main thread
+//! owns the display and the windows. It draws and writes the responses.
 //!
 //! The scene texture holds the desktop without the cursor. Each change to
 //! the screen copies the changed part of the scene to the scanout. Then it
@@ -11,13 +13,18 @@
 //! prints them. The end-to-end test checks these lines. No other user needs
 //! them.
 
+use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::ffi::c_int;
+use std::net::Shutdown;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::exit;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::mpsc::{self, SendError, Sender};
 use std::time::Instant;
-use std::{env, io};
+use std::{env, io, thread};
 
 use compositor_cursor::arrow::{Arrow, Fill, Outline, VERTEX_COUNT};
 use compositor_cursor::pointer::{Pointer, PointerChange};
@@ -38,8 +45,6 @@ use kernel_abi::{InputEvent, InputEventKind, MotionAxis, PollEvents, PollFd};
 use muffin_sys::{EINTR, ENOENT, Errno, O_RDONLY};
 
 const CURSOR_VERTEX_BYTES: usize = VERTEX_COUNT * GOURAUD_STRIDE;
-/// This poll entry is for a missing mouse.
-const NO_MOUSE: PollFd = PollFd::new(-1, PollEvents::IN);
 
 // Both probes assume the 800x600 test resolution and the apex at `y = 0.75`.
 /// A pixel inside the triangle, near the red apex.
@@ -363,28 +368,60 @@ fn no_window() -> io::Error {
     io::Error::other("request before NewWindow")
 }
 
+/// The socket thread gives each client a new id. An id never repeats.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ClientId(u64);
+
+/// The worker threads send these events to the main thread. The events of
+/// one client arrive in the sequence that the socket thread sends them.
+enum Event {
+    /// The socket thread accepts a client. The requests of `client` follow.
+    Connected {
+        client: ClientId,
+        stream: Arc<UnixStream>,
+    },
+    Request {
+        client: ClientId,
+        request: Request,
+    },
+    /// The client closes its stream or sends a bad message. The socket thread
+    /// does not read it again.
+    Closed(ClientId),
+    /// This is one batch of mouse events in the sequence of the device.
+    Input(Vec<InputEvent>),
+    /// A worker thread fails with this error. The compositor stops too.
+    Fatal(io::Error),
+}
+
+fn main_thread_ended(_: SendError<Event>) -> io::Error {
+    io::Error::other("the main thread ended")
+}
+
+/// This function runs `work` on a new thread. The main thread receives the error of `work`
+/// as `Event::Fatal`.
+fn spawn_worker(
+    events: Sender<Event>,
+    work: impl FnOnce(&Sender<Event>) -> io::Result<Infallible> + Send + 'static,
+) -> io::Result<()> {
+    thread::Builder::new().spawn(move || {
+        let Err(e) = work(&events);
+        // The send fails only when the main thread no longer runs. Then the
+        // process exits, and no thread can report the error.
+        let _ = events.send(Event::Fatal(e));
+    })?;
+    Ok(())
+}
+
+/// This is the write side of one client. Only the main thread writes to a
+/// client.
 struct Client {
-    stream: UnixStream,
+    stream: Arc<UnixStream>,
     window: Option<Window>,
 }
 
-/// This is the result of one turn of a client.
-enum Served {
-    Request,
-    /// The client closed the stream.
-    Closed,
-}
-
 impl Client {
-    fn poll_fd(&self) -> PollFd {
-        PollFd::new(self.stream.as_raw_fd(), PollEvents::IN)
-    }
-
     /// Answers one request.
-    fn serve_one(&mut self, frame: &mut Frame) -> io::Result<Served> {
-        let Some(request) = read_message::<Request>(&mut &self.stream)? else {
-            return Ok(Served::Closed);
-        };
+    fn serve(&mut self, request: Request, frame: &mut Frame) -> io::Result<()> {
         let mut pending_fd = None;
         let response = match request {
             Request::NewWindow(NewWindowRequest { width, height }) => {
@@ -439,12 +476,12 @@ impl Client {
                 Response::Finish(FinishResponse {})
             }
         };
-        write_message(&mut &self.stream, &response)?;
-        if let Some(fd) = pending_fd.take() {
+        write_message(&mut &*self.stream, &response)?;
+        if let Some(fd) = pending_fd {
             muffin_sys::send_fd(self.stream.as_raw_fd(), fd)
                 .map_err(|e| errno_error("send_fd", e))?;
         }
-        Ok(Served::Request)
+        Ok(())
     }
 }
 
@@ -483,18 +520,32 @@ impl Mouse {
         Ok(None)
     }
 
-    fn poll_fd(&self) -> PollFd {
-        PollFd::new(self.fd, PollEvents::IN)
-    }
-
     /// Reads the pending events. Blocks when no event is pending.
-    fn read_events(&mut self) -> io::Result<impl Iterator<Item = InputEvent> + '_> {
-        let n = muffin_sys::read(self.fd, &mut self.buf).map_err(|e| errno_error("mouse", e))?;
+    fn read_events(&mut self) -> io::Result<Vec<InputEvent>> {
+        let n = loop {
+            match muffin_sys::read(self.fd, &mut self.buf) {
+                Ok(n) => break n,
+                Err(EINTR) => {}
+                Err(e) => return Err(errno_error("mouse", e)),
+            }
+        };
         Ok(self.buf[..n]
             .as_chunks::<{ InputEvent::SIZE }>()
             .0
             .iter()
-            .map(|raw| InputEvent::from_bytes(*raw)))
+            .map(|raw| InputEvent::from_bytes(*raw))
+            .collect())
+    }
+
+    /// This function runs on the input thread. It sends each batch of events to the main
+    /// thread.
+    fn forward_events(mut self, events: &Sender<Event>) -> io::Result<Infallible> {
+        loop {
+            let batch = self.read_events()?;
+            events
+                .send(Event::Input(batch))
+                .map_err(main_thread_ended)?;
+        }
     }
 }
 
@@ -521,64 +572,181 @@ impl CursorReporter {
     }
 }
 
-fn run() -> io::Result<()> {
-    let is_probing = env::args().skip(1).any(|arg| arg == "--probe");
-    let mut frame = Frame::new(is_probing)?;
-    let mut mouse = Mouse::open()?;
-    let mut reporter = is_probing.then_some(CursorReporter {
-        has_reported: false,
-    });
-    let listener = UnixListener::bind(SOCKET_PATH)?;
-    println!("compositor: listening on {SOCKET_PATH}");
-    let mut clients: Vec<Client> = Vec::new();
-    let mut fds = Vec::new();
-    loop {
-        fds.clear();
-        fds.push(PollFd::new(listener.as_raw_fd(), PollEvents::IN));
-        // Poll skips a negative descriptor. Thus a missing mouse needs no special case.
-        fds.push(mouse.as_ref().map_or(NO_MOUSE, Mouse::poll_fd));
-        fds.extend(clients.iter().map(Client::poll_fd));
-        match muffin_sys::poll(&mut fds, None) {
-            Ok(_) => {}
-            Err(EINTR) => continue,
-            Err(e) => return Err(errno_error("poll", e)),
-        }
-        let (listener_ready, mouse_ready, client_ready) = (fds[0], fds[1], &fds[2..]);
+/// This is the read side of one client. Only the socket thread reads from a
+/// client.
+struct ClientReader {
+    id: ClientId,
+    stream: Arc<UnixStream>,
+}
 
-        if !listener_ready.revents.is_empty() {
-            match listener.accept() {
-                Err(e) => println!("compositor: accept error {e}"),
-                Ok((stream, _)) => clients.push(Client {
-                    stream,
-                    window: None,
-                }),
-            }
+impl ClientReader {
+    fn poll_fd(&self) -> PollFd {
+        PollFd::new(self.stream.as_raw_fd(), PollEvents::IN)
+    }
+
+    /// This function reads one full request. It returns `None` when the client closes the
+    /// stream or sends a bad message.
+    fn read_request(&self) -> Option<Request> {
+        read_message::<Request>(&mut &*self.stream).unwrap_or_else(|e| {
+            println!("compositor: client error {e}");
+            None
+        })
+    }
+}
+
+/// The socket thread accepts the clients and reads their requests.
+struct SocketReader {
+    listener: UnixListener,
+    clients: Vec<ClientReader>,
+    next_client_id: u64,
+}
+
+impl SocketReader {
+    fn new(listener: UnixListener) -> Self {
+        Self {
+            listener,
+            clients: Vec::new(),
+            next_client_id: 0,
         }
-        if !mouse_ready.revents.is_empty()
-            && let Some(mouse) = mouse.as_mut()
-        {
-            let changes = frame.move_cursor(mouse.read_events()?)?;
-            if let Some(reporter) = reporter.as_mut() {
-                reporter.report(&frame, &changes)?;
+    }
+
+    /// This function runs on the socket thread. It sends each new client and each request to
+    /// the main thread.
+    fn forward_requests(mut self, events: &Sender<Event>) -> io::Result<Infallible> {
+        let mut fds = Vec::new();
+        loop {
+            fds.clear();
+            fds.push(PollFd::new(self.listener.as_raw_fd(), PollEvents::IN));
+            fds.extend(self.clients.iter().map(ClientReader::poll_fd));
+            match muffin_sys::poll(&mut fds, None) {
+                Ok(_) => {}
+                Err(EINTR) => continue,
+                Err(e) => return Err(errno_error("poll", e)),
             }
-        }
-        // Serve from the back so a removal does not shift the entries ahead.
-        for (index, ready) in client_ready.iter().enumerate().rev() {
-            if ready.revents.is_empty() {
-                continue;
+            let (listener_ready, client_ready) = (fds[0], &fds[1..]);
+
+            if !listener_ready.revents.is_empty()
+                && let Some(event) = self.accept()
+            {
+                events.send(event).map_err(main_thread_ended)?;
             }
-            match clients[index].serve_one(&mut frame) {
-                Ok(Served::Request) => {}
-                Ok(Served::Closed) => {
-                    clients.swap_remove(index);
+            // Read from the back so a removal does not shift the entries ahead.
+            for (index, ready) in client_ready.iter().enumerate().rev() {
+                if ready.revents.is_empty() {
+                    continue;
                 }
-                Err(e) => {
-                    println!("compositor: client error {e}");
-                    clients.swap_remove(index);
-                }
+                let client = &self.clients[index];
+                let event = match client.read_request() {
+                    Some(request) => Event::Request {
+                        client: client.id,
+                        request,
+                    },
+                    None => Event::Closed(self.clients.swap_remove(index).id),
+                };
+                events.send(event).map_err(main_thread_ended)?;
             }
         }
     }
+
+    /// This function returns `None` when the accept fails. A failed accept does not stop
+    /// the compositor.
+    fn accept(&mut self) -> Option<Event> {
+        let stream = match self.listener.accept() {
+            Ok((stream, _)) => Arc::new(stream),
+            Err(e) => {
+                println!("compositor: accept error {e}");
+                return None;
+            }
+        };
+        let client = ClientId(self.next_client_id);
+        self.next_client_id += 1;
+        self.clients.push(ClientReader {
+            id: client,
+            stream: Arc::clone(&stream),
+        });
+        Some(Event::Connected { client, stream })
+    }
+}
+
+/// The main thread owns the display, the windows and the write side of each
+/// client.
+struct Compositor {
+    frame: Frame,
+    clients: BTreeMap<ClientId, Client>,
+    reporter: Option<CursorReporter>,
+}
+
+impl Compositor {
+    fn handle(&mut self, event: Event) -> io::Result<()> {
+        match event {
+            Event::Connected { client, stream } => {
+                self.clients.insert(
+                    client,
+                    Client {
+                        stream,
+                        window: None,
+                    },
+                );
+            }
+            Event::Request { client, request } => self.serve(client, request),
+            Event::Closed(client) => {
+                self.clients.remove(&client);
+            }
+            Event::Input(batch) => {
+                let changes = self.frame.move_cursor(batch)?;
+                if let Some(reporter) = self.reporter.as_mut() {
+                    reporter.report(&self.frame, &changes)?;
+                }
+            }
+            Event::Fatal(e) => return Err(e),
+        }
+        Ok(())
+    }
+
+    fn serve(&mut self, id: ClientId, request: Request) {
+        // A client that fails has no entry. Its remaining requests get no
+        // answer.
+        let Some(client) = self.clients.get_mut(&id) else {
+            return;
+        };
+        if let Err(e) = client.serve(request, &mut self.frame) {
+            println!("compositor: client error {e}");
+            // The shutdown wakes the socket thread. It then reads the end of
+            // the stream and drops its read side.
+            if let Err(e) = client.stream.shutdown(Shutdown::Both) {
+                println!("compositor: shutdown error {e}");
+            }
+            self.clients.remove(&id);
+        }
+    }
+}
+
+fn run() -> io::Result<()> {
+    let is_probing = env::args().skip(1).any(|arg| arg == "--probe");
+    let frame = Frame::new(is_probing)?;
+    let mouse = Mouse::open()?;
+    let listener = UnixListener::bind(SOCKET_PATH)?;
+    println!("compositor: listening on {SOCKET_PATH}");
+
+    let (events, received) = mpsc::channel();
+    if let Some(mouse) = mouse {
+        spawn_worker(events.clone(), move |events| mouse.forward_events(events))?;
+    }
+    spawn_worker(events, move |events| {
+        SocketReader::new(listener).forward_requests(events)
+    })?;
+
+    let mut compositor = Compositor {
+        frame,
+        clients: BTreeMap::new(),
+        reporter: is_probing.then_some(CursorReporter {
+            has_reported: false,
+        }),
+    };
+    for event in received {
+        compositor.handle(event)?;
+    }
+    Err(io::Error::other("every worker thread ended"))
 }
 
 fn main() {

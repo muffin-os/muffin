@@ -361,6 +361,29 @@ ext2_image(
 )
 
 ext2_image(
+    name = "threads_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/0-threads": "//tests/bins:threads",
+        "bin/tests/1-threads-exit": "//tests/bins:threads_exit",
+        "bin/tests/2-threads-last": "//tests/bins:threads_last",
+        "bin/tests/3-stack-overflow-thread": "//tests/bins:threads_stack_overflow_thread",
+        "bin/tests/4-stack-overflow-main": "//tests/bins:threads_stack_overflow_main",
+        "bin/tests/5-fork-threads": "//tests/bins:threads_fork",
+    },
+    # Six std debug builds need more space than the 64M default.
+    image_size = "128M",
+)
+
+ext2_image(
+    name = "unmap_race_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/unmap-race": "//tests/bins:unmap_race",
+    },
+)
+
+ext2_image(
     name = "compositor_disk",
     files = {
         "bin/init": "//tests/bins:test_init",
@@ -463,8 +486,10 @@ ext2_image(
         "sleep",
         "std_smoke",
         "std_unix_socket",
+        "threads",
         "true_false",
         "unix_socket",
+        "unmap_race",
         "unwind",
         "vfs_mkdir",
     ]

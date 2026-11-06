@@ -2,6 +2,7 @@ use alloc::sync::Arc;
 use core::alloc::Layout;
 use core::fmt::{Debug, Formatter};
 use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::slice::{from_raw_parts, from_raw_parts_mut};
@@ -29,6 +30,8 @@ bitflags! {
         /// child before it runs. Required for memory the kernel writes with
         /// interrupts off (FX area) or during signal delivery (user stack).
         const FORK_COPY_EAGER = 2;
+        /// This option applies the fork policy of [`MemoryRegion::is_per_thread`].
+        const PER_THREAD = 4;
     }
 }
 
@@ -116,6 +119,7 @@ impl MemoryApi for LowerHalfMemoryApi {
             (window_len / Size4KiB::SIZE).into_usize(),
             base_flags,
             fork,
+            options.contains(LowerHalfAllocOptions::PER_THREAD),
             self.process.address_space(),
         )
         .ok()?;
@@ -246,6 +250,23 @@ impl<T: AllocationType> LowerHalfAllocation<T> {
             },
             _typ: PhantomData,
         })
+    }
+
+    /// This function drops the handle and keeps the region mapped. Exec or
+    /// the end of the process removes the region later. A task that ends with
+    /// interrupts off uses this function, because
+    /// [`MemoryRegions::remove_region`] cannot flush the TLBs of the other
+    /// CPUs in that case.
+    ///
+    /// [`MemoryRegions::remove_region`]: crate::mcore::mtask::process::mem::MemoryRegions::remove_region
+    pub(crate) fn abandon(self) {
+        let this = ManuallyDrop::new(self);
+        // Safety: `this` never drops. Therefore each field that owns a
+        // resource drops exactly once here, and `Inner::drop` does not run.
+        unsafe {
+            drop(ptr::read(&this.inner.region));
+            drop(ptr::read(&this.inner.process));
+        }
     }
 }
 

@@ -8,12 +8,21 @@ pub use segment::*;
 use thiserror::Error;
 use tracing::debug;
 use x86_64::VirtAddr;
+use x86_64::structures::paging::{PageSize, Size4KiB};
 
 mod segment;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
 #[error("segment already reserved")]
 pub struct AlreadyReserved;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Error)]
+pub enum SplitSegmentError {
+    #[error("segment not reserved")]
+    NotReserved,
+    #[error("split point is not a page boundary strictly inside the segment")]
+    InvalidSplitPoint,
+}
 
 pub struct VirtualMemoryManager {
     mem_start: VirtAddr,
@@ -83,6 +92,33 @@ impl VirtualMemoryManager {
         self.segments.iter()
     }
 
+    /// This method replaces the reserved `segment` with the two segments that
+    /// meet at `at`. A failed split leaves the reservation unchanged.
+    ///
+    /// # Errors
+    /// This method returns `InvalidSplitPoint` when `at` is not page aligned or
+    /// not strictly inside `segment`. It returns `NotReserved` when `segment`
+    /// is not reserved exactly as given.
+    pub fn split(
+        &mut self,
+        segment: Segment,
+        at: VirtAddr,
+    ) -> Result<(Segment, Segment), SplitSegmentError> {
+        let low_len = at
+            .as_u64()
+            .checked_sub(segment.start.as_u64())
+            .filter(|&len| len > 0 && len < segment.len && at.is_aligned(Size4KiB::SIZE))
+            .ok_or(SplitSegmentError::InvalidSplitPoint)?;
+        if !self.segments.remove(&segment) {
+            return Err(SplitSegmentError::NotReserved);
+        }
+        let low = Segment::new(segment.start, low_len);
+        let high = Segment::new(at, segment.len - low_len);
+        self.segments.insert(low);
+        self.segments.insert(high);
+        Ok((low, high))
+    }
+
     fn find_overlapping(&self, segment: &Segment) -> Option<&Segment> {
         self.find_overlapping_at(segment.start.as_u64() as u128, segment.len)
     }
@@ -102,6 +138,8 @@ impl VirtualMemoryManager {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::*;
 
     #[test]
@@ -180,6 +218,60 @@ mod tests {
         assert!(
             segment.is_some(),
             "zero-length entries must not block reservations"
+        );
+    }
+
+    #[test]
+    fn split_replaces_the_segment_with_two_halves() {
+        let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0x1000), 0x10000);
+        let segment = Segment::new(VirtAddr::new(0x2000), 0x4000);
+        vmm.mark_as_reserved(segment).unwrap();
+
+        let (low, high) = vmm.split(segment, VirtAddr::new(0x3000)).unwrap();
+
+        assert_eq!(low, Segment::new(VirtAddr::new(0x2000), 0x1000));
+        assert_eq!(high, Segment::new(VirtAddr::new(0x3000), 0x3000));
+        assert_eq!(vmm.segments().copied().collect::<Vec<_>>(), [low, high]);
+        assert!(vmm.release(low), "each half is a reservation of its own");
+        assert_eq!(
+            vmm.mark_as_reserved(high),
+            Err(AlreadyReserved),
+            "the high half stays reserved"
+        );
+    }
+
+    #[test]
+    fn split_at_a_boundary_or_off_a_page_is_rejected() {
+        let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0x1000), 0x10000);
+        let segment = Segment::new(VirtAddr::new(0x2000), 0x4000);
+        vmm.mark_as_reserved(segment).unwrap();
+
+        for at in [0x1000, 0x2000, 0x6000, 0x7000, 0x3001] {
+            assert_eq!(
+                vmm.split(segment, VirtAddr::new(at)),
+                Err(SplitSegmentError::InvalidSplitPoint),
+                "split at {at:#x}"
+            );
+        }
+        assert_eq!(
+            vmm.segments().copied().collect::<Vec<_>>(),
+            [segment],
+            "a failed split keeps the reservation"
+        );
+    }
+
+    #[test]
+    fn split_of_an_unknown_segment_is_rejected() {
+        let mut vmm = VirtualMemoryManager::new(VirtAddr::new(0x1000), 0x10000);
+        vmm.mark_as_reserved(Segment::new(VirtAddr::new(0x2000), 0x4000))
+            .unwrap();
+
+        assert_eq!(
+            vmm.split(
+                Segment::new(VirtAddr::new(0x2000), 0x3000),
+                VirtAddr::new(0x3000)
+            ),
+            Err(SplitSegmentError::NotReserved)
         );
     }
 }

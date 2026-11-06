@@ -106,7 +106,10 @@ fn parent(l: c_int, child: i64) -> i32 {
     require!("parent close", close(c));
 
     let mut status = 0;
-    require!("waitpid", waitpid(child, &mut status, WaitOptions::empty()));
+    // SAFETY: `status` is a live local.
+    require!("waitpid", unsafe {
+        waitpid(child, &raw mut status, WaitOptions::empty())
+    });
     if status != 0 {
         println!("unix-socket: FAIL child status {status}");
         return 1;

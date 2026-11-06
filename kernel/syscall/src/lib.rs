@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(negative_impls)]
 extern crate alloc;
 
 pub mod access;
@@ -9,6 +8,8 @@ pub mod mman;
 pub mod poll;
 pub mod signal;
 pub mod socket;
+pub mod thread;
+pub mod tls;
 pub mod unistd;
 pub mod wait;
 

@@ -7,6 +7,7 @@ use kernel_elfloader::{
     ElfFile, ElfHeader, ElfParseError, ElfType, ProgramHeaderFlags, ProgramHeaderType,
 };
 use kernel_memapi::{Guarded, Location, MemoryApi};
+use kernel_syscall::tls::TlsLayout;
 use kernel_vfs::Stat;
 use kernel_vfs::node::VfsNode;
 use kernel_virtual_memory::Segment;
@@ -19,6 +20,7 @@ use crate::mcore::mtask::process::Process;
 use crate::mcore::mtask::process::mem::{
     FileBackedMemoryRegion, MemoryRegion, PrivateMemoryRegion,
 };
+use crate::mcore::mtask::process::tls::TlsTemplate;
 use crate::mcore::mtask::task::Task;
 use crate::mem::memapi::{LowerHalfAllocOptions, LowerHalfMemoryApi};
 use crate::mem::virt::VirtualMemoryAllocator;
@@ -84,10 +86,10 @@ enum ValidatedSegment {
     },
 }
 
+#[derive(Copy, Clone)]
 struct ValidatedTls {
-    layout: Layout,
+    layout: TlsLayout,
     offset: usize,
-    filesz: usize,
 }
 
 /// Runs every static check on the executable without touching the process.
@@ -195,12 +197,14 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
                 memsz: tls.memsz,
             });
         }
-        let layout = Layout::from_size_align(tls.memsz, tls.align)
-            .map_err(|_| LoadExecutableError::InvalidSizeOrAlign)?;
+        // A lower-half allocation starts on a page boundary. It cannot
+        // provide a stricter alignment.
+        let layout = TlsLayout::new(tls.filesz, tls.memsz, tls.align)
+            .filter(|layout| layout.block().align() <= page_size)
+            .ok_or(LoadExecutableError::InvalidSizeOrAlign)?;
         Some(ValidatedTls {
             layout,
             offset: tls.offset,
-            filesz: tls.filesz,
         })
     } else {
         None
@@ -214,9 +218,10 @@ pub fn validate(node: &VfsNode) -> Result<ValidatedExecutable, LoadExecutableErr
 }
 
 impl ValidatedExecutable {
-    /// Commits the executable into the process. Failures past this point
-    /// leave the process partially populated, so execve callers must not
-    /// return to the old image after calling this.
+    /// This function commits the executable into the process and gives `task`
+    /// its TLS block. A failure after this point leaves the process
+    /// partially populated. After a call to this function, the execve caller
+    /// must not return to the old image.
     pub fn load(
         &self,
         process: &Arc<Process>,
@@ -278,31 +283,29 @@ impl ValidatedExecutable {
             }
         }
 
-        if let Some(tls) = &self.tls {
-            let mut alloc = memapi
-                .allocate(
-                    Location::Anywhere,
-                    tls.layout,
-                    LowerHalfAllocOptions::USER_ACCESSIBLE,
-                    Guarded::No,
-                )
-                .ok_or(LoadExecutableError::AllocationFailed)?;
-            let slice = alloc.as_mut();
-            read_exact(node, &mut slice[..tls.filesz], tls.offset)?;
-            slice[tls.filesz..].fill(0);
+        let template = self
+            .tls
+            .map(|tls| TlsTemplate::new(node.clone(), tls.offset, tls.layout));
+        if let Some(template) = &template {
+            let block = template.instantiate(process)?;
             // The scheduler reloads FsBase from the stored slot on every
             // switch, so storing first keeps a preempting tick from switching
             // back in with FsBase zeroed.
-            let start = alloc.start();
-            *task.tls().write() = Some(alloc);
-            FsBase::write(start);
+            let thread_pointer = block.thread_pointer();
+            *task.tls().write() = Some(block);
+            FsBase::write(thread_pointer);
         }
+        *process.tls_template().write() = template;
 
         Ok(self.entry)
     }
 }
 
-fn read_exact(node: &VfsNode, buf: &mut [u8], offset: usize) -> Result<(), LoadExecutableError> {
+pub(super) fn read_exact(
+    node: &VfsNode,
+    buf: &mut [u8],
+    offset: usize,
+) -> Result<(), LoadExecutableError> {
     let mut done = 0;
     while done < buf.len() {
         let n = node

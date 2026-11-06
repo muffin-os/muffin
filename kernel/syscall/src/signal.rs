@@ -6,6 +6,7 @@ use tracing::{Level, instrument};
 
 use crate::access::{
     Capability, Identity, PermissionAccess, ProcessAccess, ProcessesAccess, SignalAccess,
+    SignalMaskAccess,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -102,12 +103,13 @@ pub struct DeliverEffect {
     pub must_resume_tasks: bool,
 }
 
-/// Per-process signal state. All delivery policy is decided here.
+/// This type holds the signal state of one process: the actions, the
+/// process-pending set and the stop flag. Each thread has its own
+/// [`SignalMask`]. This type decides all delivery policy.
 #[derive(Debug)]
 pub struct SignalState {
     actions: [SigAction; Signal::COUNT],
     pending: SigSet,
-    blocked: SigSet,
     stopped: bool,
 }
 
@@ -116,7 +118,6 @@ impl Default for SignalState {
         Self {
             actions: [SigAction::default(); Signal::COUNT],
             pending: SigSet::EMPTY,
-            blocked: SigSet::EMPTY,
             stopped: false,
         }
     }
@@ -124,13 +125,97 @@ impl Default for SignalState {
 
 const KILL_STOP_MASK: SigSet = Signal::Kill.bit().union(Signal::Stop.bit());
 
+/// This type holds the blocked set of one thread. The set never contains `Kill` or `Stop`.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
+pub struct SignalMask(SigSet);
+
+impl SignalMask {
+    /// This function returns the mask that blocks every signal of `set` that a thread can block.
+    #[must_use]
+    pub const fn blocking(set: SigSet) -> Self {
+        Self(set.difference(KILL_STOP_MASK))
+    }
+
+    #[must_use]
+    pub const fn blocked(self) -> SigSet {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn blocks(self, signo: Signal) -> bool {
+        self.0.contains(signo)
+    }
+
+    /// This method applies a `sigprocmask` change and returns the previous
+    /// blocked set. A `set` of `None` only queries the mask.
+    pub fn sigprocmask(&mut self, how: SigMaskHow, set: Option<SigSet>) -> SigSet {
+        let old = self.0;
+        if let Some(set) = set {
+            *self = Self::blocking(match how {
+                SigMaskHow::Block => old.union(set),
+                SigMaskHow::Unblock => old.difference(set),
+                SigMaskHow::SetMask => set,
+            });
+        }
+        old
+    }
+
+    /// This method applies the handler mask and returns the previous blocked set.
+    /// `NODEFER` leaves the delivered signal unblocked, unless `action.mask` contains the signal.
+    pub fn enter_handler(&mut self, signo: Signal, action: &SigAction) -> SigSet {
+        let old_blocked = self.blocked();
+        let mut blocked = old_blocked.union(action.mask);
+        if !action.flags.contains(SaFlags::NODEFER) {
+            blocked.insert(signo);
+        }
+        *self = Self::blocking(blocked);
+        old_blocked
+    }
+}
+
+/// This function implements POSIX `sigprocmask` for the calling thread. It
+/// returns the previous blocked set. The masks of the other threads do not change.
+pub fn sys_sigprocmask<Cx: SignalMaskAccess>(
+    cx: &Cx,
+    how: SigMaskHow,
+    set: Option<SigSet>,
+) -> SigSet {
+    let mut mask = cx.signal_mask();
+    let old = mask.sigprocmask(how, set);
+    cx.set_signal_mask(mask);
+    old
+}
+
+/// This function chooses the parked thread that must wake to take a new
+/// process-pending `signo`. `sender` is the mask of the sending thread when
+/// that thread belongs to the target process. `parked` holds each parked
+/// thread with its mask.
+///
+/// The function returns `None` when the sender does not block `signo`,
+/// because the sender takes the signal on its return to user mode. It also
+/// returns `None` when every parked thread blocks `signo`. A thread in user
+/// mode takes the signal at its next tick when it does not block the signal.
+/// Otherwise the signal stays pending until a thread unblocks it.
+pub fn thread_to_wake<T>(
+    signo: Signal,
+    sender: Option<SignalMask>,
+    parked: impl IntoIterator<Item = (T, SignalMask)>,
+) -> Option<T> {
+    if sender.is_some_and(|mask| !mask.blocks(signo)) {
+        return None;
+    }
+    parked
+        .into_iter()
+        .find_map(|(thread, mask)| (!mask.blocks(signo)).then_some(thread))
+}
+
 impl SignalState {
     fn action(&self, signo: Signal) -> SigAction {
         self.actions[signo.index()]
     }
 
-    fn deliverable(&self) -> SigSet {
-        self.pending.difference(self.blocked)
+    fn deliverable(&self, mask: SignalMask) -> SigSet {
+        self.pending.difference(mask.blocked())
     }
 
     /// Generation-time delivery. Records the signal as pending and, for a
@@ -162,32 +247,34 @@ impl SignalState {
         }
     }
 
-    /// Take the lowest-numbered deliverable (pending and unblocked) signal,
-    /// clearing its pending bit.
+    /// This method takes the lowest-numbered pending signal that `mask` does
+    /// not block and clears its pending bit. The thread with `mask` takes the
+    /// signal, so no other thread sees it.
     #[must_use]
-    pub fn take_next_deliverable(&mut self) -> Option<Signal> {
-        let signo = self.deliverable().iter().next()?;
+    pub fn take_next_deliverable(&mut self, mask: SignalMask) -> Option<Signal> {
+        let signo = self.deliverable(mask).iter().next()?;
         self.pending.remove(signo);
         Some(signo)
     }
 
-    /// Whether any deliverable signal would terminate the process by default.
+    /// This method returns true when a signal deliverable to a thread with
+    /// `mask` would terminate the process by default.
     #[must_use]
-    pub fn has_fatal_deliverable(&self) -> bool {
-        self.deliverable()
+    pub fn has_fatal_deliverable(&self, mask: SignalMask) -> bool {
+        self.deliverable(mask)
             .iter()
             .any(|s| matches!(self.disposition(s), Disposition::DefaultTerminate))
     }
 
-    /// Whether any deliverable signal should abort a blocked kernel wait with
-    /// `EINTR`. This is the predicate an interruptible wait re-checks after
-    /// being woken.
+    /// This method returns true when a signal deliverable to a thread with
+    /// `mask` should abort a blocked kernel wait of that thread with `EINTR`.
+    /// An interruptible wait checks this predicate again after a wake.
     ///
-    /// Ignored signals must not cause `EINTR`, and a stop leaves the sleeper
-    /// parked, so only a handler or a default-terminate disposition counts.
+    /// An ignored signal does not cause `EINTR`. A stop leaves the sleeper
+    /// parked. Only a handler or a default-terminate disposition counts.
     #[must_use]
-    pub fn has_interrupting_deliverable(&self) -> bool {
-        self.deliverable().iter().any(|s| {
+    pub fn has_interrupting_deliverable(&self, mask: SignalMask) -> bool {
+        self.deliverable(mask).iter().any(|s| {
             matches!(
                 self.disposition(s),
                 Disposition::Handler(_) | Disposition::DefaultTerminate
@@ -237,8 +324,8 @@ impl SignalState {
         Ok(old)
     }
 
-    /// POSIX exec semantics. Ignored signals stay ignored, every other action
-    /// falls back to default. The blocked and pending sets survive the exec.
+    /// This method implements POSIX exec semantics. Ignored signals stay
+    /// ignored. Every other action returns to default. The pending set survives the exec.
     pub fn exec_reset(&mut self) {
         for action in &mut self.actions {
             if !action.handler.is_ignore() {
@@ -247,52 +334,16 @@ impl SignalState {
         }
     }
 
-    /// Apply a mask change and return the previous mask. `Kill`/`Stop` can
-    /// never be blocked, so their bits are always cleared afterwards.
-    pub fn sigprocmask(&mut self, how: SigMaskHow, set: Option<SigSet>) -> SigSet {
-        let old = self.blocked;
-        if let Some(set) = set {
-            match how {
-                SigMaskHow::Block => self.blocked = self.blocked.union(set),
-                SigMaskHow::Unblock => self.blocked = self.blocked.difference(set),
-                SigMaskHow::SetMask => self.blocked = set,
-            }
-            self.blocked = self.blocked.difference(KILL_STOP_MASK);
-        }
-        old
-    }
-
     #[must_use]
     pub fn sigpending(&self) -> SigSet {
         self.pending
     }
 
-    #[must_use]
-    pub fn blocked(&self) -> SigSet {
-        self.blocked
-    }
-
-    /// Restores the blocked mask, always dropping the unblockable
-    /// `Kill`/`Stop` bits.
-    pub fn set_blocked_raw(&mut self, set: SigSet) {
-        self.blocked = set.difference(KILL_STOP_MASK);
-    }
-
-    /// Apply the mask changes that accompany entering a handler and return the
-    /// old mask. Blocks `action.mask` plus the delivered signal (unless
-    /// `NODEFER`), keeps `Kill`/`Stop` unblockable, and resets the action to
-    /// default when `RESETHAND` is set.
-    pub fn apply_handler_entry(&mut self, signo: Signal, action: &SigAction) -> SigSet {
-        let old_blocked = self.blocked;
-        self.blocked = self.blocked.union(action.mask);
-        if !action.flags.contains(SaFlags::NODEFER) {
-            self.blocked.insert(signo);
-        }
-        self.blocked = self.blocked.difference(KILL_STOP_MASK);
+    /// This method restores the default action when the handler requests `RESETHAND`.
+    pub fn reset_handler_if_requested(&mut self, signo: Signal, action: &SigAction) {
         if action.flags.contains(SaFlags::RESETHAND) {
             self.actions[signo.index()] = SigAction::default();
         }
-        old_blocked
     }
 
     #[must_use]
@@ -304,14 +355,14 @@ impl SignalState {
         self.stopped = stopped;
     }
 
-    /// The state a forked child starts with: the actions and the mask of the
-    /// parent, nothing pending, not stopped (POSIX.1-2024 fork).
+    /// This method returns the state that a forked child starts with. The
+    /// child has the actions of the parent, no pending signal and no stop
+    /// (POSIX.1-2024 fork). The child thread copies the mask of the forking thread.
     #[must_use]
     pub fn fork_inherit(&self) -> Self {
         Self {
             actions: self.actions,
             pending: SigSet::EMPTY,
-            blocked: self.blocked,
             stopped: false,
         }
     }
@@ -331,8 +382,12 @@ mod tests {
 
     use crate::access::{
         Capability, Identity, PermissionAccess, ProcessAccess, ProcessesAccess, SignalAccess,
+        SignalMaskAccess,
     };
-    use crate::signal::{Disposition, SignalState, SignalTarget, sys_kill};
+    use crate::signal::{
+        Disposition, SignalMask, SignalState, SignalTarget, sys_kill, sys_sigprocmask,
+        thread_to_wake,
+    };
 
     macro_rules! pid {
         ($n:expr) => {
@@ -990,49 +1045,37 @@ mod tests {
 
     #[test]
     fn sigprocmask_never_blocks_kill_stop() {
-        let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(SigSet::ALL));
-        assert!(
-            !state.blocked().contains(Signal::Kill),
-            "SIGKILL can never be blocked"
-        );
-        assert!(
-            !state.blocked().contains(Signal::Stop),
-            "SIGSTOP can never be blocked"
-        );
+        let mut mask = SignalMask::default();
+        mask.sigprocmask(SigMaskHow::Block, Some(SigSet::ALL));
+        assert!(!mask.blocks(Signal::Kill), "SIGKILL can never be blocked");
+        assert!(!mask.blocks(Signal::Stop), "SIGSTOP can never be blocked");
     }
 
     #[test]
     fn sigprocmask_applies_modes_and_returns_previous() {
-        let mut state = SignalState::default();
-        let prev = state.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
+        let mut mask = SignalMask::default();
+        let prev = mask.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
         assert_eq!(prev, SigSet::EMPTY, "previous mask was empty");
-        assert!(
-            state.blocked().contains(Signal::Interrupt),
-            "SIGINT now blocked"
-        );
+        assert!(mask.blocks(Signal::Interrupt), "SIGINT now blocked");
 
-        state.sigprocmask(SigMaskHow::Unblock, Some(Signal::Interrupt.bit()));
-        assert!(
-            !state.blocked().contains(Signal::Interrupt),
-            "SIGINT unblocked"
-        );
+        mask.sigprocmask(SigMaskHow::Unblock, Some(Signal::Interrupt.bit()));
+        assert!(!mask.blocks(Signal::Interrupt), "SIGINT unblocked");
 
-        state.sigprocmask(SigMaskHow::SetMask, Some(Signal::Terminate.bit()));
+        mask.sigprocmask(SigMaskHow::SetMask, Some(Signal::Terminate.bit()));
         assert_eq!(
-            state.blocked(),
+            mask.blocked(),
             Signal::Terminate.bit(),
             "SetMask replaces the whole mask"
         );
 
-        let query = state.sigprocmask(SigMaskHow::Block, None);
+        let query = mask.sigprocmask(SigMaskHow::Block, None);
         assert_eq!(
             query,
             Signal::Terminate.bit(),
             "None queries without mutating"
         );
         assert_eq!(
-            state.blocked(),
+            mask.blocked(),
             Signal::Terminate.bit(),
             "query left mask intact"
         );
@@ -1041,34 +1084,35 @@ mod tests {
     #[test]
     fn take_next_deliverable_lowest_first() {
         let mut state = SignalState::default();
+        let mask = SignalMask::default();
         state.set_pending(Signal::Terminate);
         state.set_pending(Signal::Interrupt);
         assert_eq!(
-            state.take_next_deliverable(),
+            state.take_next_deliverable(mask),
             Some(Signal::Interrupt),
             "lowest-numbered signal delivered first"
         );
         assert_eq!(
-            state.take_next_deliverable(),
+            state.take_next_deliverable(mask),
             Some(Signal::Terminate),
             "next-lowest delivered second"
         );
-        assert_eq!(state.take_next_deliverable(), None, "nothing left");
+        assert_eq!(state.take_next_deliverable(mask), None, "nothing left");
     }
 
     #[test]
     fn take_next_deliverable_honors_blocked() {
         let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
+        let mut mask = SignalMask::blocking(Signal::Interrupt.bit());
         state.set_pending(Signal::Interrupt);
         assert_eq!(
-            state.take_next_deliverable(),
+            state.take_next_deliverable(mask),
             None,
             "blocked signal is not deliverable"
         );
-        state.sigprocmask(SigMaskHow::Unblock, Some(Signal::Interrupt.bit()));
+        mask.sigprocmask(SigMaskHow::Unblock, Some(Signal::Interrupt.bit()));
         assert_eq!(
-            state.take_next_deliverable(),
+            state.take_next_deliverable(mask),
             Some(Signal::Interrupt),
             "unblocking makes it deliverable"
         );
@@ -1077,47 +1121,160 @@ mod tests {
     #[test]
     fn take_next_deliverable_coalesces() {
         let mut state = SignalState::default();
+        let mask = SignalMask::default();
         state.set_pending(Signal::Interrupt);
         state.set_pending(Signal::Interrupt);
         assert_eq!(
-            state.take_next_deliverable(),
+            state.take_next_deliverable(mask),
             Some(Signal::Interrupt),
             "repeated pending signal delivered once"
         );
-        assert_eq!(state.take_next_deliverable(), None, "no second copy queued");
+        assert_eq!(
+            state.take_next_deliverable(mask),
+            None,
+            "no second copy queued"
+        );
     }
 
     #[test]
-    fn apply_handler_entry_nodefer_skips_signo() {
+    fn pending_signal_goes_to_a_thread_that_does_not_block_it() {
         let mut state = SignalState::default();
+        let blocking = SignalMask::blocking(Signal::Usr1.bit());
+        let open = SignalMask::default();
+        state.set_pending(Signal::Usr1);
+
+        assert_eq!(
+            thread_to_wake(Signal::Usr1, Some(blocking), [(1, blocking), (2, open)]),
+            Some(2),
+            "the sender blocks SIGUSR1, so the parked thread that does not block it wakes"
+        );
+        assert_eq!(
+            state.take_next_deliverable(blocking),
+            None,
+            "a thread that blocks SIGUSR1 does not take it"
+        );
+        assert_eq!(
+            state.take_next_deliverable(open),
+            Some(Signal::Usr1),
+            "the thread that does not block SIGUSR1 takes it"
+        );
+        assert_eq!(
+            state.take_next_deliverable(open),
+            None,
+            "one thread takes the signal, so no second thread sees it"
+        );
+    }
+
+    #[test]
+    fn pending_signal_stays_pending_while_every_thread_blocks_it() {
+        let mut state = SignalState::default();
+        let blocking = SignalMask::blocking(Signal::Usr1.bit());
+        state.set_pending(Signal::Usr1);
+
+        assert_eq!(
+            thread_to_wake(Signal::Usr1, None, [(1, blocking), (2, blocking)]),
+            None,
+            "no parked thread can take SIGUSR1"
+        );
+        assert_eq!(state.take_next_deliverable(blocking), None);
+        assert!(
+            state.sigpending().contains(Signal::Usr1),
+            "SIGUSR1 stays pending for the process"
+        );
+
+        let mut unblocked = blocking;
+        unblocked.sigprocmask(SigMaskHow::Unblock, Some(Signal::Usr1.bit()));
+        assert_eq!(
+            state.take_next_deliverable(unblocked),
+            Some(Signal::Usr1),
+            "the first thread that unblocks SIGUSR1 takes it"
+        );
+    }
+
+    #[test]
+    fn sender_that_does_not_block_the_signal_wakes_no_thread() {
+        let open = SignalMask::default();
+        assert_eq!(
+            thread_to_wake(Signal::Usr1, Some(open), [(1, open)]),
+            None,
+            "the sending thread takes the signal on its return to user mode"
+        );
+        assert_eq!(
+            thread_to_wake(Signal::Usr1, None, [(1, open), (2, open)]),
+            Some(1),
+            "a sender of another process wakes one parked thread"
+        );
+    }
+
+    struct TwoThreads {
+        current: usize,
+        masks: RefCell<[SignalMask; 2]>,
+    }
+
+    impl SignalMaskAccess for TwoThreads {
+        fn signal_mask(&self) -> SignalMask {
+            self.masks.borrow()[self.current]
+        }
+
+        fn set_signal_mask(&self, mask: SignalMask) {
+            self.masks.borrow_mut()[self.current] = mask;
+        }
+    }
+
+    #[test]
+    fn sigprocmask_changes_only_the_calling_thread() {
+        let other = SignalMask::blocking(Signal::Usr2.bit());
+        let cx = TwoThreads {
+            current: 0,
+            masks: RefCell::new([SignalMask::default(), other]),
+        };
+
+        let old = sys_sigprocmask(&cx, SigMaskHow::Block, Some(Signal::Usr1.bit()));
+
+        assert_eq!(old, SigSet::EMPTY, "the caller blocked nothing before");
+        assert_eq!(
+            cx.masks.borrow()[0].blocked(),
+            Signal::Usr1.bit(),
+            "the caller blocks SIGUSR1"
+        );
+        assert_eq!(
+            cx.masks.borrow()[1],
+            other,
+            "the other thread keeps its mask"
+        );
+    }
+
+    #[test]
+    fn nodefer_leaves_the_delivered_signal_unblocked() {
+        let mut mask = SignalMask::default();
         let mut action = custom_action(0x1000);
         action.flags = SaFlags::NODEFER;
-        let old = state.apply_handler_entry(Signal::Interrupt, &action);
+        let old = mask.enter_handler(Signal::Interrupt, &action);
         assert_eq!(old, SigSet::EMPTY, "old mask was empty");
         assert!(
-            !state.blocked().contains(Signal::Interrupt),
+            !mask.blocks(Signal::Interrupt),
             "NODEFER leaves the delivered signal unblocked"
         );
     }
 
     #[test]
-    fn apply_handler_entry_blocks_signo_by_default() {
-        let mut state = SignalState::default();
+    fn handler_entry_blocks_the_delivered_signal_by_default() {
+        let mut mask = SignalMask::default();
         let action = custom_action(0x1000);
-        state.apply_handler_entry(Signal::Interrupt, &action);
+        mask.enter_handler(Signal::Interrupt, &action);
         assert!(
-            state.blocked().contains(Signal::Interrupt),
+            mask.blocks(Signal::Interrupt),
             "delivered signal is blocked during its handler"
         );
     }
 
     #[test]
-    fn apply_handler_entry_resethand_resets_action() {
+    fn resethand_restores_the_default_action() {
         let mut state = SignalState::default();
         let mut action = custom_action(0x1000);
         action.flags = SaFlags::RESETHAND;
         state.sigaction(Signal::Interrupt, Some(action)).unwrap();
-        state.apply_handler_entry(Signal::Interrupt, &action);
+        state.reset_handler_if_requested(Signal::Interrupt, &action);
         assert_eq!(
             state.disposition(Signal::Interrupt),
             Disposition::DefaultTerminate,
@@ -1130,7 +1287,7 @@ mod tests {
         let mut state = SignalState::default();
         state.set_pending(Signal::Terminate);
         assert!(
-            state.has_fatal_deliverable(),
+            state.has_fatal_deliverable(SignalMask::default()),
             "pending SIGTERM under default is fatal"
         );
     }
@@ -1143,7 +1300,7 @@ mod tests {
             .unwrap();
         state.set_pending(Signal::Terminate);
         assert!(
-            !state.has_fatal_deliverable(),
+            !state.has_fatal_deliverable(SignalMask::default()),
             "a caught signal is not fatal"
         );
     }
@@ -1151,10 +1308,9 @@ mod tests {
     #[test]
     fn has_fatal_deliverable_false_when_blocked() {
         let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Terminate.bit()));
         state.set_pending(Signal::Terminate);
         assert!(
-            !state.has_fatal_deliverable(),
+            !state.has_fatal_deliverable(SignalMask::blocking(Signal::Terminate.bit())),
             "a blocked signal is not deliverable, so not fatal"
         );
     }
@@ -1163,7 +1319,7 @@ mod tests {
     fn has_interrupting_deliverable_false_when_empty() {
         let state = SignalState::default();
         assert!(
-            !state.has_interrupting_deliverable(),
+            !state.has_interrupting_deliverable(SignalMask::default()),
             "no pending signal interrupts a wait"
         );
     }
@@ -1171,10 +1327,9 @@ mod tests {
     #[test]
     fn has_interrupting_deliverable_false_when_blocked() {
         let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Terminate.bit()));
         state.set_pending(Signal::Terminate);
         assert!(
-            !state.has_interrupting_deliverable(),
+            !state.has_interrupting_deliverable(SignalMask::blocking(Signal::Terminate.bit())),
             "a blocked signal is not deliverable, so it does not interrupt"
         );
     }
@@ -1184,7 +1339,7 @@ mod tests {
         let mut state = SignalState::default();
         state.set_pending(Signal::Continue);
         assert!(
-            !state.has_interrupting_deliverable(),
+            !state.has_interrupting_deliverable(SignalMask::default()),
             "an ignored signal must not cause EINTR"
         );
     }
@@ -1194,7 +1349,7 @@ mod tests {
         let mut state = SignalState::default();
         state.set_pending(Signal::TerminalStop);
         assert!(
-            !state.has_interrupting_deliverable(),
+            !state.has_interrupting_deliverable(SignalMask::default()),
             "a stop leaves the sleeper parked, it does not interrupt"
         );
     }
@@ -1207,7 +1362,7 @@ mod tests {
             .unwrap();
         state.set_pending(Signal::Urgent);
         assert!(
-            state.has_interrupting_deliverable(),
+            state.has_interrupting_deliverable(SignalMask::default()),
             "a caught signal interrupts the wait"
         );
     }
@@ -1217,7 +1372,7 @@ mod tests {
         let mut state = SignalState::default();
         state.set_pending(Signal::Kill);
         assert!(
-            state.has_interrupting_deliverable(),
+            state.has_interrupting_deliverable(SignalMask::blocking(SigSet::ALL)),
             "SIGKILL always interrupts the wait"
         );
     }
@@ -1385,7 +1540,7 @@ mod tests {
             "SIGTERM pending after kill"
         );
         assert_eq!(
-            state.take_next_deliverable(),
+            state.take_next_deliverable(SignalMask::default()),
             Some(Signal::Terminate),
             "SIGTERM is deliverable"
         );
@@ -1403,14 +1558,13 @@ mod tests {
         let mut cx = StatefulTestContext::new(current, current, 1000);
         cx.add_process(target, target);
 
-        {
-            let mut states = cx.states.borrow_mut();
-            let state = states.get_mut(&target).unwrap();
-            state
-                .sigaction(Signal::Interrupt, Some(custom_action(0x1000)))
-                .unwrap();
-            state.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
-        }
+        let mut mask = SignalMask::blocking(Signal::Interrupt.bit());
+        cx.states
+            .borrow_mut()
+            .get_mut(&target)
+            .unwrap()
+            .sigaction(Signal::Interrupt, Some(custom_action(0x1000)))
+            .unwrap();
 
         sys_kill(
             &cx,
@@ -1428,13 +1582,13 @@ mod tests {
                 "SIGINT pending while blocked"
             );
             assert_eq!(
-                state.take_next_deliverable(),
+                state.take_next_deliverable(mask),
                 None,
                 "blocked SIGINT is not deliverable"
             );
-            state.sigprocmask(SigMaskHow::Unblock, Some(Signal::Interrupt.bit()));
+            mask.sigprocmask(SigMaskHow::Unblock, Some(Signal::Interrupt.bit()));
             assert_eq!(
-                state.take_next_deliverable(),
+                state.take_next_deliverable(mask),
                 Some(Signal::Interrupt),
                 "SIGINT deliverable after unblock"
             );
@@ -1442,9 +1596,10 @@ mod tests {
                 Disposition::Handler(a) => a,
                 other => panic!("expected handler disposition, got {other:?}"),
             };
-            old_blocked = state.apply_handler_entry(Signal::Interrupt, &action);
+            state.reset_handler_if_requested(Signal::Interrupt, &action);
+            old_blocked = mask.enter_handler(Signal::Interrupt, &action);
             assert!(
-                state.blocked().contains(Signal::Interrupt),
+                mask.blocks(Signal::Interrupt),
                 "SIGINT masked during its handler"
             );
         }
@@ -1460,13 +1615,13 @@ mod tests {
             let mut states = cx.states.borrow_mut();
             let state = states.get_mut(&target).unwrap();
             assert_eq!(
-                state.take_next_deliverable(),
+                state.take_next_deliverable(mask),
                 None,
                 "second SIGINT stays pending while masked"
             );
-            state.set_blocked_raw(old_blocked);
+            mask = SignalMask::blocking(old_blocked);
             assert_eq!(
-                state.take_next_deliverable(),
+                state.take_next_deliverable(mask),
                 Some(Signal::Interrupt),
                 "sigreturn restore makes the queued SIGINT deliverable"
             );
@@ -1515,7 +1670,7 @@ mod tests {
             let mut states = cx.states.borrow_mut();
             let state = states.get_mut(&target).unwrap();
             assert_eq!(
-                state.take_next_deliverable(),
+                state.take_next_deliverable(SignalMask::default()),
                 Some(Signal::Stop),
                 "SIGSTOP is deliverable"
             );
@@ -1552,7 +1707,7 @@ mod tests {
         {
             let mut states = cx.states.borrow_mut();
             let state = states.get_mut(&target).unwrap();
-            let _ = state.take_next_deliverable();
+            let _ = state.take_next_deliverable(SignalMask::default());
             state.set_stopped(true);
         }
 
@@ -1566,17 +1721,15 @@ mod tests {
         let state = &states[&target];
         assert!(!state.stopped(), "target no longer stopped");
         assert!(
-            state.has_fatal_deliverable(),
+            state.has_fatal_deliverable(SignalMask::default()),
             "SIGKILL is a fatal deliverable"
         );
     }
 
     #[test]
-    fn set_blocked_raw_strips_kill_stop() {
-        let mut state = SignalState::default();
-        state.set_blocked_raw(SigSet::ALL);
+    fn blocking_strips_kill_stop() {
         assert_eq!(
-            state.blocked(),
+            SignalMask::blocking(SigSet::ALL).blocked(),
             SigSet::ALL.difference(Signal::Kill.bit().union(Signal::Stop.bit())),
             "sigreturn restore keeps SIGKILL and SIGSTOP unblockable"
         );
@@ -1601,15 +1754,14 @@ mod tests {
 
     #[test]
     fn sigprocmask_query_keeps_mask() {
-        let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
+        let mut mask = SignalMask::blocking(Signal::Interrupt.bit());
         assert_eq!(
-            state.sigprocmask(SigMaskHow::SetMask, None),
+            mask.sigprocmask(SigMaskHow::SetMask, None),
             Signal::Interrupt.bit(),
             "query returns the current mask regardless of how"
         );
         assert_eq!(
-            state.blocked(),
+            mask.blocked(),
             Signal::Interrupt.bit(),
             "query left the mask intact"
         );
@@ -1617,11 +1769,11 @@ mod tests {
 
     #[test]
     fn sigprocmask_round_trips_wire_mask() {
-        let mut state = SignalState::default();
+        let mut mask = SignalMask::default();
         let wire = Signal::Alarm.bit().union(Signal::Usr2.bit()).bits();
-        state.sigprocmask(SigMaskHow::SetMask, Some(SigSet::from_bits(wire)));
+        mask.sigprocmask(SigMaskHow::SetMask, Some(SigSet::from_bits(wire)));
         assert_eq!(
-            state.sigprocmask(SigMaskHow::Block, None).bits(),
+            mask.sigprocmask(SigMaskHow::Block, None).bits(),
             wire,
             "the mask read back has the same wire bits that were set"
         );
@@ -1629,10 +1781,10 @@ mod tests {
 
     #[test]
     fn sigprocmask_setmask_strips_kill_stop() {
-        let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::SetMask, Some(SigSet::ALL));
+        let mut mask = SignalMask::default();
+        mask.sigprocmask(SigMaskHow::SetMask, Some(SigSet::ALL));
         assert_eq!(
-            state.blocked(),
+            mask.blocked(),
             SigSet::ALL.difference(Signal::Kill.bit().union(Signal::Stop.bit())),
             "SetMask blocks everything except SIGKILL and SIGSTOP"
         );
@@ -1666,20 +1818,19 @@ mod tests {
     }
 
     #[test]
-    fn apply_handler_entry_merges_action_mask_and_returns_old() {
-        let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Terminate.bit()));
+    fn handler_entry_merges_the_action_mask_and_returns_the_previous_mask() {
+        let mut mask = SignalMask::blocking(Signal::Terminate.bit());
         let mut action = custom_action(0x1000);
         action.mask = Signal::Interrupt.bit().union(Signal::Kill.bit());
 
-        let old = state.apply_handler_entry(Signal::Usr1, &action);
+        let old = mask.enter_handler(Signal::Usr1, &action);
         assert_eq!(
             old,
             Signal::Terminate.bit(),
             "handler entry returns the mask in force before it"
         );
         assert_eq!(
-            state.blocked(),
+            mask.blocked(),
             Signal::Terminate
                 .bit()
                 .union(Signal::Interrupt.bit())
@@ -1689,14 +1840,16 @@ mod tests {
     }
 
     #[test]
-    fn apply_handler_entry_nodefer_with_resethand() {
+    fn nodefer_preserves_the_handler_but_resethand_removes_it() {
         let mut state = SignalState::default();
+        let mut mask = SignalMask::default();
         let mut nodefer = custom_action(0x1000);
         nodefer.flags = SaFlags::NODEFER;
         state.sigaction(Signal::Usr1, Some(nodefer)).unwrap();
-        state.apply_handler_entry(Signal::Usr1, &nodefer);
+        state.reset_handler_if_requested(Signal::Usr1, &nodefer);
+        mask.enter_handler(Signal::Usr1, &nodefer);
         assert!(
-            !state.blocked().contains(Signal::Usr1),
+            !mask.blocks(Signal::Usr1),
             "NODEFER leaves SIGUSR1 unblocked during its own handler"
         );
         assert_eq!(
@@ -1708,7 +1861,8 @@ mod tests {
         let mut resethand = custom_action(0x2000);
         resethand.flags = SaFlags::RESETHAND;
         state.sigaction(Signal::Usr2, Some(resethand)).unwrap();
-        state.apply_handler_entry(Signal::Usr2, &resethand);
+        state.reset_handler_if_requested(Signal::Usr2, &resethand);
+        mask.enter_handler(Signal::Usr2, &resethand);
         assert_eq!(
             state.disposition(Signal::Usr2),
             Disposition::DefaultTerminate,
@@ -1720,11 +1874,10 @@ mod tests {
     fn take_next_deliverable_none_when_all_blocked() {
         let mut state = SignalState::default();
         let blocked = Signal::Interrupt.bit().union(Signal::Terminate.bit());
-        state.sigprocmask(SigMaskHow::Block, Some(blocked));
         state.set_pending(Signal::Interrupt);
         state.set_pending(Signal::Terminate);
         assert_eq!(
-            state.take_next_deliverable(),
+            state.take_next_deliverable(SignalMask::blocking(blocked)),
             None,
             "nothing is deliverable while every pending signal is blocked"
         );
@@ -1741,34 +1894,13 @@ mod tests {
         state.set_pending(Signal::WindowChanged);
         state.set_pending(Signal::TerminalStop);
         assert!(
-            !state.has_fatal_deliverable(),
+            !state.has_fatal_deliverable(SignalMask::default()),
             "default-ignore and default-stop pendings are not fatal"
         );
         state.set_pending(Signal::Kill);
         assert!(
-            state.has_fatal_deliverable(),
+            state.has_fatal_deliverable(SignalMask::default()),
             "pending SIGKILL is always fatal"
-        );
-    }
-
-    #[test]
-    fn set_pending_discard_applies_to_blocked_signals() {
-        let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::TerminalStop.bit()));
-        state.set_pending(Signal::TerminalStop);
-        state.set_pending(Signal::Continue);
-        assert!(
-            !state.sigpending().contains(Signal::TerminalStop),
-            "SIGCONT discards a blocked pending SIGTSTP"
-        );
-
-        let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Continue.bit()));
-        state.set_pending(Signal::Continue);
-        state.set_pending(Signal::TerminalStop);
-        assert!(
-            !state.sigpending().contains(Signal::Continue),
-            "SIGTSTP discards a blocked pending SIGCONT"
         );
     }
 
@@ -1806,23 +1938,12 @@ mod tests {
         let mut cx = StatefulTestContext::new(current, current, 1000);
         cx.add_process(target, target);
 
-        {
-            let mut states = cx.states.borrow_mut();
-            let state = states.get_mut(&target).unwrap();
-            state.sigprocmask(SigMaskHow::Block, Some(SigSet::ALL));
-        }
-
         sys_kill(&cx, SignalTarget::SpecificProcess(target), Signal::Kill).unwrap();
 
         let states = cx.states.borrow();
-        let state = &states[&target];
         assert!(
-            state.has_fatal_deliverable(),
+            states[&target].has_fatal_deliverable(SignalMask::blocking(SigSet::ALL)),
             "a full block mask cannot shield the process from SIGKILL"
-        );
-        assert!(
-            !state.blocked().contains(Signal::Kill),
-            "SIGKILL is never in the blocked mask"
         );
     }
 
@@ -1859,19 +1980,13 @@ mod tests {
     }
 
     #[test]
-    fn exec_reset_preserves_blocked_and_pending() {
+    fn exec_reset_preserves_pending() {
         let mut state = SignalState::default();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
         state.set_pending(Signal::Terminate);
         state
             .sigaction(Signal::Usr1, Some(custom_action(0x1000)))
             .unwrap();
         state.exec_reset();
-        assert_eq!(
-            state.blocked(),
-            Signal::Interrupt.bit(),
-            "the blocked mask survives exec"
-        );
         assert_eq!(
             state.sigpending(),
             Signal::Terminate.bit(),
@@ -1880,11 +1995,10 @@ mod tests {
     }
 
     #[test]
-    fn fork_inherit_keeps_actions_and_mask_drops_pending() {
+    fn fork_inherit_keeps_actions_drops_pending() {
         let mut state = SignalState::default();
         let action = custom_action(0x1000);
         state.sigaction(Signal::Usr1, Some(action)).unwrap();
-        state.sigprocmask(SigMaskHow::Block, Some(Signal::Interrupt.bit()));
         state.set_pending(Signal::Terminate);
         state.set_stopped(true);
 
@@ -1895,12 +2009,7 @@ mod tests {
             "the child keeps the parent's handler"
         );
         assert_eq!(
-            child.blocked(),
-            Signal::Interrupt.bit(),
-            "the child keeps the parent's mask"
-        );
-        assert_eq!(
-            child.take_next_deliverable(),
+            child.take_next_deliverable(SignalMask::default()),
             None,
             "the child starts with nothing pending"
         );

@@ -70,10 +70,22 @@ pub trait MemoryRegionAccess {
         Err(ENODEV)
     }
 
-    /// Removes the one region that starts at `addr` and spans exactly `len`
-    /// rounded up to a page. The call unmaps the pages before it returns.
+    /// This method removes the pages of `[addr, addr + len)` from each region
+    /// that overlaps the range. It splits a region that the range covers only
+    /// in part. `addr` and `len` are page aligned. The method unmaps the pages
+    /// before it returns. A range without a region is not an error.
     ///
     /// # Errors
-    /// Returns `EINVAL` when no region matches.
+    /// This method returns `EINVAL` when a region of the range cannot split.
     fn unmap(&self, addr: UserspacePtr<u8>, len: usize) -> Result<(), Errno>;
+
+    /// This method gives each page of `[addr, addr + len)` the access `prot`.
+    /// It splits a region that the range covers only in part. `addr` and `len`
+    /// are page aligned.
+    ///
+    /// # Errors
+    /// This method returns `ENOMEM` when a page of the range has no region.
+    /// It returns `EINVAL` when a region of the range cannot split. It returns
+    /// `EACCES` when a region of the range does not accept a protection change.
+    fn protect(&self, addr: UserspacePtr<u8>, len: usize, prot: ProtFlags) -> Result<(), Errno>;
 }

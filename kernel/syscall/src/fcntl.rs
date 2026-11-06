@@ -1,13 +1,11 @@
 use core::ffi::c_int;
-use core::slice::from_raw_parts;
 
 use kernel_abi::{EINVAL, ENAMETOOLONG, Errno, OpenFlags, PATH_MAX};
 use kernel_vfs::CreateMode;
 use kernel_vfs::path::AbsoluteOwnedPath;
-use tracing::{Level, debug, instrument};
+use tracing::{Level, instrument, trace};
 
 use crate::access::{AccessMode, CwdAccess, FileAccess};
-use crate::ptr::UserspacePtr;
 
 /// Opens the file at `path`, relative to the working directory unless
 /// absolute, and returns the new descriptor number.
@@ -26,8 +24,7 @@ use crate::ptr::UserspacePtr;
 #[instrument(level = Level::TRACE, skip(cx))]
 pub fn sys_open<Cx: CwdAccess + FileAccess>(
     cx: &Cx,
-    path: UserspacePtr<u8>,
-    path_len: usize,
+    path: &[u8],
     oflag: i32,
     mode: i32,
 ) -> Result<usize, Errno> {
@@ -47,9 +44,9 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
         (false, false) => CreateMode::Never,
     };
 
-    let path = user_path(cx, path, path_len)?;
+    let path = user_path(cx, path)?;
 
-    debug!(?path, "open");
+    trace!(?path, "open");
 
     let info = cx.file_info(path.as_ref(), create)?;
     let fd = cx.open(&info, access, flags.contains(OpenFlags::APPEND));
@@ -58,7 +55,7 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
         return Err(errno);
     }
     let fd_num = Into::<c_int>::into(fd);
-    debug!(fd = fd_num, "open done");
+    trace!(fd = fd_num, "open done");
     Ok(fd_num as usize)
 }
 
@@ -70,31 +67,22 @@ pub fn sys_open<Cx: CwdAccess + FileAccess>(
 /// for a path that is not UTF-8. Passes through any error of
 /// [`FileAccess::unlink`].
 #[instrument(level = Level::TRACE, skip(cx))]
-pub fn sys_unlink<Cx: CwdAccess + FileAccess>(
-    cx: &Cx,
-    path: UserspacePtr<u8>,
-    path_len: usize,
-) -> Result<usize, Errno> {
-    let path = user_path(cx, path, path_len)?;
-    debug!(?path, "unlink");
+pub fn sys_unlink<Cx: CwdAccess + FileAccess>(cx: &Cx, path: &[u8]) -> Result<usize, Errno> {
+    let path = user_path(cx, path)?;
+    trace!(?path, "unlink");
     cx.unlink(path.as_ref()).map(|()| 0)
 }
 
-/// Resolves a user path of `path_len` bytes against the working directory.
+/// This function resolves the bytes of a user path against the working directory.
 ///
 /// # Errors
-/// Returns `ENAMETOOLONG` for a path longer than `PATH_MAX`. Returns `EINVAL`
-/// for a path that is not UTF-8.
-fn user_path<Cx: CwdAccess>(
-    cx: &Cx,
-    path: UserspacePtr<u8>,
-    path_len: usize,
-) -> Result<AbsoluteOwnedPath, Errno> {
-    if path_len > PATH_MAX {
+/// This function returns `ENAMETOOLONG` for a path longer than `PATH_MAX`. It
+/// returns `EINVAL` for a path that is not UTF-8.
+fn user_path<Cx: CwdAccess>(cx: &Cx, path: &[u8]) -> Result<AbsoluteOwnedPath, Errno> {
+    if path.len() > PATH_MAX {
         return Err(ENAMETOOLONG);
     }
-    let path_bytes = unsafe { from_raw_parts(path.as_ptr(), path_len) };
-    Ok(cx.resolve(core::str::from_utf8(path_bytes).map_err(|_| EINVAL)?))
+    Ok(cx.resolve(core::str::from_utf8(path).map_err(|_| EINVAL)?))
 }
 
 fn access_mode(flags: OpenFlags) -> Result<AccessMode, Errno> {
@@ -127,7 +115,6 @@ mod tests {
     use spin::mutex::Mutex;
     use spin::rwlock::RwLock;
 
-    use crate::UserspacePtr;
     use crate::access::testing::{MemoryFd, MemoryFile, MemoryFileAccess};
     use crate::access::{AccessMode, CwdAccess, FileAccess};
     use crate::fcntl::{sys_open, sys_unlink};
@@ -224,8 +211,7 @@ mod tests {
     }
 
     fn open(cx: &MemoryCx, path: &str, oflag: c_int) -> Result<usize, Errno> {
-        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
-        sys_open(cx, p, path.len(), oflag, 0)
+        sys_open(cx, path.as_bytes(), oflag, 0)
     }
 
     fn fd(num: usize) -> MemoryFd {
@@ -391,9 +377,7 @@ mod tests {
         let cx = TestOpenCx::new(ROOT.to_owned(), Mutex::new(file_access));
 
         let path = "/foo.txt";
-        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
-
-        let result = sys_open(&cx, p, path.len(), O_RDONLY, 0);
+        let result = sys_open(&cx, path.as_bytes(), O_RDONLY, 0);
         assert_eq!(result, Err(ENOENT));
     }
 
@@ -407,10 +391,8 @@ mod tests {
         let cx = TestOpenCx::new(ROOT.to_owned(), Mutex::new(file_access));
 
         let path = "/foo.txt";
-        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
-
         let result =
-            sys_open(&cx, p, path.len(), O_RDONLY, 0).expect("should be able to open file");
+            sys_open(&cx, path.as_bytes(), O_RDONLY, 0).expect("should be able to open file");
         assert_eq!(result, 0);
     }
 
@@ -424,12 +406,10 @@ mod tests {
         let cx = TestOpenCx::new(ROOT.to_owned(), Mutex::new(file_access));
 
         let path = "/foo.txt";
-        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
-
         let result1 =
-            sys_open(&cx, p, path.len(), O_RDONLY, 0).expect("should be able to open file");
+            sys_open(&cx, path.as_bytes(), O_RDONLY, 0).expect("should be able to open file");
         let result2 =
-            sys_open(&cx, p, path.len(), O_RDONLY, 0).expect("should be able to open file");
+            sys_open(&cx, path.as_bytes(), O_RDONLY, 0).expect("should be able to open file");
         assert_eq!(
             result1,
             result2 - 1,
@@ -442,11 +422,9 @@ mod tests {
         let cx = cx_with(vec![("/foo.txt", MemoryFile::new(vec![1; 8]))]);
         let num = open(&cx, "/foo.txt", O_RDONLY).unwrap();
         let path = "/foo.txt";
-        let p = UserspacePtr::try_from(path.as_ptr()).unwrap();
-
-        assert_eq!(Ok(0), sys_unlink(&cx, p, path.len()));
+        assert_eq!(Ok(0), sys_unlink(&cx, path.as_bytes()));
         assert_eq!(Err(ENOENT), open(&cx, "/foo.txt", O_RDONLY));
         assert_eq!(Ok(4), sys_read(&cx, fd(num), &mut [0_u8; 4]));
-        assert_eq!(Err(ENOENT), sys_unlink(&cx, p, path.len()));
+        assert_eq!(Err(ENOENT), sys_unlink(&cx, path.as_bytes()));
     }
 }

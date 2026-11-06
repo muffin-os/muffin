@@ -2,23 +2,23 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ffi::c_int;
 use core::ops::Neg;
-use core::slice::{from_raw_parts, from_raw_parts_mut};
 use core::time::Duration;
 
 use access::KernelAccess;
 use kernel_abi::{
-    AF_UNIX, ClockId, EFAULT, EINTR, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, ERANGE, ESRCH, Errno,
-    IoVec, IoctlRequest, MapFlags, MsgHdr, POLL_TIMEOUT_INFINITE, PollFd, ProcessId, ProtFlags,
+    AF_UNIX, ClockId, EFAULT, EINTR, EINVAL, ENOENT, ENOSYS, ERANGE, ESRCH, Errno, IoVec,
+    IoctlRequest, MapFlags, MsgHdr, PATH_MAX, POLL_TIMEOUT_INFINITE, PollFd, ProcessId, ProtFlags,
     SOMAXCONN, SaFamily, ShutdownHow, SigAction, SigMaskHow, SigSet, Signal, SockAddrUn, SockLen,
-    Stat, Timespec, WaitOptions, Whence, syscall_name,
+    Timespec, WaitOptions, Whence, syscall_name,
 };
+use kernel_syscall::UserspacePtr;
 use kernel_syscall::access::{
     FileAccess, MemoryRegionAccess, PermissionAccess, ProcessesAccess, SocketAccess,
 };
 use kernel_syscall::fcntl::{sys_open, sys_unlink};
-use kernel_syscall::mman::{sys_mmap, sys_munmap};
+use kernel_syscall::mman::{sys_mmap, sys_mprotect, sys_munmap};
 use kernel_syscall::poll::sys_poll;
-use kernel_syscall::signal::{SignalTarget, sys_kill};
+use kernel_syscall::signal::{SignalTarget, sys_kill, sys_sigprocmask};
 use kernel_syscall::socket::{
     sys_accept, sys_bind, sys_connect, sys_listen, sys_recvmsg, sys_sendmsg, sys_shutdown,
     sys_socket,
@@ -28,21 +28,24 @@ use kernel_syscall::unistd::{
     sys_write,
 };
 use kernel_syscall::wait::{WaitTarget, sys_getppid, sys_waitpid};
-use kernel_syscall::{UserspaceMutPtr, UserspacePtr};
 use kernel_unix_socket::SOCKET_BUFFER_BYTES;
-use tracing::{debug, error};
-use x86_64::VirtAddr;
+use tracing::{error, trace};
 use x86_64::structures::idt::InterruptStackFrame;
 
+use self::user_mem::{
+    MAX_USER_COPY_BYTES, bounce_buffer, check_user_range, copy_in, copy_out, read_user,
+    read_user_array, write_user, write_user_array,
+};
 use crate::arch::idt::SyscallRegisters;
 use crate::hpet::hpet;
-use crate::mcore::mtask::process::mem::PageInError;
 use crate::mcore::mtask::process::{ExitOutcome, ParkOutcome, Process};
 use crate::mcore::mtask::task::Task;
 
 pub(crate) mod access;
 mod exec;
 mod fork;
+mod thread;
+pub(crate) mod user_mem;
 
 #[must_use]
 pub(crate) fn dispatch_syscall(
@@ -96,7 +99,14 @@ pub(crate) fn dispatch_syscall(
         kernel_abi::SYS_FTRUNCATE => dispatch_sys_ftruncate(arg1, arg2),
         kernel_abi::SYS_UNLINK => dispatch_sys_unlink(arg1, arg2),
         kernel_abi::SYS_MUNMAP => dispatch_sys_munmap(arg1, arg2),
+        kernel_abi::SYS_MPROTECT => dispatch_sys_mprotect(arg1, arg2, arg3),
         kernel_abi::SYS_POLL => dispatch_sys_poll(arg1, arg2, arg3),
+        kernel_abi::SYS_THREAD_CREATE => thread::dispatch_sys_thread_create(arg1, arg2, arg3),
+        kernel_abi::SYS_THREAD_EXIT => thread::dispatch_sys_thread_exit(arg1, arg2, arg3),
+        kernel_abi::SYS_THREAD_JOIN => thread::dispatch_sys_thread_join(arg1),
+        kernel_abi::SYS_THREAD_SELF => thread::dispatch_sys_thread_self(),
+        kernel_abi::SYS_ADDR_WAIT => thread::dispatch_sys_addr_wait(arg1, arg2, arg3),
+        kernel_abi::SYS_ADDR_WAKE => thread::dispatch_sys_addr_wake(arg1, arg2),
         _ => {
             error!("unknown syscall number {n}");
             Err(ENOSYS)
@@ -106,7 +116,7 @@ pub(crate) fn dispatch_syscall(
     match result {
         Ok(ret) => ret as isize,
         Err(e) => {
-            error!("syscall {} ({n}) failed with error: {e:?}", syscall_name(n));
+            trace!("syscall {} ({n}) failed with error: {e:?}", syscall_name(n));
             Into::<isize>::into(e).neg()
         }
     }
@@ -114,13 +124,17 @@ pub(crate) fn dispatch_syscall(
 
 fn dispatch_sys_exit(code: usize) -> Result<usize, Errno> {
     let process = Process::current();
-    debug!("process {} exit with code {code}", process.pid());
+    trace!("process {} exit with code {code}", process.pid());
+    // The other threads end before the outcome becomes visible. Therefore a
+    // parent that sees the exit never races a thread of the child that still
+    // runs.
+    let _sole = process.reap_sibling_tasks(Task::current().id());
     process.set_exit_outcome(ExitOutcome::Exited(code));
     Task::exit_current()
 }
 
 fn dispatch_sys_poweroff() -> Result<usize, Errno> {
-    debug!("process {} requested poweroff", Process::current().pid());
+    trace!("process {} requested poweroff", Process::current().pid());
     crate::power::poweroff()
 }
 
@@ -135,15 +149,6 @@ fn dispatch_sys_getppid() -> Result<usize, Errno> {
 fn dispatch_sys_waitpid(pid: usize, status: usize, options: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
-    // POSIX allows a null status, which skips the status writeback.
-    let status = if status == 0 {
-        None
-    } else {
-        let ptr = UserspaceMutPtr::<i32>::try_from_usize(status).map_err(|_| EFAULT)?;
-        ptr.validate_range(size_of::<i32>()).map_err(|_| EFAULT)?;
-        make_user_range_resident(ptr.addr(), size_of::<i32>(), UserAccess::Write)?;
-        Some(ptr)
-    };
     let target = match pid as isize {
         1.. => WaitTarget::Child(ProcessId::from(pid as u64)),
         0 => WaitTarget::CallerGroup,
@@ -151,7 +156,14 @@ fn dispatch_sys_waitpid(pid: usize, status: usize, options: usize) -> Result<usi
         v => WaitTarget::ProcessGroup(ProcessId::from(v.unsigned_abs() as u64)),
     };
     let options = WaitOptions::from_bits(i32::try_from(options)?).ok_or(EINVAL)?;
-    sys_waitpid(&cx, target, options, status)
+    let Some(reaped) = sys_waitpid(&cx, target, options)? else {
+        return Ok(0);
+    };
+    // POSIX allows a null status. In that case, the code skips the status writeback.
+    if status != 0 {
+        write_user(status, reaped.outcome.wait_status())?;
+    }
+    Ok(reaped.pid.as_u64() as usize)
 }
 
 fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
@@ -184,35 +196,6 @@ fn dispatch_sys_kill(pid: usize, signo: usize) -> Result<usize, Errno> {
     sys_kill(&cx, target, signal)
 }
 
-/// Copies `value` to the userspace pointer `addr`, returning `EFAULT` unless
-/// the whole range is user memory that a region backs with write access.
-/// Making the range resident up front keeps a bad pointer from faulting the
-/// copy-out in Ring 0 and panicking the kernel.
-fn write_user<T>(addr: usize, value: T) -> Result<(), Errno> {
-    let mut ptr = UserspaceMutPtr::<T>::try_from_usize(addr).map_err(|_| EFAULT)?;
-    ptr.validate_range(size_of::<T>()).map_err(|_| EFAULT)?;
-    make_user_range_resident(addr, size_of::<T>(), UserAccess::Write)?;
-    unsafe {
-        // Safety: the range is lower-half, resident, and user writable, so
-        // this write cannot fault.
-        ptr.as_mut_ptr().write_unaligned(value);
-    }
-    Ok(())
-}
-
-/// Reads a `T` from the userspace pointer `addr`, returning `EFAULT` unless
-/// the whole range is user memory that a region backs with read access.
-/// Making the range resident up front keeps a bad pointer from faulting the
-/// copy-in in Ring 0 and panicking the kernel.
-fn read_user<T>(addr: usize) -> Result<T, Errno> {
-    let ptr = UserspacePtr::<T>::try_from_usize(addr).map_err(|_| EFAULT)?;
-    ptr.validate_range(size_of::<T>()).map_err(|_| EFAULT)?;
-    make_user_range_resident(addr, size_of::<T>(), UserAccess::Read)?;
-    // Safety: the range is lower-half, resident, and user readable, so this
-    // read cannot fault.
-    Ok(unsafe { ptr.as_ptr().read_unaligned() })
-}
-
 fn dispatch_sys_sigaction(signo: usize, new: usize, old: usize) -> Result<usize, Errno> {
     let signal = Signal::try_from(signo as i32)?;
 
@@ -240,8 +223,7 @@ fn dispatch_sys_sigprocmask(how: usize, set: usize, oldset: usize) -> Result<usi
         Some(read_user::<SigSet>(set)?)
     };
 
-    let process = Process::current();
-    let old_mask = process.signals_write().sigprocmask(how, new_set);
+    let old_mask = sys_sigprocmask(&KernelAccess::new(), how, new_set);
 
     if oldset != 0 {
         write_user(oldset, old_mask)?;
@@ -258,77 +240,15 @@ fn dispatch_sys_sigpending(out: usize) -> Result<usize, Errno> {
     Ok(0)
 }
 
-unsafe fn slice_from_ptr_and_len<'a, T>(ptr: usize, len: usize) -> Result<&'a [T], Errno> {
-    if ptr == 0 || len == 0 {
-        return Err(EINVAL);
-    }
-    let slice = unsafe { from_raw_parts(ptr as *mut T, len) };
-    Ok(slice)
-}
-
-unsafe fn slice_from_ptr_and_len_mut<'a, T>(ptr: usize, len: usize) -> Result<&'a mut [T], Errno> {
-    if ptr == 0 || len == 0 {
-        return Err(EINVAL);
-    }
-    let slice = unsafe { from_raw_parts_mut(ptr as *mut T, len) };
-    Ok(slice)
-}
-
-enum UserAccess {
-    Read,
-    Write,
-}
-
-/// Makes `[ptr, ptr + len)` resident, then checks it against `access`.
-///
-/// Every syscall that goes on to take a filesystem lock must call this first.
-/// The page fault handler pages in file backed memory through that same per
-/// mount lock, so a fault raised while the lock is held re-enters a
-/// non-reentrant lock and hangs the CPU.
-///
-/// A page that no memory region backs is left unmapped and reported, never
-/// paged in.
-///
-/// # Errors
-/// `EFAULT` for a non-canonical address, for a page that cannot be mapped, and
-/// for a range that is resident but not reachable with `access`. `ENOMEM` when
-/// no physical frame is available. `EIO` when the backing file read fails.
-fn make_user_range_resident(ptr: usize, len: usize, access: UserAccess) -> Result<(), Errno> {
-    let Ok(addr) = VirtAddr::try_new(ptr as u64) else {
-        return Err(EFAULT);
-    };
-
-    let process = Process::current();
-    let address_space = process.address_space();
-    process
-        .memory_regions()
-        .populate(
-            address_space,
-            addr,
-            len,
-            matches!(access, UserAccess::Write),
-        )
-        .map_err(|e| match e {
-            PageInError::OutOfMemory => ENOMEM,
-            PageInError::MapFailed => EFAULT,
-            PageInError::ReadFailed => EIO,
-            PageInError::NotWritable => EFAULT,
-        })?;
-
-    let accessible = match access {
-        UserAccess::Read => address_space.is_user_readable(addr, len),
-        UserAccess::Write => address_space.is_user_writable(addr, len),
-    };
-    if accessible { Ok(()) } else { Err(EFAULT) }
-}
-
 fn dispatch_sys_getcwd(path: usize, size: usize) -> Result<usize, Errno> {
-    let cx = KernelAccess::new();
-
-    let path = UserspaceMutPtr::try_from_usize(path).map_err(|_| EFAULT)?;
-    path.validate_range(size).map_err(|_| EFAULT)?;
-    make_user_range_resident(path.addr(), size, UserAccess::Write)?;
-    sys_getcwd(&cx, path, size)
+    // A zero `size` gives `EINVAL` from `sys_getcwd`, whatever `path` is.
+    if size != 0 {
+        check_user_range(path, size)?;
+    }
+    let mut buf = bounce_buffer(size);
+    let len = sys_getcwd(&KernelAccess::new(), &mut buf)?;
+    copy_out(path, &buf[..len])?;
+    Ok(path)
 }
 
 fn dispatch_sys_mmap(
@@ -355,6 +275,20 @@ fn dispatch_sys_munmap(addr: usize, len: usize) -> Result<usize, Errno> {
     sys_munmap(&cx, addr, len)
 }
 
+fn dispatch_sys_mprotect(addr: usize, len: usize, prot: usize) -> Result<usize, Errno> {
+    let cx = KernelAccess::new();
+
+    let addr = UserspacePtr::try_from_usize(addr)?;
+    let prot = ProtFlags::from_bits(i32::try_from(prot)?).ok_or(EINVAL)?;
+    sys_mprotect(&cx, addr, len, prot)
+}
+
+/// This function copies in at most `PATH_MAX + 1` bytes of a path. The extra
+/// byte lets `sys_open` and `sys_unlink` detect a path that is too long.
+fn copy_in_path(path: usize, path_len: usize) -> Result<Vec<u8>, Errno> {
+    copy_in(path, path_len.min(PATH_MAX + 1))
+}
+
 fn dispatch_sys_open(
     path: usize,
     path_len: usize,
@@ -363,17 +297,15 @@ fn dispatch_sys_open(
 ) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
-    make_user_range_resident(path, path_len, UserAccess::Read)?;
-    let path = UserspacePtr::try_from_usize(path)?;
-    sys_open(&cx, path, path_len, oflag as i32, mode as i32)
+    let path = copy_in_path(path, path_len)?;
+    sys_open(&cx, &path, oflag as i32, mode as i32)
 }
 
 fn dispatch_sys_unlink(path: usize, path_len: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
 
-    make_user_range_resident(path, path_len, UserAccess::Read)?;
-    let path = UserspacePtr::try_from_usize(path)?;
-    sys_unlink(&cx, path, path_len)
+    let path = copy_in_path(path, path_len)?;
+    sys_unlink(&cx, &path)
 }
 
 fn dispatch_sys_read(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno> {
@@ -382,22 +314,31 @@ fn dispatch_sys_read(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errno
     let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
-    let slice = unsafe { slice_from_ptr_and_len_mut(buf, nbyte) }?;
-    make_user_range_resident(buf, nbyte, UserAccess::Write)?;
-    sys_read(&cx, fd, slice)
+    if nbyte == 0 {
+        cx.fstat(fd)?;
+        return Ok(0);
+    }
+    // The check rejects an invalid buffer before the read consumes data.
+    // It also rejects an invalid buffer when the read returns zero bytes.
+    check_user_range(buf, nbyte)?;
+    let mut data = bounce_buffer(nbyte);
+    let read = sys_read(&cx, fd, &mut data)?;
+    copy_out(buf, &data[..read])?;
+    Ok(read)
 }
 
 fn dispatch_sys_getdents(fd: usize, buf: usize, len: usize) -> Result<usize, Errno> {
-    debug!(fd, len, "getdents start");
+    trace!(fd, len, "getdents start");
     let cx = KernelAccess::new();
 
     let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
-    let slice = unsafe { slice_from_ptr_and_len_mut(buf, len) }?;
-    make_user_range_resident(buf, len, UserAccess::Write)?;
-    let result = sys_getdents(&cx, fd, slice);
-    debug!(?result, "getdents end");
+    check_user_range(buf, len)?;
+    let mut data = bounce_buffer(len);
+    let result = sys_getdents(&cx, fd, &mut data)
+        .and_then(|written| copy_out(buf, &data[..written]).map(|()| written));
+    trace!(?result, "getdents end");
     result
 }
 
@@ -407,9 +348,8 @@ fn dispatch_sys_write(fd: usize, buf: usize, nbyte: usize) -> Result<usize, Errn
     let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
-    let slice = unsafe { slice_from_ptr_and_len(buf, nbyte) }?;
-    make_user_range_resident(buf, nbyte, UserAccess::Read)?;
-    sys_write(&cx, fd, slice)
+    let data = copy_in(buf, nbyte.min(MAX_USER_COPY_BYTES))?;
+    sys_write(&cx, fd, &data)
 }
 
 /// Runs POSIX poll. The `timeout` argument is a number of milliseconds as
@@ -422,19 +362,16 @@ fn dispatch_sys_poll(fds: usize, nfds: usize, timeout: usize) -> Result<usize, E
         ms @ 0.. => Some(Duration::from_millis(ms as u64)),
         _ => return Err(EINVAL),
     };
-    // A call with no entries is valid. Then poll only sleeps for `timeout`.
-    let fds: &mut [PollFd] = if nfds == 0 {
-        &mut []
-    } else {
-        if !fds.is_multiple_of(align_of::<PollFd>()) {
-            return Err(EFAULT);
-        }
-        let byte_len = nfds.checked_mul(size_of::<PollFd>()).ok_or(EINVAL)?;
-        let slice = unsafe { slice_from_ptr_and_len_mut::<PollFd>(fds, nfds) }?;
-        make_user_range_resident(fds, byte_len, UserAccess::Write)?;
-        slice
-    };
-    sys_poll(&cx, fds, timeout)
+    // A call with no entries is valid. In that case, poll only sleeps for
+    // `timeout`. POSIX permits `EINVAL` for an `nfds` above the descriptor
+    // limit.
+    if nfds > MAX_USER_COPY_BYTES / size_of::<PollFd>() {
+        return Err(EINVAL);
+    }
+    let mut entries = read_user_array::<PollFd>(fds, nfds)?;
+    let ready = sys_poll(&cx, &mut entries, timeout)?;
+    write_user_array(fds, &entries)?;
+    Ok(ready)
 }
 
 fn dispatch_sys_ioctl(fd: usize, request: usize, argp: usize) -> Result<usize, Errno> {
@@ -444,14 +381,10 @@ fn dispatch_sys_ioctl(fd: usize, request: usize, argp: usize) -> Result<usize, E
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
     let request = IoctlRequest::try_from(request)?;
-    match request.arg_size() {
-        0 => sys_ioctl(&cx, fd, request, &mut []),
-        size => {
-            let arg = unsafe { slice_from_ptr_and_len_mut(argp, size) }?;
-            make_user_range_resident(argp, size, UserAccess::Write)?;
-            sys_ioctl(&cx, fd, request, arg)
-        }
-    }
+    let mut arg = copy_in(argp, request.arg_size())?;
+    let result = sys_ioctl(&cx, fd, request, &mut arg)?;
+    copy_out(argp, &arg)?;
+    Ok(result)
 }
 
 fn dispatch_sys_fsync(fd: usize) -> Result<usize, Errno> {
@@ -487,9 +420,6 @@ fn dispatch_sys_fstat(fd: usize, buf: usize) -> Result<usize, Errno> {
     let fd = i32::try_from(fd).map_err(|_| EINVAL)?;
     let fd = <KernelAccess as FileAccess>::Fd::from(fd);
 
-    // The destination must be resident before the filesystem lock is taken,
-    // because paging it in re-enters that same non-reentrant lock.
-    make_user_range_resident(buf, size_of::<Stat>(), UserAccess::Write)?;
     let stat = cx.fstat(fd)?;
     write_user(buf, stat)?;
     Ok(0)
@@ -511,15 +441,13 @@ fn socket_fd(fd: usize) -> Result<<KernelAccess as SocketAccess>::Fd, Errno> {
     Ok(<KernelAccess as SocketAccess>::Fd::from(fd))
 }
 
-/// Returns the path inside a user socket address. The length check comes before
-/// the pointer read, so a large `addrlen` cannot reach past the address.
-fn user_socket_path(addr: usize, addrlen: usize) -> Result<&'static str, Errno> {
+/// This function copies in a user socket address. The length check comes
+/// before the copy. Therefore a large `addrlen` cannot reach past the address.
+fn user_socket_addr(addr: usize, addrlen: usize) -> Result<Vec<u8>, Errno> {
     if addrlen > size_of::<SockAddrUn>() {
         return Err(EINVAL);
     }
-    let bytes = unsafe { slice_from_ptr_and_len(addr, addrlen) }?;
-    make_user_range_resident(addr, addrlen, UserAccess::Read)?;
-    SockAddrUn::path_of(bytes)
+    copy_in(addr, addrlen)
 }
 
 fn dispatch_sys_socket(domain: usize, ty: usize, protocol: usize) -> Result<usize, Errno> {
@@ -530,8 +458,8 @@ fn dispatch_sys_socket(domain: usize, ty: usize, protocol: usize) -> Result<usiz
 fn dispatch_sys_bind(fd: usize, addr: usize, addrlen: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
     let fd = socket_fd(fd)?;
-    let path = user_socket_path(addr, addrlen)?;
-    sys_bind(&cx, fd, path)
+    let addr = user_socket_addr(addr, addrlen)?;
+    sys_bind(&cx, fd, SockAddrUn::path_of(&addr)?)
 }
 
 fn dispatch_sys_listen(fd: usize, backlog: usize) -> Result<usize, Errno> {
@@ -559,8 +487,8 @@ fn dispatch_sys_accept(fd: usize, addr: usize, addrlen: usize) -> Result<usize, 
 fn dispatch_sys_connect(fd: usize, addr: usize, addrlen: usize) -> Result<usize, Errno> {
     let cx = KernelAccess::new();
     let fd = socket_fd(fd)?;
-    let path = user_socket_path(addr, addrlen)?;
-    sys_connect(&cx, fd, path)
+    let addr = user_socket_addr(addr, addrlen)?;
+    sys_connect(&cx, fd, SockAddrUn::path_of(&addr)?)
 }
 
 fn dispatch_sys_shutdown(fd: usize, how: usize) -> Result<usize, Errno> {
@@ -577,29 +505,7 @@ fn user_iovecs(hdr: &MsgHdr) -> Result<Vec<IoVec>, Errno> {
     if hdr.msg_iov == 0 {
         return Err(EFAULT);
     }
-    make_user_range_resident(hdr.msg_iov, count * size_of::<IoVec>(), UserAccess::Read)?;
-    Ok((0..count)
-        .map(|i| unsafe { (hdr.msg_iov as *const IoVec).add(i).read_unaligned() })
-        .collect())
-}
-
-fn copy_in_user(ptr: usize, len: usize) -> Result<Vec<u8>, Errno> {
-    if len == 0 {
-        return Ok(Vec::new());
-    }
-    make_user_range_resident(ptr, len, UserAccess::Read)?;
-    let src = unsafe { slice_from_ptr_and_len::<u8>(ptr, len) }?;
-    Ok(src.to_vec())
-}
-
-fn copy_out_user(ptr: usize, src: &[u8]) -> Result<(), Errno> {
-    if src.is_empty() {
-        return Ok(());
-    }
-    make_user_range_resident(ptr, src.len(), UserAccess::Write)?;
-    let dst = unsafe { slice_from_ptr_and_len_mut::<u8>(ptr, src.len()) }?;
-    dst.copy_from_slice(src);
-    Ok(())
+    read_user_array::<IoVec>(hdr.msg_iov, count)
 }
 
 /// Gathers at most `SOCKET_BUFFER_BYTES`, because a socket takes no more than
@@ -611,7 +517,7 @@ fn gather_send_bytes(hdr: &MsgHdr) -> Result<Vec<u8>, Errno> {
         if room == 0 {
             break;
         }
-        data.extend_from_slice(&copy_in_user(iov.base, iov.len.min(room))?);
+        data.extend_from_slice(&copy_in(iov.base, iov.len.min(room))?);
     }
     Ok(data)
 }
@@ -621,7 +527,7 @@ fn dispatch_sys_sendmsg(fd: usize, msg: usize, flags: usize) -> Result<usize, Er
     let fd = socket_fd(fd)?;
     let flags = i32::try_from(flags).map_err(|_| EINVAL)?;
     let hdr = read_user::<MsgHdr>(msg)?;
-    let control = copy_in_user(hdr.msg_control, hdr.control_len()?)?;
+    let control = copy_in(hdr.msg_control, hdr.control_len()?)?;
     let data = gather_send_bytes(&hdr)?;
     sys_sendmsg(&cx, fd, flags, &data, &control)
 }
@@ -638,6 +544,14 @@ fn dispatch_sys_recvmsg(fd: usize, msg: usize, flags: usize) -> Result<usize, Er
         .min(SOCKET_BUFFER_BYTES);
     let mut data = vec![0u8; capacity];
     let mut control = vec![0u8; hdr.control_len()?];
+    // The checks reject invalid buffers before the receive consumes data.
+    // They also reject invalid buffers when the receive returns zero bytes.
+    for iov in iovecs.iter().filter(|iov| iov.len > 0) {
+        check_user_range(iov.base, iov.len)?;
+    }
+    if !control.is_empty() {
+        check_user_range(hdr.msg_control, control.len())?;
+    }
     let outcome = sys_recvmsg(&cx, fd, flags, &mut data, &mut control)?;
     let mut rest = &data[..outcome.len];
     for iov in iovecs {
@@ -645,10 +559,10 @@ fn dispatch_sys_recvmsg(fd: usize, msg: usize, flags: usize) -> Result<usize, Er
             break;
         }
         let (chunk, tail) = rest.split_at(iov.len.min(rest.len()));
-        copy_out_user(iov.base, chunk)?;
+        copy_out(iov.base, chunk)?;
         rest = tail;
     }
-    copy_out_user(hdr.msg_control, &control[..outcome.controllen])?;
+    copy_out(hdr.msg_control, &control[..outcome.controllen])?;
     outcome.write_to(&mut hdr);
     write_user(msg, hdr)?;
     Ok(outcome.len)
@@ -672,10 +586,10 @@ fn dispatch_sys_clock_gettime(clockid: usize, tp: usize) -> Result<usize, Errno>
 fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
     let duration = Duration::try_from(read_user::<Timespec>(req)?)?;
     let deadline = hpet().read().now().saturating_add(duration);
-    let process = Process::current().clone();
+    let task = Task::current();
 
-    let outcome = process.park_current_task(Some(deadline), None, || {
-        hpet().read().now() >= deadline || process.signals_read().has_interrupting_deliverable()
+    let outcome = task.process().park_current_task(Some(deadline), None, || {
+        hpet().read().now() >= deadline || task.has_interrupting_signal()
     });
 
     let now = hpet().read().now();
@@ -696,16 +610,13 @@ fn dispatch_sys_nanosleep(req: usize, rem: usize) -> Result<usize, Errno> {
 }
 
 fn dispatch_sys_exe_path(buf: usize, len: usize) -> Result<usize, Errno> {
-    let slice = unsafe { slice_from_ptr_and_len_mut(buf, len) }?;
-    make_user_range_resident(buf, len, UserAccess::Write)?;
-
-    let process = Process::current();
-    let path = process.executable_path().ok_or(ENOENT)?;
-
-    let bytelen = path.len();
-    if slice.len() < bytelen {
+    if buf == 0 || len == 0 {
+        return Err(EINVAL);
+    }
+    let path = Process::current().executable_path().ok_or(ENOENT)?;
+    if len < path.len() {
         return Err(ERANGE);
     }
-    slice.iter_mut().zip(path.bytes()).for_each(|(s, b)| *s = b);
-    Ok(bytelen)
+    copy_out(buf, path.as_bytes())?;
+    Ok(path.len())
 }

@@ -8,10 +8,10 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::{c_int, c_void};
 use core::ptr;
 
-use kernel_abi::{EINVAL, ENOMEM};
+use kernel_abi::{EINVAL, ENOMEM, ProtFlags};
 use muffin_sys::GrowingHeap;
 
-use crate::errno::fail;
+use crate::errno::{fail, ret};
 
 static HEAP: GrowingHeap = GrowingHeap::new();
 
@@ -157,6 +157,19 @@ pub unsafe extern "C" fn posix_memalign(out: *mut *mut c_void, align: usize, siz
     }
     unsafe { out.write(data.cast()) };
     0
+}
+
+/// This function sets the protection of the pages in `[addr, addr + len)`.
+///
+/// # Safety
+///
+/// No reference to memory in the range may become invalid under `prot`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int {
+    let Some(prot) = ProtFlags::from_bits(prot) else {
+        return fail(EINVAL);
+    };
+    ret(unsafe { muffin_sys::mprotect(addr.cast(), len, prot) }.map(|()| 0))
 }
 
 #[cfg(test)]

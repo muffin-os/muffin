@@ -270,9 +270,8 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
 
     wake_expired_sleepers();
 
-    if stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3
-        && !signal::reap_current_if_requested(Task::current())
-    {
+    let from_user = stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3;
+    if from_user && !signal::reap_current_if_requested(Task::current()) {
         signal::deliver_pending(stack_frame, regs);
     }
 
@@ -280,6 +279,14 @@ pub extern "sysv64" fn timer_interrupt_handler_impl(
         // Safety: interrupt handler, interrupts are off, so the context is
         // this CPU's for the whole reschedule.
         ExecutionContext::load().scheduler_mut().reschedule();
+    }
+
+    // A reap or a fatal signal can target this task while a stop parks it
+    // or while it waits in the run queue. In that case, the task must not
+    // return to user mode.
+    let task = Task::current();
+    if from_user && (task.should_terminate() || signal::reap_current_if_requested(task)) {
+        Task::exit_current();
     }
 }
 
@@ -484,6 +491,14 @@ extern "sysv64" fn page_fault_classify(
             return 0;
         }
 
+        // A writer of the user mappings removes regions from the list while
+        // it splits them. A user fault during this time returns to user
+        // mode, and the instruction runs again. The fault handler then never
+        // sees a region that is temporarily absent.
+        let pin = process.try_pin_user_memory();
+        if pin.is_none() && from_user {
+            return 0;
+        }
         if process.memory_regions().is_memory_region_at_address(addr) {
             let write = error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE);
             let violation = error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION);
@@ -506,6 +521,7 @@ extern "sysv64" fn page_fault_classify(
                 process.name(),
                 task.name()
             );
+            drop(pin);
             terminate_faulting_task(frame, regs, task);
             return 0;
         }
@@ -536,10 +552,12 @@ extern "sysv64" fn page_fault_pager(block: *mut FaultBlock) {
     let page = Page::<Size4KiB>::containing_address(addr);
     let address_space = process.address_space();
 
-    let region = process.memory_regions().region_for(addr);
-    let failure = match region.as_deref() {
-        Some(r) => r.handle_fault(address_space, page, caused_by_write).err(),
-        None => Some(PageInError::MapFailed),
+    let failure = {
+        let _pin = process.pin_user_memory();
+        match process.memory_regions().region_for(addr).as_deref() {
+            Some(r) => r.handle_fault(address_space, page, caused_by_write).err(),
+            None => Some(PageInError::MapFailed),
+        }
     };
 
     if let Some(e) = failure {

@@ -5,10 +5,10 @@ Subject: [PATCH] add muffin sendmsg and recvmsg definitions
 
 
 diff --git a/src/unix/muffin/mod.rs b/src/unix/muffin/mod.rs
-index c0c176cba81250e3f1a2cd7cf83d1565ea4d7f1b..84dfc536a4c59cf37a7148ff95cedc31bcec21fe 100644
+index cf86298df2f6faa0b7e576443c71ec3b44374c8c..e3cab7b8ec8cca234b7a1625892fca36d087215e 100644
 --- a/src/unix/muffin/mod.rs
 +++ b/src/unix/muffin/mod.rs
-@@ -193,6 +193,22 @@ s! {
+@@ -200,6 +200,22 @@ s! {
          pub imr_interface: in_addr,
      }
  
@@ -31,7 +31,7 @@ index c0c176cba81250e3f1a2cd7cf83d1565ea4d7f1b..84dfc536a4c59cf37a7148ff95cedc31
      pub struct termios {
          pub c_iflag: tcflag_t,
          pub c_oflag: tcflag_t,
-@@ -496,6 +512,10 @@ pub const AF_INET6: c_int = 10;
+@@ -509,6 +525,10 @@ pub const AF_INET6: c_int = 10;
  pub const SOCK_DGRAM: c_int = 2;
  pub const MSG_PEEK: c_int = 2;
  pub const SOL_SOCKET: c_int = 1;
@@ -42,7 +42,7 @@ index c0c176cba81250e3f1a2cd7cf83d1565ea4d7f1b..84dfc536a4c59cf37a7148ff95cedc31
  pub const SO_ERROR: c_int = 4;
  pub const SO_REUSEADDR: c_int = 11;
  pub const SO_LINGER: c_int = 6;
-@@ -568,7 +588,45 @@ pub const SIG_BLOCK: c_int = 0;
+@@ -581,7 +601,45 @@ pub const SIG_BLOCK: c_int = 0;
  pub const SIG_UNBLOCK: c_int = 1;
  pub const SIG_SETMASK: c_int = 2;
  
@@ -88,7 +88,7 @@ index c0c176cba81250e3f1a2cd7cf83d1565ea4d7f1b..84dfc536a4c59cf37a7148ff95cedc31
      // muffin wait status: exit code, or 128 + signo.
      pub const fn WIFEXITED(status: c_int) -> bool {
          status < 128
-@@ -608,6 +666,8 @@ extern "C" {
+@@ -621,6 +679,8 @@ extern "C" {
      pub fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int;
      pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;
      pub fn bind(socket: c_int, address: *const sockaddr, address_len: socklen_t) -> c_int;

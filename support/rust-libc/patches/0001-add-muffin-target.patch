@@ -13,6 +13,12 @@ The wait status macros follow the kernel encoding, "exit code, or
 128 + signo" (`kernel/syscall/src/access/process.rs`). Nothing stops or
 continues, so `WIFSTOPPED` and `WIFCONTINUED` are always false.
 
+The pthread types use the sizes and alignment of the muffin thread ABI.
+The runtime stores a `usize` in `pthread_attr_t`.
+It stores `u32` atomics in locks and condition variables.
+`PTHREAD_KEYS_MAX` is 1024 because std needs one key per `thread_local!` static.
+`PTHREAD_DESTRUCTOR_ITERATIONS` uses the POSIX minimum.
+
 The module mirrors NuttX in shape. NuttX also:
 - links no system library in `src/unix/mod.rs`; muffin does the same
   because `muffinos-rt` is a Rust rlib that std links directly.
@@ -107,10 +113,10 @@ index 207c36b82d55f0e1ed82d930a0acb038b246bf69..1098cc0f6769c310e7b0e5e6de41929a
      }
 diff --git a/src/unix/muffin/mod.rs b/src/unix/muffin/mod.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..9612b2b529559e70588ac144ef3363fd575e31fe
+index 0000000000000000000000000000000000000000..b5c3a164aff5350a272304b843341d87cafe84f9
 --- /dev/null
 +++ b/src/unix/muffin/mod.rs
-@@ -0,0 +1,554 @@
+@@ -0,0 +1,569 @@
 +//! Values mirror `kernel/abi` in muffin-os/muffin; `support/muffinos-rt/src/abi_check.rs`
 +//! fails to compile when they drift.
 +
@@ -190,22 +196,29 @@ index 0000000000000000000000000000000000000000..9612b2b529559e70588ac144ef3363fd
 +        pub tm_zone: *const c_char,
 +    }
 +
++    // The runtime stores a `usize` in attributes and atomics in locks.
++    // The types use the alignment of these fields.
++    #[repr(align(8))]
 +    pub struct pthread_attr_t {
 +        __val: [u8; __SIZEOF_PTHREAD_ATTR_T],
 +    }
 +
++    #[repr(align(4))]
 +    pub struct pthread_mutex_t {
 +        __val: [u8; __SIZEOF_PTHREAD_MUTEX_T],
 +    }
 +
++    #[repr(align(4))]
 +    pub struct pthread_mutexattr_t {
 +        __val: [u8; __SIZEOF_PTHREAD_MUTEXATTR_T],
 +    }
 +
++    #[repr(align(4))]
 +    pub struct pthread_cond_t {
 +        __val: [u8; __SIZEOF_PTHREAD_COND_T],
 +    }
 +
++    #[repr(align(4))]
 +    pub struct pthread_condattr_t {
 +        __val: [u8; __SIZEOF_PTHREAD_CONDATTR_T],
 +    }
@@ -345,6 +358,12 @@ index 0000000000000000000000000000000000000000..9612b2b529559e70588ac144ef3363fd
 +pub const PTHREAD_MUTEX_RECURSIVE: c_int = 1;
 +pub const PTHREAD_MUTEX_ERRORCHECK: c_int = 2;
 +pub const PTHREAD_STACK_MIN: size_t = 16384;
++pub const PTHREAD_CREATE_JOINABLE: c_int = 0;
++pub const PTHREAD_CREATE_DETACHED: c_int = 1;
++
++// limits.h supplies these limits for pthread keys and destructor iterations.
++pub const PTHREAD_KEYS_MAX: c_int = 1024;
++pub const PTHREAD_DESTRUCTOR_ITERATIONS: c_int = 4;
 +
 +// dlfcn.h
 +pub const RTLD_DEFAULT: *mut c_void = ptr::null_mut();
@@ -655,6 +674,8 @@ index 0000000000000000000000000000000000000000..9612b2b529559e70588ac144ef3363fd
 +        flag: c_int,
 +    ) -> c_int;
 +    pub fn pthread_condattr_setclock(attr: *mut pthread_condattr_t, clock_id: clockid_t) -> c_int;
++    pub fn pthread_attr_getdetachstate(attr: *const pthread_attr_t, state: *mut c_int) -> c_int;
++    pub fn pthread_sigmask(how: c_int, set: *const sigset_t, oldset: *mut sigset_t) -> c_int;
 +    pub fn pthread_setname_np(thread: pthread_t, name: *const c_char) -> c_int;
 +    pub fn pthread_getname_np(thread: pthread_t, name: *mut c_char, len: size_t) -> c_int;
 +    pub fn pthread_create(

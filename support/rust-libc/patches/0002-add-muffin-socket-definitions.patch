@@ -5,7 +5,7 @@ Subject: [PATCH] add muffin socket definitions
 
 
 diff --git a/src/unix/muffin/mod.rs b/src/unix/muffin/mod.rs
-index 9612b2b529559e70588ac144ef3363fd575e31fe..c0c176cba81250e3f1a2cd7cf83d1565ea4d7f1b 100644
+index b5c3a164aff5350a272304b843341d87cafe84f9..cf86298df2f6faa0b7e576443c71ec3b44374c8c 100644
 --- a/src/unix/muffin/mod.rs
 +++ b/src/unix/muffin/mod.rs
 @@ -3,6 +3,7 @@
@@ -16,7 +16,7 @@ index 9612b2b529559e70588ac144ef3363fd575e31fe..c0c176cba81250e3f1a2cd7cf83d1565
      timespec,
      DIR,
  };
-@@ -158,6 +159,40 @@ s! {
+@@ -165,6 +166,40 @@ s! {
          pub ai_next: *mut addrinfo,
      }
  
@@ -57,7 +57,7 @@ index 9612b2b529559e70588ac144ef3363fd575e31fe..c0c176cba81250e3f1a2cd7cf83d1565
      pub struct termios {
          pub c_iflag: tcflag_t,
          pub c_oflag: tcflag_t,
-@@ -445,6 +480,48 @@ pub const WNOHANG: c_int = 1;
+@@ -458,6 +493,48 @@ pub const WNOHANG: c_int = 1;
  // sys/stat.h: `utimensat` sentinel.
  pub const UTIME_OMIT: c_long = (1 << 30) - 2;
  
@@ -106,7 +106,7 @@ index 9612b2b529559e70588ac144ef3363fd575e31fe..c0c176cba81250e3f1a2cd7cf83d1565
  // unistd.h: `sysconf` names, muffinos-rt answers them.
  pub const _SC_PAGESIZE: c_int = 1;
  pub const _SC_NPROCESSORS_ONLN: c_int = 2;
-@@ -530,6 +607,15 @@ extern "C" {
+@@ -543,6 +620,15 @@ extern "C" {
      pub fn __errno_location() -> *mut c_int;
      pub fn clock_gettime(clk_id: clockid_t, tp: *mut timespec) -> c_int;
      pub fn ioctl(fd: c_int, request: c_int, ...) -> c_int;

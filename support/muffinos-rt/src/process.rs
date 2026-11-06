@@ -13,11 +13,11 @@ use libc::{
 };
 
 use crate::env::environ;
-use crate::errno::{fail, ret};
+use crate::errno::{error_code, fail, ret};
 use crate::mem::{free, malloc};
 use crate::string::c_str;
 
-const PAGE_SIZE: c_long = 4096;
+pub(crate) const PAGE_SIZE: usize = 4096;
 const GETPW_R_SIZE_MAX: c_long = 1024;
 
 #[unsafe(no_mangle)]
@@ -60,9 +60,15 @@ pub extern "C" fn kill(pid: pid_t, signo: c_int) -> c_int {
         .map(|()| 0))
 }
 
+/// The child runs one thread. This thread is a copy of the calling thread of
+/// `fork`.
 #[unsafe(no_mangle)]
 pub extern "C" fn fork() -> pid_t {
-    ret(muffin_sys::fork().and_then(to_pid))
+    let forked = muffin_sys::fork().and_then(to_pid);
+    if forked == Ok(0) {
+        crate::thread::refresh_after_fork();
+    }
+    ret(forked)
 }
 
 /// Strings of a NULL-terminated C string array, in a `malloc` buffer that
@@ -158,10 +164,11 @@ pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *const c_char)
     unsafe { execve(file, argv, environ) }
 }
 
-/// Waits for a child that the POSIX `pid` forms select and returns the reaped
-/// pid. Stores the `WEXITSTATUS` and `WTERMSIG` decode in `status`. Supports
-/// `WNOHANG`, which returns 0 while the selected children run; every other
-/// option bit fails with `EINVAL`.
+/// This function waits for a child that the POSIX `pid` forms select. It
+/// returns the reaped pid. The kernel writes the status to `status` in the
+/// `WEXITSTATUS` and `WTERMSIG` encoding. The function supports `WNOHANG`,
+/// which returns 0 while the selected children run. Every other option bit
+/// fails with `EINVAL`.
 ///
 /// # Safety
 ///
@@ -171,16 +178,7 @@ pub unsafe extern "C" fn waitpid(pid: pid_t, status: *mut c_int, options: c_int)
     let Some(options) = WaitOptions::from_bits(options) else {
         return fail(EINVAL);
     };
-    let mut code = 0;
-    let result = muffin_sys::waitpid(pid.into(), &mut code, options)
-        .and_then(to_pid)
-        .inspect(|&pid| {
-            // 0 is "still running"; POSIX leaves `status` unspecified then.
-            if pid != 0 && !status.is_null() {
-                unsafe { status.write(code) };
-            }
-        });
-    ret(result)
+    ret(unsafe { muffin_sys::waitpid(pid.into(), status, options) }.and_then(to_pid))
 }
 
 fn to_kernel_action(action: &c_sigaction) -> SigAction {
@@ -243,25 +241,52 @@ pub unsafe extern "C" fn signal(signo: c_int, handler: sighandler_t) -> sighandl
     }
 }
 
+/// This function changes the signal mask of the calling thread.
+///
 /// # Safety
 ///
 /// `set` must be null or valid for one read, and `old` must be null or valid
 /// for one write.
+unsafe fn change_signal_mask(
+    how: c_int,
+    set: *const sigset_t,
+    old: *mut sigset_t,
+) -> Result<(), Errno> {
+    let how = SigMaskHow::try_from(how)?;
+    let set = unsafe { set.as_ref() }.map(|bits| SigSet::from_bits(*bits));
+    let mut previous = SigSet::EMPTY;
+    muffin_sys::sigprocmask(how, set.as_ref(), Some(&mut previous))?;
+    if !old.is_null() {
+        unsafe { old.write(previous.bits()) };
+    }
+    Ok(())
+}
+
+/// This function changes the signal mask of the calling thread, like
+/// [`pthread_sigmask`].
+///
+/// # Safety
+///
+/// The caller must satisfy the contract of [`change_signal_mask`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sigprocmask(
     how: c_int,
     set: *const sigset_t,
     old: *mut sigset_t,
 ) -> c_int {
-    let how = SigMaskHow::try_from(how);
-    let set = unsafe { set.as_ref() }.map(|bits| SigSet::from_bits(*bits));
-    let mut previous = SigSet::EMPTY;
-    let result =
-        how.and_then(|how| muffin_sys::sigprocmask(how, set.as_ref(), Some(&mut previous)));
-    if result.is_ok() && !old.is_null() {
-        unsafe { old.write(previous.bits()) };
-    }
-    ret(result.map(|()| 0))
+    ret(unsafe { change_signal_mask(how, set, old) }.map(|()| 0))
+}
+
+/// # Safety
+///
+/// The caller must satisfy the contract of [`change_signal_mask`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_sigmask(
+    how: c_int,
+    set: *const sigset_t,
+    old: *mut sigset_t,
+) -> c_int {
+    error_code(unsafe { change_signal_mask(how, set, old) })
 }
 
 /// # Safety
@@ -279,7 +304,7 @@ pub unsafe extern "C" fn sigpending(out: *mut sigset_t) -> c_int {
 #[unsafe(no_mangle)]
 pub extern "C" fn sysconf(name: c_int) -> c_long {
     match name {
-        _SC_PAGESIZE => PAGE_SIZE,
+        _SC_PAGESIZE => PAGE_SIZE as c_long,
         _SC_NPROCESSORS_ONLN => 1,
         _SC_GETPW_R_SIZE_MAX => GETPW_R_SIZE_MAX,
         _SC_THREAD_STACK_MIN => PTHREAD_STACK_MIN as c_long,

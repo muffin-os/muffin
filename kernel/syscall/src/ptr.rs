@@ -1,14 +1,25 @@
 use core::fmt::{Debug, Formatter};
-use core::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
+use core::marker::PhantomData;
 
 use kernel_abi::{EINVAL, Errno};
 use thiserror::Error;
 use x86_64::VirtAddr;
 
-#[derive(Copy, Clone)]
+/// This type holds a lower-half address of a `T` in user memory. It only
+/// carries and checks the address. The kernel copies user memory through its
+/// own helpers and never through this type.
 pub struct UserspacePtr<T> {
-    ptr: *const T,
+    addr: usize,
+    _target: PhantomData<*const T>,
 }
+
+impl<T> Clone for UserspacePtr<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for UserspacePtr<T> {}
 
 impl<T> Debug for UserspacePtr<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
@@ -45,7 +56,8 @@ impl<T> UserspacePtr<T> {
             Err(NotUserspace(ptr))
         } else {
             Ok(Self {
-                ptr: with_exposed_provenance(ptr),
+                addr: ptr,
+                _target: PhantomData,
             })
         }
     }
@@ -60,11 +72,7 @@ impl<T> UserspacePtr<T> {
 
     #[must_use]
     pub fn addr(&self) -> usize {
-        self.ptr as usize
-    }
-
-    pub fn as_ptr(&self) -> *const T {
-        self.ptr
+        self.addr
     }
 }
 
@@ -86,63 +94,6 @@ fn validate_range(start: usize, size: usize) -> Result<(), NotUserspace> {
         Err(NotUserspace(last))
     } else {
         Ok(())
-    }
-}
-
-pub struct UserspaceMutPtr<T> {
-    ptr: *mut T,
-}
-
-impl<T> Debug for UserspaceMutPtr<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:#x}", self.ptr as usize)
-    }
-}
-
-impl<T> TryFrom<*mut T> for UserspaceMutPtr<T> {
-    type Error = NotUserspace;
-
-    fn try_from(ptr: *mut T) -> Result<Self, Self::Error> {
-        Self::try_from_usize(ptr as usize)
-    }
-}
-
-impl<T> !Clone for UserspaceMutPtr<T> {}
-
-impl<T> UserspaceMutPtr<T> {
-    /// # Errors
-    /// Returns [`NotUserspace`] if `ptr` is non-canonical or in the upper half.
-    pub fn try_from_usize(ptr: usize) -> Result<Self, NotUserspace> {
-        #[cfg(not(target_pointer_width = "64"))]
-        compile_error!("only 64bit pointer width is supported");
-        if is_upper_half(ptr)? {
-            Err(NotUserspace(ptr))
-        } else {
-            Ok(Self {
-                ptr: with_exposed_provenance_mut(ptr),
-            })
-        }
-    }
-
-    /// Checks that `size` bytes from this pointer stay in the lower half.
-    ///
-    /// A range may end exactly at the top of the lower half. An empty range
-    /// is always valid because the pointer itself was already checked.
-    pub fn validate_range(&self, size: usize) -> Result<(), NotUserspace> {
-        validate_range(self.addr(), size)
-    }
-
-    #[must_use]
-    pub fn addr(&self) -> usize {
-        self.ptr as usize
-    }
-
-    pub fn as_ptr(&self) -> *const T {
-        self.ptr as *const T
-    }
-
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.ptr
     }
 }
 
@@ -243,18 +194,6 @@ mod tests {
         // bit 47 set while bits 48-63 are clear
         let non_canonical = 0x0000_8000_0000_0000_usize;
         let result = UserspacePtr::<u8>::try_from_usize(non_canonical);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn mut_ptr_rejects_non_canonical_address() {
-        let result = UserspaceMutPtr::<u8>::try_from_usize(0x0000_8000_0000_0000);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn mut_ptr_rejects_upper_half_address() {
-        let result = UserspaceMutPtr::<u8>::try_from_usize(0xFFFF_8000_0000_0000);
         assert!(result.is_err());
     }
 

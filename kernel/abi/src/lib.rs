@@ -15,6 +15,7 @@ mod socket;
 mod stat;
 mod sys_types;
 mod syscall;
+mod thread;
 mod time;
 mod wait;
 
@@ -34,5 +35,6 @@ pub use socket::*;
 pub use stat::*;
 pub use sys_types::*;
 pub use syscall::*;
+pub use thread::*;
 pub use time::*;
 pub use wait::*;

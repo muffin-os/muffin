@@ -2,6 +2,8 @@ use core::fmt::{Display, Formatter};
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 
+use kernel_abi::ThreadId;
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct TaskId(u64);
 
@@ -26,5 +28,12 @@ impl TaskId {
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         TaskId(COUNTER.fetch_add(1, Relaxed))
+    }
+}
+
+/// Each task is one thread, so the task id is also the thread id.
+impl From<TaskId> for ThreadId {
+    fn from(id: TaskId) -> Self {
+        ThreadId::new(id.0)
     }
 }

@@ -6,19 +6,23 @@ use core::ffi::c_void;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::Relaxed;
-use core::sync::atomic::{AtomicBool, AtomicU64};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
 use cordyceps::Linked;
 use cordyceps::mpsc_queue::Links;
+use kernel_abi::SigSet;
 use kernel_log::SpanStack;
 use kernel_park::ParkTicketCell;
-use spin::{Mutex, RwLock};
+use kernel_syscall::signal::SignalMask;
+use spin::{Mutex, RwLock, RwLockWriteGuard};
 use tracing::trace;
+use x86_64::VirtAddr;
 use x86_64::instructions::{hlt, interrupts};
 
 use crate::U64Ext;
 use crate::mcore::context::ExecutionContext;
 use crate::mcore::mtask::process::Process;
+use crate::mcore::mtask::process::tls::TlsBlock;
 use crate::mcore::mtask::wait::{TaskParkTicket, TaskReservation, TaskUnparkTicket};
 use crate::mem::memapi::{LowerHalfAllocation, Writable};
 
@@ -59,8 +63,15 @@ pub struct Task {
 
     /// The user stack of the task. This is only set if the task is a userspace task.
     ustack: RwLock<Option<LowerHalfAllocation<Writable>>>,
-    tls: RwLock<Option<LowerHalfAllocation<Writable>>>,
+    tls: RwLock<Option<TlsBlock>>,
     fx_area: RwLock<Option<LowerHalfAllocation<Writable>>>,
+    /// This field holds the bits of the [`SignalMask`] of this thread. No two
+    /// writers race (see [`Task::set_signal_mask`]). Therefore a plain load
+    /// and store are enough.
+    signal_mask: AtomicU64,
+    /// This field counts the user memory guards that this task holds. A task
+    /// with a guard must not park.
+    user_memory_pins: AtomicU32,
 
     /// Only the CPU currently running this task ever touches this stack, so the
     /// lock is never contended. It lives on the task rather than per CPU because
@@ -153,6 +164,8 @@ impl Task {
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
             fx_area: RwLock::new(None),
+            signal_mask: AtomicU64::new(0),
+            user_memory_pins: AtomicU32::new(0),
             span_stack: Mutex::new(SpanStack::new()),
             links,
         }
@@ -178,22 +191,53 @@ impl Task {
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
             fx_area: RwLock::new(None),
+            signal_mask: AtomicU64::new(0),
+            user_memory_pins: AtomicU32::new(0),
             span_stack: Mutex::new(SpanStack::new()),
             links,
         }
     }
 
-    /// Drops the user stack, TLS and FX area, unmapping their lower-half
-    /// pages.
+    /// This function drops the user stack, TLS and FX area, and unmaps their
+    /// lower-half pages. `_exclusive` proves that no task of the process
+    /// copies from or to user memory during this time.
     ///
     /// # Panics
-    /// In debug builds, panics if the owning process's address space is not
-    /// active on this CPU.
-    pub fn free_user_allocations(&self) {
+    /// This function panics if interrupts are off. In debug builds, it also
+    /// panics if the address space of the owning process is not active on
+    /// this CPU.
+    pub fn free_user_allocations(&self, _exclusive: &RwLockWriteGuard<'_, ()>) {
         debug_assert!(self.process.address_space().is_active());
         let _ = self.fx_area.write().take();
         let _ = self.tls.write().take();
         let _ = self.ustack.write().take();
+    }
+
+    pub fn per_thread_block_starts(&self) -> impl Iterator<Item = VirtAddr> {
+        [
+            self.ustack.read().as_ref().map(|stack| stack.start()),
+            self.tls.read().as_ref().map(|tls| tls.start()),
+            self.fx_area.read().as_ref().map(|fx| fx.start()),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// This function drops the handles of the user stack, TLS and FX area,
+    /// and keeps their pages mapped. Use it for a task that ends with
+    /// interrupts off. Such a task ends only when its whole process ends or
+    /// when an exec or exit reaps it. Exec or the end of the process then
+    /// removes the regions.
+    pub fn abandon_user_allocations(&self) {
+        if let Some(fx_area) = self.fx_area.write().take() {
+            fx_area.abandon();
+        }
+        if let Some(tls) = self.tls.write().take() {
+            tls.abandon();
+        }
+        if let Some(ustack) = self.ustack.write().take() {
+            ustack.abandon();
+        }
     }
 
     pub(crate) extern "C" fn exit() {
@@ -208,11 +252,14 @@ impl Task {
             task.ustack.force_write_unlock();
             task.tls.force_write_unlock();
             task.fx_area.force_write_unlock();
-
-            task.free_user_allocations();
-
-            task.set_should_terminate(true);
         }
+        if interrupts::are_enabled() {
+            let process = task.process();
+            task.free_user_allocations(&process.exclusive_user_memory());
+        } else {
+            task.abandon_user_allocations();
+        }
+        task.set_should_terminate(true);
 
         // A terminated task is disposed without saving its context, so the
         // current stack is simply abandoned. That covers the page fault IST
@@ -258,6 +305,8 @@ impl Task {
             ustack: RwLock::new(None),
             tls: RwLock::new(None),
             fx_area: RwLock::new(None),
+            signal_mask: AtomicU64::new(0),
+            user_memory_pins: AtomicU32::new(0),
             span_stack: Mutex::new(SpanStack::new()),
             links: Links::default(),
         }
@@ -318,6 +367,10 @@ impl Task {
         &self.pending_fault_addr
     }
 
+    pub(crate) fn user_memory_pins(&self) -> &AtomicU32 {
+        &self.user_memory_pins
+    }
+
     pub(crate) fn span_stack(&self) -> &Mutex<SpanStack> {
         &self.span_stack
     }
@@ -326,12 +379,30 @@ impl Task {
         &self.ustack
     }
 
-    pub fn tls(&self) -> &RwLock<Option<LowerHalfAllocation<Writable>>> {
+    pub fn tls(&self) -> &RwLock<Option<TlsBlock>> {
         &self.tls
     }
 
     pub fn fx_area(&self) -> &RwLock<Option<LowerHalfAllocation<Writable>>> {
         &self.fx_area
+    }
+
+    pub fn signal_mask(&self) -> SignalMask {
+        SignalMask::blocking(SigSet::from_bits(self.signal_mask.load(Relaxed)))
+    }
+
+    /// Only the task itself may change the mask. The creator of a task that
+    /// has not run yet may also change it.
+    pub fn set_signal_mask(&self, mask: SignalMask) {
+        self.signal_mask.store(mask.blocked().bits(), Relaxed);
+    }
+
+    /// This function returns true when a pending signal that this task does
+    /// not block must end an interruptible wait of the task.
+    pub fn has_interrupting_signal(&self) -> bool {
+        self.process
+            .signals_read()
+            .has_interrupting_deliverable(self.signal_mask())
     }
 
     pub fn last_stack_ptr(&mut self) -> &mut usize {

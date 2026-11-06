@@ -55,14 +55,16 @@ fn middle() -> i32 {
 
 fn parent() -> i32 {
     let mut status = 0;
-    match waitpid(-1, &mut status, WaitOptions::empty()) {
+    // SAFETY: `status` is a live local.
+    match unsafe { waitpid(-1, &raw mut status, WaitOptions::empty()) } {
         Ok(pid) => println!("orphan: reaped pid={pid} status={status}"),
         Err(e) => {
             println!("orphan: FAIL waitpid {e}");
             return 1;
         }
     }
-    match waitpid(-1, &mut status, WaitOptions::empty()) {
+    // SAFETY: `status` is a live local.
+    match unsafe { waitpid(-1, &raw mut status, WaitOptions::empty()) } {
         Ok(pid) => {
             println!("orphan: FAIL second wait returned {pid}");
             return 1;

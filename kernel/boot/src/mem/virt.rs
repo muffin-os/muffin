@@ -92,6 +92,7 @@ pub fn init() {
         .leak();
 }
 
+#[derive(Clone)]
 enum InnerVmm<'vmm> {
     Ref(&'vmm RwLock<VirtualMemoryManager>),
     Rc(Arc<RwLock<VirtualMemoryManager>>),
@@ -142,6 +143,26 @@ impl OwnedSegment<'_> {
     #[must_use]
     pub fn leak(self) -> Segment {
         ManuallyDrop::new(self).inner
+    }
+
+    /// This function splits the reservation at `at` into two reservations.
+    /// The first reservation starts where this reservation starts.
+    ///
+    /// # Panics
+    /// This function panics when `at` is not a page boundary strictly inside
+    /// the segment.
+    pub fn split(mut self, at: VirtAddr) -> (Self, Self) {
+        let (low, high) = self
+            .vmm
+            .write()
+            .split(self.inner, at)
+            .expect("the caller splits an owned segment at a page inside it");
+        let high = OwnedSegment {
+            vmm: self.vmm.clone(),
+            inner: high,
+        };
+        self.inner = low;
+        (self, high)
     }
 }
 

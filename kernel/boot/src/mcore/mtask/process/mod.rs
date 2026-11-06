@@ -13,11 +13,12 @@ use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use conquer_once::spin::OnceCell;
-use kernel_abi::{FdNum, ProcessId};
+use kernel_abi::{FdNum, ProcessId, Signal};
 use kernel_memapi::{Guarded, Location, MemoryApi};
 use kernel_syscall::access::AccessMode;
 use kernel_syscall::exec::build_initial_stack;
-use kernel_syscall::signal::SignalState;
+use kernel_syscall::signal::{SignalMask, SignalState, thread_to_wake};
+use kernel_syscall::thread::{AddrWaitQueues, ThreadTable};
 use kernel_vfs::node::VfsNode;
 use kernel_vfs::path::{AbsoluteOwnedPath, AbsolutePath, ROOT};
 use kernel_vfs::{CreateMode, OpenError};
@@ -38,6 +39,7 @@ use crate::hpet::Instant;
 use crate::mcore::mtask::process::fd::{FileDescriptor, FileDescriptorFlags};
 use crate::mcore::mtask::process::mem::MemoryRegions;
 use crate::mcore::mtask::process::telemetry::Telemetry;
+use crate::mcore::mtask::process::tls::TlsTemplate;
 use crate::mcore::mtask::process::tree::process_tree;
 use crate::mcore::mtask::scheduler::global::GlobalTaskQueue;
 use crate::mcore::mtask::task::{FxArea, HigherHalfStack, StackAllocationError, Task, TaskId};
@@ -57,6 +59,7 @@ pub(crate) mod elf;
 pub mod fd;
 pub mod mem;
 pub mod telemetry;
+pub mod tls;
 
 pub(crate) mod tree;
 
@@ -120,7 +123,8 @@ pub use kernel_syscall::access::ExitOutcome;
 #[must_use]
 pub enum ParkOutcome {
     Ready,
-    /// An exec reap targets the caller, which must stop waiting and return.
+    /// A reap or the end of the process targets the caller. The caller must
+    /// stop waiting and return.
     Interrupted,
 }
 
@@ -132,6 +136,14 @@ struct TaskAccounting {
 struct ReapState {
     keeper: TaskId,
     waiter: Option<TaskWaker>,
+}
+
+/// This type describes a task in an interruptible wait. A task changes its
+/// mask only while it runs. Therefore `mask` stays exact while the task waits.
+struct InterruptibleWaiter {
+    tid: TaskId,
+    mask: SignalMask,
+    waker: TaskWaker,
 }
 
 /// Proof that the calling task is the process's only live task. Constructed
@@ -170,16 +182,27 @@ pub struct Process {
     /// while holding the signals write guard, the sleeping task takes it
     /// bare, so no inversion exists as long as every accessor is a
     /// self-contained lock-store-unlock.
-    interruptible_wakers: Mutex<Vec<(TaskId, TaskWaker)>>,
+    interruptible_wakers: Mutex<Vec<InterruptibleWaiter>>,
 
     task_accounting: Mutex<TaskAccounting>,
     /// Mirror of `task_accounting.reap.is_some()`, so the timer tick pays one
     /// Acquire load instead of a lock when no exec is in progress.
     reap_active: AtomicBool,
+    /// A fatal signal sets this flag when it ends the process. Every task
+    /// exits at its next safe point. The flag never clears.
+    terminating: AtomicBool,
 
     file_descriptors: RwLock<BTreeMap<FdNum, FileDescriptor>>,
 
+    tls_template: RwLock<Option<TlsTemplate>>,
+    threads: Mutex<ThreadTable>,
+    thread_exits: WaitQueue,
+    addr_waiters: Mutex<AddrWaitQueues<WaitQueue>>,
+
     exit_outcome: OnceCell<ExitOutcome>,
+
+    /// User memory guards hold this lock. Only `syscall::user_mem` acquires it.
+    pub(crate) user_memory: RwLock<()>,
 }
 
 impl Process {
@@ -213,8 +236,14 @@ impl Process {
                     reap: None,
                 }),
                 reap_active: AtomicBool::new(false),
+                terminating: AtomicBool::new(false),
                 file_descriptors: RwLock::new(BTreeMap::new()),
+                tls_template: RwLock::new(None),
+                threads: Mutex::new(ThreadTable::default()),
+                thread_exits: WaitQueue::new(),
+                addr_waiters: Mutex::new(AddrWaitQueues::new()),
                 exit_outcome: OnceCell::uninit(),
+                user_memory: RwLock::new(()),
             });
             process_tree().write().processes.insert(pid, root.clone());
             root
@@ -254,8 +283,14 @@ impl Process {
                 reap: None,
             }),
             reap_active: AtomicBool::new(false),
+            terminating: AtomicBool::new(false),
             file_descriptors: RwLock::new(BTreeMap::new()),
+            tls_template: RwLock::new(None),
+            threads: Mutex::new(ThreadTable::default()),
+            thread_exits: WaitQueue::new(),
+            addr_waiters: Mutex::new(AddrWaitQueues::new()),
             exit_outcome: OnceCell::uninit(),
+            user_memory: RwLock::new(()),
         };
 
         let res = Arc::new(process);
@@ -284,6 +319,7 @@ impl Process {
 
         let kstack = HigherHalfStack::allocate(16, trampoline, ptr::null_mut(), Task::exit)?;
         let main_task = Task::create_with_stack(&process, kstack);
+        process.threads.lock().insert(main_task.id().into());
 
         Ok((process, main_task))
     }
@@ -358,6 +394,24 @@ impl Process {
         &self.telemetry
     }
 
+    /// This function returns the TLS image of the executable. Each new thread gets a block from it.
+    pub fn tls_template(&self) -> &RwLock<Option<TlsTemplate>> {
+        &self.tls_template
+    }
+
+    pub fn threads(&self) -> &Mutex<ThreadTable> {
+        &self.threads
+    }
+
+    /// This function returns the queue that each thread exit wakes. The joiners then check again.
+    pub fn thread_exits(&self) -> &WaitQueue {
+        &self.thread_exits
+    }
+
+    pub fn addr_waiters(&self) -> &Mutex<AddrWaitQueues<WaitQueue>> {
+        &self.addr_waiters
+    }
+
     pub fn signals_read(&self) -> RwLockReadGuard<'_, Signals> {
         self.signals.read()
     }
@@ -374,26 +428,46 @@ impl Process {
         self.signals.try_write()
     }
 
-    fn register_interruptible_waker(&self, tid: TaskId, waker: TaskWaker) {
-        self.interruptible_wakers.lock().push((tid, waker));
+    fn register_interruptible_waker(&self, tid: TaskId, mask: SignalMask, waker: TaskWaker) {
+        self.interruptible_wakers
+            .lock()
+            .push(InterruptibleWaiter { tid, mask, waker });
     }
 
     fn clear_interruptible_waker(&self, tid: TaskId) {
-        self.interruptible_wakers.lock().retain(|(t, _)| *t != tid);
+        self.interruptible_wakers.lock().retain(|w| w.tid != tid);
     }
 
     pub fn wake_interruptible(&self) {
-        let wakers = core::mem::take(&mut *self.interruptible_wakers.lock());
-        for (_, waker) in wakers {
-            wake(&waker);
+        let waiters = core::mem::take(&mut *self.interruptible_wakers.lock());
+        for waiter in waiters {
+            wake(&waiter.waker);
         }
     }
 
-    /// Parks the current task until `should_wake` returns true or an exec reap
-    /// targets the task. `should_wake` is not called again after it returns
-    /// true, so it can consume data. A `deadline` or a `queue` only arms a
-    /// wakeup; `should_wake` decides. Every blocking syscall must wait through
-    /// this function, or signals and the exec reaper cannot reach the task.
+    /// This function wakes the one waiting task that must take the new
+    /// process-pending `signo`. [`thread_to_wake`] chooses that task. `sender`
+    /// is the mask of the sending task when the sending task belongs to this
+    /// process.
+    pub fn wake_signal_taker(&self, signo: Signal, sender: Option<SignalMask>) {
+        let waiter = {
+            let mut waiters = self.interruptible_wakers.lock();
+            thread_to_wake(
+                signo,
+                sender,
+                waiters.iter().enumerate().map(|(i, w)| (i, w.mask)),
+            )
+            .map(|i| waiters.swap_remove(i))
+        };
+        if let Some(waiter) = waiter {
+            wake(&waiter.waker);
+        }
+    }
+
+    /// This function parks the current task until `should_wake` returns true,
+    /// or until process termination or a reap targets the task.
+    /// The predicate follows the contract of [`kernel_syscall::access::ThreadAccess::park`].
+    /// A `deadline` or a `queue` only arms a wakeup. `should_wake` decides.
     pub fn park_current_task(
         &self,
         deadline: Option<Instant>,
@@ -406,7 +480,13 @@ impl Process {
             self.pid,
             "parking on a foreign process"
         );
+        debug_assert_eq!(
+            task.user_memory_pins().load(Ordering::Relaxed),
+            0,
+            "parked while user memory is pinned"
+        );
         let tid = task.id();
+        let mask = task.signal_mask();
         loop {
             if self.reap_requested_for(tid) {
                 return ParkOutcome::Interrupted;
@@ -419,7 +499,7 @@ impl Process {
             if let Some(deadline) = deadline {
                 sleep_until(deadline, waker.clone());
             }
-            self.register_interruptible_waker(tid, waker.clone());
+            self.register_interruptible_waker(tid, mask, waker.clone());
             if let Some(queue) = queue {
                 queue.register(waker.clone());
             }
@@ -443,19 +523,35 @@ impl Process {
     }
 
     pub(in crate::mcore::mtask) fn retire_task(&self) {
-        let mut acc = self.task_accounting.lock();
-        acc.live -= 1;
-        if acc.live == 1
-            && let Some(reap) = &mut acc.reap
-            && let Some(waker) = reap.waiter.take()
-        {
-            wake(&waker);
+        let live = {
+            let mut acc = self.task_accounting.lock();
+            acc.live -= 1;
+            if acc.live == 1
+                && let Some(reap) = &mut acc.reap
+                && let Some(waker) = reap.waiter.take()
+            {
+                wake(&waker);
+            }
+            acc.live
+        };
+        if live == 0 {
+            self.threads.lock().clear();
+            self.addr_waiters.lock().clear();
+        } else if self.terminating.load(Ordering::Acquire) {
+            // `terminate_all_tasks` runs in interrupt context, where it is
+            // unsafe to take these locks. Instead, the cleanup of each task
+            // wakes the waiting siblings when the task ends.
+            self.signals_write().resume_stopped_tasks();
+            self.wake_interruptible();
         }
     }
 
-    /// True when an exec reap targets `tid`. An observer must exit at its
-    /// next safe point.
+    /// This function returns true when a reap or the end of the process
+    /// targets `tid`. The observing task must exit at its next safe point.
     pub(crate) fn reap_requested_for(&self, tid: TaskId) -> bool {
+        if self.terminating.load(Ordering::Acquire) {
+            return true;
+        }
         if !self.reap_active.load(Ordering::Acquire) {
             return false;
         }
@@ -466,10 +562,21 @@ impl Process {
             .is_some_and(|r| r.keeper != tid)
     }
 
-    /// Requests termination of every other task of the process and parks
-    /// until the cleanup task has retired them, per POSIX exec semantics.
-    /// A caller that is itself a reap target never returns, it exits here.
+    /// This function makes every task of the process exit at its next safe
+    /// point, for a fatal signal. Interrupt context may call this function,
+    /// because it only sets a flag.
+    pub fn terminate_all_tasks(&self) {
+        self.terminating.store(true, Ordering::Release);
+    }
+
+    /// This function requests termination of every other task of the process.
+    /// It then parks until the cleanup task retires them, as POSIX exec
+    /// and exit semantics require. A caller that is itself a reap target
+    /// never returns. It exits here.
     pub fn reap_sibling_tasks(&self, keeper: TaskId) -> SoleLiveTask<'_> {
+        if self.terminating.load(Ordering::Acquire) {
+            Task::exit_current();
+        }
         {
             let mut acc = self.task_accounting.lock();
             match &acc.reap {
@@ -507,6 +614,13 @@ impl Process {
             }
             block_current(park_ticket);
         }
+    }
+
+    /// This function drops the exit records and the address waiters that the
+    /// reaped siblings leave. Then `keeper` is the only thread of the process.
+    pub fn reset_threads(&self, keeper: TaskId, _sole: &SoleLiveTask<'_>) {
+        self.threads.lock().reset_to(keeper.into());
+        self.addr_waiters.lock().clear();
     }
 
     /// Records the first terminating event. A process that exits while being
@@ -682,7 +796,9 @@ pub(crate) fn setup_user_image(
                 Size4KiB::SIZE.into_usize(),
             )
             .map_err(|_| elf::LoadExecutableError::InvalidSizeOrAlign)?,
-            LowerHalfAllocOptions::USER_ACCESSIBLE | LowerHalfAllocOptions::FORK_COPY_EAGER,
+            LowerHalfAllocOptions::USER_ACCESSIBLE
+                | LowerHalfAllocOptions::FORK_COPY_EAGER
+                | LowerHalfAllocOptions::PER_THREAD,
             Guarded::Yes,
         )
         .ok_or(elf::LoadExecutableError::AllocationFailed)?;
@@ -698,18 +814,8 @@ pub(crate) fn setup_user_image(
     .ok_or(elf::LoadExecutableError::AllocationFailed)?;
     *task.ustack().write() = Some(ustack_allocation);
 
-    let fx_area = memapi
-        .allocate(
-            Location::Anywhere,
-            Layout::new::<FxArea>(),
-            LowerHalfAllocOptions::USER_ACCESSIBLE | LowerHalfAllocOptions::FORK_COPY_EAGER,
-            Guarded::No,
-        )
-        .ok_or(elf::LoadExecutableError::AllocationFailed)?;
-    let fx_area_ptr = fx_area.start().as_mut_ptr::<u8>();
-    unsafe {
-        fx_area_ptr.copy_from_nonoverlapping(INITIAL_FX_IMAGE.as_ptr(), INITIAL_FX_IMAGE.len());
-    }
+    let fx_area =
+        allocate_initial_fx_area(process).ok_or(elf::LoadExecutableError::AllocationFailed)?;
     // TS parks the seeded image until the first user FPU instruction. Its #NM
     // handler restores it, and the scheduler skips saving the live FPU state
     // into the fresh area while TS is set, so TS must be set before the area
@@ -720,4 +826,29 @@ pub(crate) fn setup_user_image(
     *task.fx_area().write() = Some(fx_area);
 
     Ok((entry, VirtAddr::new(rsp as u64)))
+}
+
+/// This function allocates the FX area of a fresh thread in `process` and
+/// seeds it with [`INITIAL_FX_IMAGE`]. It returns `None` when no memory is
+/// available.
+pub(crate) fn allocate_initial_fx_area(
+    process: &Arc<Process>,
+) -> Option<LowerHalfAllocation<Writable>> {
+    let fx_area = LowerHalfMemoryApi::new(process.clone()).allocate(
+        Location::Anywhere,
+        Layout::new::<FxArea>(),
+        LowerHalfAllocOptions::USER_ACCESSIBLE
+            | LowerHalfAllocOptions::FORK_COPY_EAGER
+            | LowerHalfAllocOptions::PER_THREAD,
+        Guarded::No,
+    )?;
+    // Safety: the area is a fresh, resident and writable allocation of 512
+    // bytes. This size is the size of the image.
+    unsafe {
+        fx_area
+            .start()
+            .as_mut_ptr::<u8>()
+            .copy_from_nonoverlapping(INITIAL_FX_IMAGE.as_ptr(), INITIAL_FX_IMAGE.len());
+    }
+    Some(fx_area)
 }

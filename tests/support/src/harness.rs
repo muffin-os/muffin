@@ -506,6 +506,20 @@ impl RunReport {
         }
     }
 
+    /// This function checks the outcome of the `index`-th spawned process. The outcome must
+    /// be the signal `signal`, for example `"SIGSEGV"`.
+    ///
+    /// # Panics
+    /// This function panics if the process is missing or its outcome differs from the specified signal.
+    pub fn assert_signaled(&self, index: usize, signal: &str) {
+        match self.processes.get(index).map(|p| &p.outcome) {
+            Some(Outcome::Signaled(name)) if name == signal => {}
+            other => {
+                panic!("process index {index} outcome was {other:?}, expected Signaled({signal})")
+            }
+        }
+    }
+
     /// Asserts every marker appears in the transcript in order, each at or after
     /// the previous one's line.
     ///
@@ -732,6 +746,17 @@ mod tests {
     #[should_panic(expected = "Signaled(\"SIGSEGV\")")]
     fn assert_exit_code_names_the_signal() {
         signaled_report().assert_exit_code(0, 0);
+    }
+
+    #[test]
+    fn assert_signaled_accepts_the_signal() {
+        signaled_report().assert_signaled(0, "SIGSEGV");
+    }
+
+    #[test]
+    #[should_panic(expected = "Signaled(\"SIGSEGV\")")]
+    fn assert_signaled_names_the_other_signal() {
+        signaled_report().assert_signaled(0, "SIGABRT");
     }
 
     #[test]

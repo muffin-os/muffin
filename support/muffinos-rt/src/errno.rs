@@ -3,8 +3,10 @@ use core::ptr;
 
 use kernel_abi::Errno;
 
+#[thread_local]
 static mut ERRNO: c_int = 0;
 
+/// This function returns the address of the errno of the calling thread.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn __errno_location() -> *mut c_int {
     &raw mut ERRNO
@@ -32,7 +34,7 @@ impl<T> Failure for *mut T {
 }
 
 pub(crate) fn set_errno(errno: Errno) {
-    // SAFETY: the process has one thread, so no other access to `ERRNO` runs.
+    // SAFETY: `ERRNO` is thread-local, and no reference to it outlives a call.
     unsafe { ERRNO = errno.into() };
 }
 
@@ -46,4 +48,10 @@ pub(crate) fn fail<R: Failure>(errno: Errno) -> R {
 /// `R` with errno set.
 pub(crate) fn ret<R: Failure>(result: Result<R, Errno>) -> R {
     result.unwrap_or_else(fail)
+}
+
+/// This function converts a result to the pthread convention. The convention
+/// is 0 for success, or the error number.
+pub(crate) fn error_code(result: Result<(), Errno>) -> c_int {
+    result.map_or_else(c_int::from, |()| 0)
 }

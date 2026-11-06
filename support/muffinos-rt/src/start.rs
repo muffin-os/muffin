@@ -11,16 +11,21 @@ unsafe extern "C" {
 core::arch::global_asm!(
     ".globl _start",
     "_start:",
-    "mov rdi, [rsp]",
-    "lea rsi, [rsp + 8]",
+    // The callee saves r12, so the entry `rsp` stays in r12 during `init_main_thread`.
+    "mov r12, rsp",
+    "mov rdi, [r12]",
     // envp starts after the argc argv pointers and their NULL.
-    "lea rax, [rsi + rdi * 8 + 8]",
+    "lea rax, [r12 + rdi * 8 + 16]",
     "mov [rip + {environ}], rax",
     "and rsp, -16",
+    "call {init_main_thread}",
+    "mov rdi, [r12]",
+    "lea rsi, [r12 + 8]",
     "call {main}",
     "mov edi, eax",
     "call {exit}",
     environ = sym crate::env::environ,
+    init_main_thread = sym crate::thread::init_main_thread,
     main = sym main,
     exit = sym crate::process::exit,
 );
