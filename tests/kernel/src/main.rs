@@ -143,6 +143,14 @@ unsafe extern "C" fn main() -> ! {
         );
     }
 
+    // A backtrace without a panic shows the symbolization, because the
+    // harness fails every run that panics.
+    if AbsolutePath::try_new("/kernel-backtrace")
+        .is_ok_and(|marker| vfs().write().open(marker, CreateMode::Never).is_ok())
+    {
+        probe_backtrace();
+    }
+
     // Directory creation has no syscall yet, so the probe drives the vfs
     // directly and leaves a file behind for the host to read back.
     if AbsolutePath::try_new("/vfs-mkdir")
@@ -220,14 +228,26 @@ fn handle_panic(info: &core::panic::PanicInfo) {
     }
     error!("{}", info.message());
 
-    match kernel::backtrace::Backtrace::try_capture() {
-        Ok(bt) => {
-            error!("stack backtrace:\n{bt}");
+    error!("stack backtrace:");
+    kernel::backtrace::with_backtrace(|frames| {
+        for (index, frame) in frames.enumerate() {
+            error!("  {index:>2}: {frame}");
         }
-        Err(e) => {
-            error!("error capturing backtrace: {e:?}");
+    });
+}
+
+/// Prints its own backtrace. It is never inlined, so its name is in a frame.
+#[inline(never)]
+fn probe_backtrace() {
+    kernel::backtrace::with_backtrace(|frames| {
+        for frame in frames {
+            kernel::serial_println!("test-kernel: frame {}", frame);
         }
-    }
+    });
+    // Work after the walk keeps the call above from becoming a tail call. A
+    // tail call pops this frame before the walk, which removes this function
+    // from the backtrace in optimized builds.
+    kernel::serial_println!("test-kernel: backtrace end");
 }
 
 /// Recurses until RSP walks into the kernel stack guard page.

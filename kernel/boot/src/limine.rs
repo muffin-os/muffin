@@ -1,9 +1,9 @@
 use limine::BaseRevision;
 use limine::paging::Mode;
 use limine::request::{
-    DateAtBootRequest, ExecutableAddressRequest, ExecutableCmdlineRequest, ExecutableFileRequest,
-    FirmwareTypeRequest, HhdmRequest, MemoryMapRequest, ModuleRequest, MpRequest,
-    PagingModeRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest, StackSizeRequest,
+    DateAtBootRequest, ExecutableAddressRequest, ExecutableCmdlineRequest, FirmwareTypeRequest,
+    HhdmRequest, MemoryMapRequest, ModuleRequest, MpRequest, PagingModeRequest, RequestsEndMarker,
+    RequestsStartMarker, RsdpRequest, StackSizeRequest,
 };
 
 #[used]
@@ -21,10 +21,6 @@ pub static BASE_REVISION: BaseRevision = BaseRevision::with_revision(3);
 #[used]
 #[unsafe(link_section = ".requests")]
 pub static BOOT_TIME: DateAtBootRequest = DateAtBootRequest::new();
-
-#[used]
-#[unsafe(link_section = ".requests")]
-pub static KERNEL_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
 
 #[used]
 #[unsafe(link_section = ".requests")]

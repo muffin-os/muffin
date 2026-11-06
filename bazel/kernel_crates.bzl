@@ -19,6 +19,7 @@ def crate_label(package):
 # external packages in @crates.
 KERNEL_CRATES = {
     "abi": struct(deps = [], crates = ["bitflags"]),
+    "backtrace": struct(deps = [], crates = ["thiserror", "zerocopy"]),
     "devfs": struct(
         deps = ["abi", "device", "vfs"],
         crates = ["spin", "thiserror"],

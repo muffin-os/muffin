@@ -157,6 +157,15 @@ ext2_image(
 )
 
 ext2_image(
+    name = "backtrace_disk",
+    contents = {"kernel-backtrace": "1\n"},
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/exit-code": "//tests/bins:exit_code",
+    },
+)
+
+ext2_image(
     name = "kstack_overflow_disk",
     contents = {"kernel-stack-overflow": "1\n"},
     files = {
@@ -454,6 +463,7 @@ ext2_image(
         deps = ["//tests/support"],
     )
     for name in [
+        "backtrace",
         "compositor",
         "cow_clone",
         "exec_identity",

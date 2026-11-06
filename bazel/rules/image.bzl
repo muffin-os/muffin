@@ -6,6 +6,8 @@ host install of either is involved, so the action cache sees the tool the same
 way it sees the kernel binary.
 """
 
+load("//bazel/toolchains:common.bzl", "TOOLS")
+
 # Runs a command, discarding its output unless it fails. Both streams are merged
 # so a failure still shows the tool's own diagnostics in order.
 _QUIET_FN = """quiet() {
@@ -123,6 +125,28 @@ def _limine_iso_impl(ctx):
     limine = ctx.executable._limine
     xorriso = ctx.file._xorriso
 
+    kernel = ctx.file.kernel
+    stripped = ctx.actions.declare_file(ctx.label.name + ".kernel")
+    ksym = ctx.actions.declare_file(ctx.label.name + ".ksym")
+    ctx.actions.run(
+        outputs = [ksym],
+        inputs = [kernel],
+        executable = ctx.executable._ksym,
+        arguments = [kernel.path, ksym.path],
+        mnemonic = "KernelSymbols",
+        progress_message = "Extracting kernel symbols %{output}",
+    )
+    ctx.actions.run(
+        outputs = [stripped],
+        inputs = [kernel],
+        executable = ctx.file._objcopy,
+        # rust-objcopy loads libLLVM from the toolchain's lib directory.
+        tools = ctx.files._rustc_lib,
+        arguments = ["--strip-all", kernel.path, stripped.path],
+        mnemonic = "StripKernel",
+        progress_message = "Stripping kernel %{output}",
+    )
+
     cmds = [
         "set -eu",
         # xorriso and limine narrate every step on success, and Bazel surfaces an
@@ -135,8 +159,10 @@ def _limine_iso_impl(ctx):
         # Limine looks up its config by this exact name, so the input's own
         # basename must not leak into the image.
         'cp {} "$root/boot/limine/limine.conf"'.format(ctx.file.limine_conf.path),
-        # limine.conf points kernel_path at boot():/boot/kernel.
-        'cp {} "$root/boot/kernel"'.format(ctx.file.kernel.path),
+        # limine.conf points kernel_path at boot():/boot/kernel and module_path
+        # at boot():/boot/kernel.ksym.
+        'cp {} "$root/boot/kernel"'.format(stripped.path),
+        'cp {} "$root/boot/kernel.ksym"'.format(ksym.path),
     ]
 
     for f in ctx.files._bios:
@@ -165,23 +191,23 @@ def _limine_iso_impl(ctx):
 
     ctx.actions.run_shell(
         outputs = [out],
-        inputs = [ctx.file.kernel, ctx.file.limine_conf] + ctx.files._bios + ctx.files._efi,
+        inputs = [stripped, ksym, ctx.file.limine_conf] + ctx.files._bios + ctx.files._efi,
         tools = [limine, xorriso],
         command = "\n".join(cmds),
         mnemonic = "LimineIso",
         progress_message = "Building bootable ISO %{output}",
     )
 
-    return [DefaultInfo(files = depset([out]))]
+    return [DefaultInfo(files = depset([out])), OutputGroupInfo(ksym = depset([ksym]))]
 
 limine_iso = rule(
     implementation = _limine_iso_impl,
-    doc = "Builds a hybrid BIOS/UEFI bootable Limine ISO around a kernel ELF.",
+    doc = "Builds a hybrid BIOS/UEFI bootable Limine ISO around a kernel ELF. The image carries the kernel stripped of all symbols at boot/kernel and its function symbols as the Limine module boot/kernel.ksym. The `ksym` output group exposes that module.",
     attrs = {
         "kernel": attr.label(
             allow_single_file = True,
             mandatory = True,
-            doc = "Kernel ELF placed at boot/kernel inside the image.",
+            doc = "Unstripped kernel ELF. The rule strips it into boot/kernel and extracts its symbols into boot/kernel.ksym.",
         ),
         "limine_conf": attr.label(
             allow_single_file = True,
@@ -198,6 +224,20 @@ limine_iso = rule(
             cfg = "exec",
             default = "@limine//:limine",
             executable = True,
+        ),
+        "_ksym": attr.label(
+            cfg = "exec",
+            default = "//tools/ksym",
+            executable = True,
+        ),
+        "_objcopy": attr.label(
+            allow_single_file = True,
+            cfg = "exec",
+            default = TOOLS + "//:rust-objcopy",
+        ),
+        "_rustc_lib": attr.label(
+            cfg = "exec",
+            default = TOOLS + "//:rustc_lib",
         ),
         "_xorriso": attr.label(
             allow_single_file = True,

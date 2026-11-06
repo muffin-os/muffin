@@ -72,12 +72,12 @@ fn handle_panic(info: &core::panic::PanicInfo) {
     error!("{}", info.message());
 
     #[cfg(feature = "backtrace")]
-    match kernel::backtrace::Backtrace::try_capture() {
-        Ok(bt) => {
-            error!("stack backtrace:\n{bt}");
-        }
-        Err(e) => {
-            error!("error capturing backtrace: {e:?}");
-        }
+    {
+        error!("stack backtrace:");
+        kernel::backtrace::with_backtrace(|frames| {
+            for (index, frame) in frames.enumerate() {
+                error!("  {index:>2}: {frame}");
+            }
+        });
     }
 }

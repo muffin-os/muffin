@@ -7,19 +7,16 @@ exports_files(["linker-x86_64.ld"])
 
 _EXTERNAL_CRATES = [
     "acpi",
-    "addr2line",
     "bitfield",
     "bitflags",
     "conquer-once",
     "cordyceps",
-    "elf",
     "itertools",
     "jiff",
     "limine",
     "linked_list_allocator",
     "linkme",
     "raw-cpuid",
-    "rustc-demangle",
     "sha3",
     "spin",
     "thiserror",
@@ -45,8 +42,6 @@ rust_library(
            [crate_label(name) for name in _EXTERNAL_CRATES],
 )
 
-# Carries no -Copt-level override on purpose. A larger kernel image makes the
-# DWARF parse in backtrace::init overflow the 16 MiB kernel heap during boot.
 rust_binary(
     name = "boot",
     srcs = ["src/main.rs"],
