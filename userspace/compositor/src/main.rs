@@ -1,9 +1,11 @@
 //! The compositor owns the display. It serves window clients on
 //! `SOCKET_PATH`, reads the input devices and draws the cursor. The worker
 //! threads send events through one channel. The socket thread accepts the
-//! clients and reads their requests. Each input device has its own input
-//! thread. The main thread owns the display and the windows. It draws and
-//! writes the responses. The escape key powers the machine off.
+//! clients and reads their requests. The input thread reads all input
+//! devices through `libinput` into a ring buffer, and the forward thread
+//! sends the buffered events to the channel. The main thread owns the
+//! display and the windows. It draws and writes the responses. The escape
+//! key powers the machine off.
 //!
 //! The scene texture holds the desktop without the cursor. Each change to
 //! the screen copies the changed part of the scene to the scanout. Then it
@@ -16,8 +18,8 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::ffi::c_int;
 use std::net::Shutdown;
+use std::num::NonZeroUsize;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::exit;
@@ -30,8 +32,9 @@ use std::{env, io, thread};
 use compositor_cursor::arrow::{Arrow, Fill, Outline, VERTEX_COUNT};
 use compositor_cursor::pointer::{Pointer, PointerChange};
 use compositor_protocol::{
-    DamageRequest, DamageResponse, FinishRequest, FinishResponse, NewWindowRequest,
-    NewWindowResponse, Request, Response, SOCKET_PATH, read_message, write_message,
+    DamageRequest, DamageResponse, DisplayInfoRequest, DisplayInfoResponse, FinishRequest,
+    FinishResponse, NewWindowRequest, NewWindowResponse, Request, Response, SOCKET_PATH,
+    read_message, write_message,
 };
 use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxQueue, PipelineDesc, Rect};
 use gfx::backend::virtio::tgsi::{
@@ -39,13 +42,18 @@ use gfx::backend::virtio::tgsi::{
 };
 use gfx::backend::virtio::{
     VirtioBackend, VirtioBuffer, VirtioDevice, VirtioPipeline, VirtioQueue, VirtioTexture,
+    clip_blit,
 };
 use gfx::error::GfxError;
 use kernel_abi::gfx::{BufferDesc, TextureDesc, TextureFormat};
-use kernel_abi::{InputEvent, InputEventKind, PollEvents, PollFd};
-use muffin_sys::{EINTR, ENOENT, Errno, O_RDONLY};
+use kernel_abi::{PollEvents, PollFd};
+use libinput::{DeviceEvent, InputBuffer, InputDevices, KeyCode, KeyState};
+use muffin_sys::{EINTR, Errno};
 
 const CURSOR_VERTEX_BYTES: usize = VERTEX_COUNT * GOURAUD_STRIDE;
+/// The input ring buffer holds this many events. When the main thread falls
+/// behind, the buffer drops the oldest events.
+const INPUT_CAPACITY: NonZeroUsize = NonZeroUsize::new(1024).unwrap();
 
 // Both probes assume the 800x600 test resolution and the apex at `y = 0.75`.
 /// A pixel inside the triangle, near the red apex.
@@ -177,7 +185,8 @@ impl Frame {
         }
     }
 
-    /// Draws the triangle into the scene and shows it.
+    /// Draws the triangle into the scene and shows it. The clear also erases
+    /// every window in the scene, so only the start of the compositor calls it.
     fn draw(&mut self) -> io::Result<()> {
         let _fence = self
             .scene_queue
@@ -238,12 +247,12 @@ impl Frame {
         }
     }
 
-    /// Applies one batch of mouse events. When the batch moves the cursor or
+    /// Applies one batch of input events. When the batch moves the cursor or
     /// changes a button, it draws the old and the new area of the cursor again.
     /// Returns the changes of the batch in sequence.
     fn move_cursor(
         &mut self,
-        events: impl IntoIterator<Item = InputEvent>,
+        events: impl IntoIterator<Item = libinput::Event>,
     ) -> io::Result<Vec<PointerChange>> {
         let before = self.cursor_bounds();
         let changes: Vec<PointerChange> = events
@@ -320,26 +329,45 @@ impl Frame {
         self.probe((x, y)).map(Some)
     }
 
-    /// Copies `rect` of the window to the same place in the scene and shows it.
-    fn blit_region(&mut self, window: &Window, rect: Rect) -> io::Result<()> {
+    /// Copies `rect` of the window to its place in the scene and shows it.
+    /// Returns the screen rectangle of the copy, or `None` when the copy is
+    /// outside the screen.
+    fn blit_region(&mut self, window: &Window, rect: Rect) -> io::Result<Option<Rect>> {
+        let Some((src, dst)) = clip_blit(
+            window.texture.width(),
+            window.texture.height(),
+            rect,
+            window.x.saturating_add(rect.x),
+            window.y.saturating_add(rect.y),
+            self.width,
+            self.height,
+        ) else {
+            return Ok(None);
+        };
         let _fence = self
             .scene_queue
-            .submit(|rec| rec.blit(&window.texture, rect, rect.x, rect.y))
+            .submit(|rec| rec.blit(&window.texture, src, dst.x, dst.y))
             .map_err(gfx_error)?;
-        self.show(rect)
+        self.show(dst)?;
+        Ok(Some(dst))
     }
 }
 
 struct Window {
     texture: VirtioTexture,
+    /// The screen position of the top-left window pixel.
+    x: u32,
+    y: u32,
     damage: Option<Rect>,
     has_blitted: bool,
 }
 
 impl Window {
-    fn new(texture: VirtioTexture) -> Self {
+    fn new(texture: VirtioTexture, x: u32, y: u32) -> Self {
         Self {
             texture,
+            x,
+            y,
             damage: None,
             has_blitted: false,
         }
@@ -388,8 +416,9 @@ enum Event {
     /// The client closes its stream or sends a bad message. The socket thread
     /// does not read it again.
     Closed(ClientId),
-    /// This is one batch of events of one input device, in the sequence of the device.
-    Input(Vec<InputEvent>),
+    /// These are the input events in the sequence that the input thread
+    /// read them. Each event carries the id of its device.
+    Input(Vec<DeviceEvent>),
     /// A worker thread fails with this error. The compositor stops too.
     Fatal(io::Error),
 }
@@ -425,18 +454,18 @@ impl Client {
     fn serve(&mut self, request: Request, frame: &mut Frame) -> io::Result<()> {
         let mut pending_fd = None;
         let response = match request {
-            Request::NewWindow(NewWindowRequest { width, height }) => {
-                let start = Instant::now();
-                frame.draw()?;
-                println!(
-                    "compositor: frame drawn {}x{} in {}us",
-                    frame.width,
-                    frame.height,
-                    start.elapsed().as_micros()
-                );
-                if frame.is_probing {
-                    frame.print_probes()?;
-                }
+            Request::DisplayInfo(DisplayInfoRequest {}) => {
+                Response::DisplayInfo(DisplayInfoResponse {
+                    width: frame.width,
+                    height: frame.height,
+                })
+            }
+            Request::NewWindow(NewWindowRequest {
+                x,
+                y,
+                width,
+                height,
+            }) => {
                 let texture = frame
                     .backend
                     .alloc_texture(&TextureDesc {
@@ -446,7 +475,7 @@ impl Client {
                     })
                     .map_err(gfx_error)?;
                 println!("compositor: new window {width}x{height}");
-                let created = Window::new(texture);
+                let created = Window::new(texture, x, y);
                 pending_fd = Some(created.texture.fd());
                 self.window = Some(created);
                 Response::NewWindow(NewWindowResponse {})
@@ -463,16 +492,17 @@ impl Client {
                         .wait_fence(fence)
                         .map_err(|_| io::Error::other("fence"))?;
                 }
-                if let Some(rect) = window.damage.take() {
-                    frame.blit_region(window, rect)?;
-                    if frame.is_probing && !window.has_blitted {
-                        window.has_blitted = true;
-                        let first = frame.probe((rect.x, rect.y))?;
-                        println!(
-                            "compositor: blit {}x{} first=0x{first:08x}",
-                            rect.width, rect.height
-                        );
-                    }
+                if let Some(rect) = window.damage.take()
+                    && let Some(shown) = frame.blit_region(window, rect)?
+                    && frame.is_probing
+                    && !window.has_blitted
+                {
+                    window.has_blitted = true;
+                    let first = frame.probe((shown.x, shown.y))?;
+                    println!(
+                        "compositor: blit {}x{} first=0x{first:08x}",
+                        shown.width, shown.height
+                    );
                 }
                 Response::Finish(FinishResponse {})
             }
@@ -486,67 +516,36 @@ impl Client {
     }
 }
 
-/// This is one node under `/dev/input`. Each node has its own input thread.
-struct InputDevice {
-    path: String,
-    fd: c_int,
-    buf: [u8; InputEvent::SIZE * 64],
+/// Opens every input device and starts the input thread and the forward
+/// thread. Without an input device, it starts no thread.
+fn start_input(events: &Sender<Event>) -> io::Result<()> {
+    let mut devices = match InputDevices::open_all() {
+        Ok(devices) => devices,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            println!("compositor: no input devices");
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    for info in devices.devices() {
+        let name = info.name.as_deref().unwrap_or("<name is not UTF-8>");
+        println!("compositor: input {} id={} {name:?}", info.path, info.id);
+    }
+    let buffer = Arc::new(InputBuffer::new(INPUT_CAPACITY));
+    let filled = Arc::clone(&buffer);
+    spawn_worker(events.clone(), move |_| devices.fill(&filled))?;
+    spawn_worker(events.clone(), move |events| forward_input(&buffer, events))
 }
 
-impl InputDevice {
-    /// Opens every input device. devfs cannot list a directory. Thus this
-    /// function tries the nodes in sequence until one is missing.
-    fn open_all() -> io::Result<Vec<Self>> {
-        let mut devices = Vec::new();
-        for index in 0.. {
-            let path = format!("/dev/input/event{index}");
-            let fd = match muffin_sys::open(&path, O_RDONLY) {
-                Ok(fd) => fd,
-                Err(ENOENT) => break,
-                Err(e) => return Err(errno_error(&path, e)),
-            };
-            println!("compositor: input {path}");
-            devices.push(Self {
-                path,
-                fd,
-                buf: [0; InputEvent::SIZE * 64],
-            });
-        }
-        Ok(devices)
-    }
-
-    /// Reads the pending events. Blocks when no event is pending.
-    fn read_events(&mut self) -> io::Result<Vec<InputEvent>> {
-        let n = loop {
-            match muffin_sys::read(self.fd, &mut self.buf) {
-                Ok(n) => break n,
-                Err(EINTR) => {}
-                Err(e) => return Err(errno_error(&self.path, e)),
-            }
-        };
-        Ok(self.buf[..n]
-            .as_chunks::<{ InputEvent::SIZE }>()
-            .0
-            .iter()
-            .map(|raw| InputEvent::from_bytes(*raw))
-            .collect())
-    }
-
-    /// This function runs on the input thread of the device. It sends each batch of events to the main
-    /// thread.
-    fn forward_events(mut self, events: &Sender<Event>) -> io::Result<Infallible> {
-        loop {
-            let batch = self.read_events()?;
-            events
-                .send(Event::Input(batch))
-                .map_err(main_thread_ended)?;
-        }
-    }
-}
-
-impl Drop for InputDevice {
-    fn drop(&mut self) {
-        let _ = muffin_sys::close(self.fd);
+/// This function runs on the forward thread. It sends all the events in
+/// `buffer` as one batch each time the buffer is not empty.
+fn forward_input(buffer: &InputBuffer, events: &Sender<Event>) -> io::Result<Infallible> {
+    loop {
+        let mut batch = vec![buffer.pop()];
+        buffer.drain(&mut batch);
+        events
+            .send(Event::Input(batch))
+            .map_err(main_thread_ended)?;
     }
 }
 
@@ -688,14 +687,16 @@ impl Compositor {
                 self.clients.remove(&client);
             }
             Event::Input(batch) => {
-                const KEY_ESC: u16 = 1;
-                if batch
-                    .iter()
-                    .any(|e| e.matches(InputEventKind::Key, KEY_ESC) && e.is_pressed())
-                {
+                let escape = libinput::Event::Key {
+                    code: KeyCode::ESC,
+                    state: KeyState::Pressed,
+                };
+                if batch.iter().any(|input| input.event == escape) {
                     muffin_sys::poweroff();
                 }
-                let changes = self.frame.move_cursor(batch)?;
+                let changes = self
+                    .frame
+                    .move_cursor(batch.into_iter().map(|input| input.event))?;
                 if let Some(reporter) = self.reporter.as_mut() {
                     reporter.report(&self.frame, &changes)?;
                 }
@@ -725,15 +726,22 @@ impl Compositor {
 
 fn run() -> io::Result<()> {
     let is_probing = env::args().skip(1).any(|arg| arg == "--probe");
-    let frame = Frame::new(is_probing)?;
-    let devices = InputDevice::open_all()?;
+    let mut frame = Frame::new(is_probing)?;
+    let start = Instant::now();
+    frame.draw()?;
+    println!(
+        "compositor: frame drawn {}x{} in {}us",
+        frame.width,
+        frame.height,
+        start.elapsed().as_micros()
+    );
+    if frame.is_probing {
+        frame.print_probes()?;
+    }
+    let (events, received) = mpsc::channel();
+    start_input(&events)?;
     let listener = UnixListener::bind(SOCKET_PATH)?;
     println!("compositor: listening on {SOCKET_PATH}");
-
-    let (events, received) = mpsc::channel();
-    for device in devices {
-        spawn_worker(events.clone(), move |events| device.forward_events(events))?;
-    }
     spawn_worker(events, move |events| {
         SocketReader::new(listener).forward_requests(events)
     })?;

@@ -140,6 +140,14 @@ ext2_image(
 )
 
 ext2_image(
+    name = "libinput_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/libinput": "//tests/bins:libinput",
+    },
+)
+
+ext2_image(
     name = "shm_disk",
     files = {
         "bin/init": "//tests/bins:test_init",
@@ -415,6 +423,18 @@ ext2_image(
     image_size = "128M",
 )
 
+ext2_image(
+    name = "shell_disk",
+    files = {
+        "bin/init": "//tests/bins:test_init",
+        "bin/tests/shell-smoke": "//tests/bins:shell_smoke",
+        "bin/compositor": "//userspace/compositor",
+        "bin/shell": "//userspace/shell",
+    },
+    # Three std debug binaries do not fit into the 64M default.
+    image_size = "128M",
+)
+
 # `services` is `/bin/init` here because it never exits. `off` powers the
 # machine off after a delay, which is what ends the run.
 ext2_image(
@@ -492,12 +512,14 @@ ext2_image(
         "heap_bounds",
         "input_nodes",
         "kstack_overflow",
+        "libinput",
         "map_range_rollback",
         "mmap",
         "orphan",
         "posix",
         "sendfd",
         "services",
+        "shell",
         "shm",
         "shutdown",
         "shutdown_ignore",

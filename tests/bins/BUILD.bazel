@@ -45,6 +45,7 @@ package(default_visibility = ["//visibility:public"])
     for name, directory in {
         "compositor_smoke": "compositor-smoke",
         "exit_code": "exit-code",
+        "shell_smoke": "shell-smoke",
         "std_panic_exit": "std-panic-exit",
         "std_smoke": "std-smoke",
         "std_unix_socket": "std-unix-socket",
@@ -87,6 +88,14 @@ rust_binary(
         "//kernel/abi",
         "//userspace/libs/sys",
     ],
+)
+
+rust_binary(
+    name = "libinput",
+    srcs = ["libinput/src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = ["//userspace/libs/input"],
 )
 
 rust_binary(

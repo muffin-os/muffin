@@ -259,12 +259,14 @@ impl KernelTest {
         self.run_until_poweroff_observing(|_| Ok(()))
     }
 
-    /// Success is QEMU exiting with status 0 before the deadline. Guest-initiated
-    /// ACPI poweroff is the only way that happens: a panic parks in a hlt loop
-    /// (deadline), a triple fault reboots (deadline). Panics on a `kernel
-    /// panicked` line, on the deadline, on a nonzero exit status, and when
-    /// `observe` rejects a line.
-    fn run_until_poweroff_observing(
+    /// Does the same as [`Self::run_until_poweroff`], and also gives each
+    /// serial line to `observe`. Success is QEMU exiting with status 0 before
+    /// the deadline. Guest-initiated ACPI poweroff is the only way that
+    /// happens: a panic parks in a hlt loop (deadline), a triple fault
+    /// reboots (deadline). Panics on a `kernel panicked` line, on the
+    /// deadline, on a nonzero exit status, and when `observe` rejects a line.
+    #[must_use]
+    pub fn run_until_poweroff_observing(
         &self,
         mut observe: impl FnMut(&str) -> Result<(), String>,
     ) -> Vec<String> {

@@ -7,19 +7,41 @@
 //! the descriptor.
 
 use std::io::{self, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::thread::sleep;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const SOCKET_PATH: &str = "/var/run/compositor.sock";
 
+/// [`connect`] tries this many times before it gives up.
+const CONNECT_ATTEMPTS: u32 = 50;
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
 /// Upper bound for one frame body. The reader allocates this many bytes at most.
 pub const MAX_MESSAGE_BYTES: u32 = 64 * 1024;
+
+/// Asks for the size of the screen.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayInfoRequest {}
+
+/// The size of the screen in pixels.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayInfoResponse {
+    pub width: u32,
+    pub height: u32,
+}
 
 /// The window memory has `height` rows of `width` pixels with no padding
 /// between rows. Each pixel is one `u32` in `0xAARRGGBB` form.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewWindowRequest {
+    /// The screen column of the left edge of the window, in pixels.
+    pub x: u32,
+    /// The screen row of the top edge of the window, in pixels.
+    pub y: u32,
     pub width: u32,
     pub height: u32,
 }
@@ -41,11 +63,13 @@ pub struct DamageRequest {
 pub struct DamageResponse {}
 
 /// Ends a frame: every rectangle marked by `Damage` since the last `Finish`
-/// reaches the screen before the response.
+/// reaches the screen before the response. The part of the window outside
+/// the screen is not shown.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FinishRequest {
     /// `fence` is the GPU fence id of the last submit that wrote the window.
-    /// `0` means that no GPU work is pending.
+    /// `0` means that no GPU work is pending, for example when the client
+    /// wrote the window only with the CPU and a completed transfer.
     pub fence: u64,
 }
 
@@ -54,6 +78,7 @@ pub struct FinishResponse {}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Request {
+    DisplayInfo(DisplayInfoRequest),
     NewWindow(NewWindowRequest),
     Damage(DamageRequest),
     Finish(FinishRequest),
@@ -61,9 +86,34 @@ pub enum Request {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Response {
+    DisplayInfo(DisplayInfoResponse),
     NewWindow(NewWindowResponse),
     Damage(DamageResponse),
     Finish(FinishResponse),
+}
+
+/// Connects to `SOCKET_PATH`. Tries again for about five seconds, because
+/// `services` starts the compositor first but does not wait for its socket.
+pub fn connect() -> io::Result<UnixStream> {
+    let mut attempt = 1;
+    loop {
+        match UnixStream::connect(SOCKET_PATH) {
+            Ok(stream) => return Ok(stream),
+            Err(e) if attempt == CONNECT_ATTEMPTS => return Err(e),
+            Err(_) => {
+                attempt += 1;
+                sleep(CONNECT_RETRY_DELAY);
+            }
+        }
+    }
+}
+
+/// Sends `request` and reads the response. The end of the stream before the
+/// response is an error.
+pub fn call(stream: &UnixStream, request: &Request) -> io::Result<Response> {
+    write_message(&mut &*stream, request)?;
+    read_message::<Response>(&mut &*stream)?
+        .ok_or_else(|| io::Error::other("compositor closed the connection"))
 }
 
 /// Writes one frame: a `u32` little-endian byte length, then the JSON body.
@@ -116,6 +166,8 @@ mod tests {
     #[test]
     fn given_new_window_request_when_written_and_read_then_equal() {
         let request = Request::NewWindow(NewWindowRequest {
+            x: 160,
+            y: 120,
             width: 256,
             height: 128,
         });
@@ -130,6 +182,31 @@ mod tests {
     #[test]
     fn given_new_window_response_when_written_and_read_then_equal() {
         let response = Response::NewWindow(NewWindowResponse {});
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &response).unwrap();
+
+        let read = read_message::<Response>(&mut Cursor::new(bytes)).unwrap();
+
+        assert_eq!(read, Some(response));
+    }
+
+    #[test]
+    fn given_display_info_request_when_written_and_read_then_equal() {
+        let request = Request::DisplayInfo(DisplayInfoRequest {});
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &request).unwrap();
+
+        let read = read_message::<Request>(&mut Cursor::new(bytes)).unwrap();
+
+        assert_eq!(read, Some(request));
+    }
+
+    #[test]
+    fn given_display_info_response_when_written_and_read_then_equal() {
+        let response = Response::DisplayInfo(DisplayInfoResponse {
+            width: 800,
+            height: 600,
+        });
         let mut bytes = Vec::new();
         write_message(&mut bytes, &response).unwrap();
 

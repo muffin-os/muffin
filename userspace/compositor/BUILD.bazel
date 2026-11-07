@@ -10,8 +10,8 @@ rust_library(
     crate_root = "src/cursor/lib.rs",
     edition = "2024",
     deps = [
-        "//kernel/abi",
         "//userspace/libs/gfx",
+        "//userspace/libs/input",
     ],
 )
 
@@ -31,6 +31,7 @@ rust_binary(
         "//kernel/abi",
         "//userspace/libs/compositor-protocol",
         "//userspace/libs/gfx",
+        "//userspace/libs/input",
         "//userspace/libs/sys",
     ],
 )

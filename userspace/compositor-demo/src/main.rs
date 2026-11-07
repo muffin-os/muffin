@@ -5,12 +5,11 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::exit;
 use std::rc::Rc;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use compositor_protocol::{
     DamageRequest, DamageResponse, FinishRequest, FinishResponse, NewWindowRequest,
-    NewWindowResponse, Request, Response, SOCKET_PATH, read_message, write_message,
+    NewWindowResponse, Request, Response, call, connect,
 };
 use gfx::api::{CommandRecorder, GfxAllocator, GfxCompiler, GfxFence, GfxQueue, PipelineDesc};
 use gfx::backend::virtio::tgsi::{
@@ -22,8 +21,6 @@ use gfx::backend::virtio::{
 use gfx::error::GfxError;
 use kernel_abi::gfx::BufferDesc;
 
-const CONNECT_ATTEMPTS: u32 = 50;
-const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 128;
 const PIXEL: u32 = 0xFF20_60C0;
@@ -176,27 +173,6 @@ fn phase(elapsed: Duration) -> f32 {
     (elapsed.as_millis() % TURN.as_millis()) as f32 * TAU / TURN.as_millis() as f32
 }
 
-/// Retries because `services` spawns the compositor first but does not wait for its socket.
-fn connect() -> io::Result<UnixStream> {
-    let mut attempt = 1;
-    loop {
-        match UnixStream::connect(SOCKET_PATH) {
-            Ok(stream) => return Ok(stream),
-            Err(e) if attempt == CONNECT_ATTEMPTS => return Err(e),
-            Err(_) => {
-                attempt += 1;
-                sleep(CONNECT_RETRY_DELAY);
-            }
-        }
-    }
-}
-
-fn call(stream: &UnixStream, request: &Request) -> io::Result<Response> {
-    write_message(&mut &*stream, request)?;
-    read_message::<Response>(&mut &*stream)?
-        .ok_or_else(|| io::Error::other("compositor closed the connection"))
-}
-
 fn unexpected(response: Response) -> io::Error {
     io::Error::other(format!("unexpected response {response:?}"))
 }
@@ -216,6 +192,8 @@ fn run() -> io::Result<()> {
     let window_fd = create_window(
         &stream,
         NewWindowRequest {
+            x: 0,
+            y: 0,
             width: WIDTH,
             height: HEIGHT,
         },

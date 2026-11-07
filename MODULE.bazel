@@ -104,6 +104,11 @@ crate.spec(
 )
 crate.spec(
     default_features = False,
+    package = "font8x8",
+    version = "0.3",
+)
+crate.spec(
+    default_features = False,
     features = ["use_alloc"],
     package = "itertools",
     version = "0.14.0",

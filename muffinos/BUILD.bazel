@@ -33,6 +33,7 @@ ext2_image(
         "bin/compositor-demo": "//userspace/compositor-demo",
         "bin/evtest": "//userspace/utilities/evtest",
         "bin/services": "//userspace/services",
+        "bin/shell": "//userspace/shell",
         "bin/init": "//userspace/init",
         "bin/false": "//userspace/utilities/false",
         "bin/true": "//userspace/utilities/true",

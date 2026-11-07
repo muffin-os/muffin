@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# The text grid, the paths and the commands have no device code, so they
+# build and test on the host.
+rust_library(
+    name = "core",
+    srcs = glob(["src/core/*.rs"]),
+    crate_name = "shell_core",
+    crate_root = "src/core/lib.rs",
+    edition = "2024",
+    deps = ["@crates//font8x8"],
+)
+
+rust_test(
+    name = "core_test",
+    crate = ":core",
+    size = "small",
+)
+
+rust_binary(
+    name = "shell",
+    srcs = ["src/main.rs"],
+    edition = "2024",
+    platform = "//platforms:x86_64-unknown-muffin",
+    deps = [
+        ":core",
+        "//userspace/libs/compositor-protocol",
+        "//userspace/libs/gfx",
+        "//userspace/libs/input",
+        "//userspace/libs/sys",
+    ],
+)

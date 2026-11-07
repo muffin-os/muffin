@@ -1,0 +1,4 @@
+exec: /bin/shell
+restart: no
+after:
+    - compositor

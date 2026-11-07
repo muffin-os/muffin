@@ -45,11 +45,11 @@ fn compositor() {
     report.assert_line_contains("compositor: listening on /var/run/compositor.sock");
     report.assert_markers_in_order(&[
         "compositor: gpu scanout 800x600",
-        "compositor: input /dev/input/event0",
-        "compositor-demo: connected",
         "compositor: frame drawn 800x600",
         "compositor: probe (400,100) dominant=red",
         "compositor: probe (400,560)=0x00000000",
+        "compositor: input /dev/input/event0",
+        "compositor-demo: connected",
         "compositor: new window 256x128",
         "compositor-demo: window created",
         "compositor: blit 256x128 first=0xff2060c0",

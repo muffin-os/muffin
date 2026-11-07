@@ -1,5 +1,5 @@
 {
-  "checksum": "643c6b3c09817f435158720d130fabdf71fc1a838d89c5d84b93515656903b57",
+  "checksum": "8afc17445ee5fd3f464b11b589536f3f594fc3ae0e363920305ac269605c2f10",
   "crates": {
     "acpi 5.2.0": {
       "name": "acpi",
@@ -1885,6 +1885,10 @@
               "target": "elf"
             },
             {
+              "id": "font8x8 0.3.1",
+              "target": "font8x8"
+            },
+            {
               "id": "itertools 0.14.0",
               "target": "itertools"
             },
@@ -2281,6 +2285,44 @@
         "MIT"
       ],
       "license_file": "LICENSE-APACHE"
+    },
+    "font8x8 0.3.1": {
+      "name": "font8x8",
+      "version": "0.3.1",
+      "package_url": "https://gitlab.com/saibatizoku/font8x8-rs",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/font8x8/0.3.1/download",
+          "sha256": "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "font8x8",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "font8x8",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "edition": "2015",
+        "version": "0.3.1"
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE"
     },
     "generator 0.8.9": {
       "name": "generator",
@@ -7570,6 +7612,7 @@
     "conquer-once 0.4.0",
     "cordyceps 0.3.5",
     "elf 0.7.4",
+    "font8x8 0.3.1",
     "itertools 0.14.0",
     "jiff 0.2.35",
     "libm 0.2.16",

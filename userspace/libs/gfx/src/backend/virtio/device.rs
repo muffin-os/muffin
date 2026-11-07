@@ -159,6 +159,21 @@ impl VirtioDevice {
         })
     }
 
+    /// Copies `rect` of `tex` from its memory to the device. Call it after a
+    /// CPU write through `tex.pixels_mut()`; before it, the device does not
+    /// see the write. The copy is complete when this function returns, so a
+    /// later submit on any device reads the new pixels without a fence.
+    pub fn upload(&self, tex: &VirtioTexture, rect: Rect) -> Result<()> {
+        self.transfer(GpuTransfer {
+            resource: tex.resource(),
+            direction: GpuTransferDirection::ToHost,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        })
+    }
+
     /// Creates, maps and imports a private shared memory object. The name
     /// goes away right after the import; the descriptor and the mappings keep
     /// the object alive.
@@ -293,6 +308,16 @@ impl VirtioTexture {
         // Safety: the mapping is page-aligned and holds at least `count`
         // pixels, which the import checked.
         unsafe { core::slice::from_raw_parts(self.mapping.ptr.as_ptr().cast::<u32>(), count) }
+    }
+
+    /// Returns the pixels in memory for a CPU write, in the layout of
+    /// [`VirtioTexture::pixels`]. The device sees a write only after
+    /// [`VirtioDevice::upload`].
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        let count = self.width as usize * self.height as usize;
+        // Safety: the mapping is page-aligned and holds at least `count`
+        // pixels, which the import checked. `&mut self` is the only reference.
+        unsafe { core::slice::from_raw_parts_mut(self.mapping.ptr.as_ptr().cast::<u32>(), count) }
     }
 
     #[must_use]

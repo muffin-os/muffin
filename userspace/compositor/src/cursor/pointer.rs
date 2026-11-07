@@ -4,7 +4,7 @@
 
 use core::fmt;
 
-use kernel_abi::{Button, InputEvent, InputEventKind, MotionAxis};
+use libinput::{ButtonState, Event, MouseButton};
 
 /// This struct holds the pressed pointer buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -28,19 +28,19 @@ impl fmt::Display for Buttons {
 }
 
 impl Buttons {
-    fn get(self, button: Button) -> bool {
+    fn get(self, button: MouseButton) -> bool {
         match button {
-            Button::Left => self.left,
-            Button::Right => self.right,
-            Button::Middle => self.middle,
+            MouseButton::Left => self.left,
+            MouseButton::Right => self.right,
+            MouseButton::Middle => self.middle,
         }
     }
 
-    fn set(&mut self, button: Button, is_pressed: bool) {
+    fn set(&mut self, button: MouseButton, is_pressed: bool) {
         match button {
-            Button::Left => self.left = is_pressed,
-            Button::Right => self.right = is_pressed,
-            Button::Middle => self.middle = is_pressed,
+            MouseButton::Left => self.left = is_pressed,
+            MouseButton::Right => self.right = is_pressed,
+            MouseButton::Middle => self.middle = is_pressed,
         }
     }
 }
@@ -51,7 +51,10 @@ pub enum PointerChange {
     /// The hotspot is at a new place.
     Moved,
     /// A button goes down or up. A repeat of the same state is not a change.
-    Button { button: Button, is_pressed: bool },
+    Button {
+        button: MouseButton,
+        is_pressed: bool,
+    },
 }
 
 impl PointerChange {
@@ -88,29 +91,26 @@ impl Pointer {
         self.buttons
     }
 
-    /// Moves the hotspot for a motion event, or records a button. Other events
-    /// change nothing, for example a sync, a wheel turn or an absolute position.
-    pub fn apply(&mut self, event: InputEvent) -> Option<PointerChange> {
-        match event.kind()? {
-            InputEventKind::Motion => {
-                let (x, y) = (self.x, self.y);
-                match event.motion_axis()? {
-                    MotionAxis::X => self.x = shift(self.x, event.value, self.screen_width),
-                    MotionAxis::Y => self.y = shift(self.y, event.value, self.screen_height),
-                    MotionAxis::Wheel => return None,
-                }
-                ((x, y) != (self.x, self.y)).then_some(PointerChange::Moved)
+    /// Moves the hotspot for a motion event, or records a button. Other
+    /// events change nothing, for example a key, a wheel turn or an absolute
+    /// position.
+    pub fn apply(&mut self, event: Event) -> Option<PointerChange> {
+        match event {
+            Event::Motion { dx, dy } => {
+                let before = (self.x, self.y);
+                self.x = shift(self.x, dx, self.screen_width);
+                self.y = shift(self.y, dy, self.screen_height);
+                (before != (self.x, self.y)).then_some(PointerChange::Moved)
             }
-            InputEventKind::Key => {
-                let button = event.button()?;
-                let is_pressed = event.is_pressed();
+            Event::Button { button, state } => {
+                let is_pressed = state == ButtonState::Pressed;
                 if self.buttons.get(button) == is_pressed {
                     return None;
                 }
                 self.buttons.set(button, is_pressed);
                 Some(PointerChange::Button { button, is_pressed })
             }
-            InputEventKind::Sync | InputEventKind::Position => None,
+            Event::Key { .. } | Event::Wheel { .. } | Event::Position { .. } => None,
         }
     }
 }
@@ -123,45 +123,28 @@ fn shift(position: u32, delta: i32, extent: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use libinput::{KeyCode, KeyState};
+
     use super::*;
 
-    fn motion(axis: MotionAxis, value: i32) -> InputEvent {
-        InputEvent {
-            event_type: InputEventKind::Motion.into(),
-            code: axis.into(),
-            value,
-        }
+    fn motion(dx: i32, dy: i32) -> Event {
+        Event::Motion { dx, dy }
     }
 
-    fn key(button: Button, value: i32) -> InputEvent {
-        InputEvent {
-            event_type: InputEventKind::Key.into(),
-            code: button.into(),
-            value,
-        }
+    fn button(button: MouseButton, state: ButtonState) -> Event {
+        Event::Button { button, state }
     }
 
     #[test]
     fn motion_clamps_to_the_screen() {
         let mut pointer = Pointer::new(800, 600);
         assert_eq!(
-            pointer.apply(motion(MotionAxis::X, -10_000)),
-            Some(PointerChange::Moved)
-        );
-        assert_eq!(
-            pointer.apply(motion(MotionAxis::Y, 10_000)),
+            pointer.apply(motion(-10_000, 10_000)),
             Some(PointerChange::Moved)
         );
         assert_eq!(pointer.position(), (0, 599));
-        assert_eq!(
-            pointer.apply(motion(MotionAxis::X, -1)),
-            None,
-            "already at the edge"
-        );
-        assert_eq!(
-            pointer.apply(motion(MotionAxis::X, 799)),
-            Some(PointerChange::Moved)
-        );
+        assert_eq!(pointer.apply(motion(-1, 1)), None, "already at the edge");
+        assert_eq!(pointer.apply(motion(799, 0)), Some(PointerChange::Moved));
         assert_eq!(pointer.position(), (799, 599));
     }
 
@@ -169,41 +152,44 @@ mod tests {
     fn buttons_report_each_transition_once() {
         let mut pointer = Pointer::new(800, 600);
         assert_eq!(
-            pointer.apply(key(Button::Right, 1)),
+            pointer.apply(button(MouseButton::Right, ButtonState::Pressed)),
             Some(PointerChange::Button {
-                button: Button::Right,
+                button: MouseButton::Right,
                 is_pressed: true
             })
         );
         assert_eq!(
-            pointer.apply(key(Button::Right, 2)),
+            pointer.apply(button(MouseButton::Right, ButtonState::Pressed)),
             None,
-            "a key repeat changes nothing"
+            "a second press changes nothing"
         );
         assert_eq!(
-            pointer.apply(key(Button::Right, 0)),
+            pointer.apply(button(MouseButton::Right, ButtonState::Released)),
             Some(PointerChange::Button {
-                button: Button::Right,
+                button: MouseButton::Right,
                 is_pressed: false
             })
         );
-        assert_eq!(pointer.apply(key(Button::Right, 0)), None);
+        assert_eq!(
+            pointer.apply(button(MouseButton::Right, ButtonState::Released)),
+            None
+        );
         assert_eq!(pointer.buttons(), Buttons::default());
     }
 
     #[test]
-    fn wheel_sync_and_unknown_events_change_nothing() {
+    fn keys_wheel_and_positions_change_nothing() {
         let mut pointer = Pointer::new(800, 600);
-        assert_eq!(pointer.apply(motion(MotionAxis::Wheel, 1)), None);
-        assert_eq!(pointer.apply(InputEvent::default()), None);
+        assert_eq!(pointer.apply(Event::Wheel { delta: 1 }), None);
         assert_eq!(
-            pointer.apply(InputEvent {
-                event_type: 0x7F,
-                code: 0,
-                value: 1
+            pointer.apply(Event::Key {
+                code: KeyCode::ESC,
+                state: KeyState::Pressed
             }),
             None
         );
+        assert_eq!(pointer.apply(Event::Position { x: 0, y: 0 }), None);
         assert_eq!(pointer.position(), (400, 300));
+        assert_eq!(pointer.buttons(), Buttons::default());
     }
 }
